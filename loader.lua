@@ -307,10 +307,13 @@ do
         Default = "H", Mode = "Hold", Text = "TP behind target", NoUI = false,
     })
 
-    -- Lock key: first press locks closest, subsequent presses add closest to multi-target
+    -- Lock key: first press locks closest, subsequent presses add NEXT closest
+    -- (skipping anyone already in the target list)
     bindFireKey("RageLockKey", function()
-        local closest = F.utils.findClosestPlayer({ fov = 9999 })
-        if not closest then Library:Notify("No player nearby", 2); return end
+        local excl = {}
+        for _, pl in ipairs(F.ragebot.getTargetList()) do excl[pl] = true end
+        local closest = F.utils.findClosestPlayer({ fov = 9999, exclude = excl })
+        if not closest then Library:Notify("No more players nearby", 2); return end
         if F.ragebot.getTarget() then
             F.ragebot.addTarget(closest)
             Library:Notify("Added " .. closest.Name .. " to multi-target", 2)
