@@ -10,9 +10,60 @@ local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager  = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
+-- Patch: LinoriaLib button labels render a hair too low because the font's
+-- visual midpoint sits below its line-box center. Shift button labels up by 1px.
+do
+    local orig = Library.CreateLabel
+    if orig then
+        Library.CreateLabel = function(self, props, ...)
+            local lbl = orig(self, props, ...)
+            if lbl and props
+                and props.Size    == UDim2.new(1, 0, 1, 0)
+                and props.TextSize == 14
+                and props.ZIndex   == 6 then
+                lbl.Position = UDim2.fromOffset(0, -1)
+            end
+            return lbl
+        end
+    end
+end
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
+
+-- ============================================================
+--  one-shot keybind infrastructure
+--  fires on press for any KeyPicker registered via bindFireKey, regardless
+--  of the picker's mode — so one-shot actions don't visually toggle on/off
+-- ============================================================
+local _fireKeys = {}
+local function bindFireKey(optKey, fn) _fireKeys[optKey] = fn end
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if Library and Library.Unloaded then return end
+    local kc  = input.KeyCode
+    local uit = input.UserInputType
+    local function matches(v)
+        if v == nil then return false end
+        if typeof(v) == "EnumItem" then
+            return kc == v or uit == v
+        end
+        local s = tostring(v)
+        if kc and kc ~= Enum.KeyCode.Unknown and kc.Name == s then return true end
+        local n = uit and uit.Name or ""
+        if (n == "MouseButton1" and s == "MB1")
+            or (n == "MouseButton2" and s == "MB2")
+            or (n == "MouseButton3" and s == "MB3") then return true end
+        return false
+    end
+    for optKey, fn in pairs(_fireKeys) do
+        local opt = Options[optKey]
+        if opt and matches(opt.Value) then pcall(fn) end
+    end
+end)
 
 local Window = Library:CreateWindow({
     Title         = "cclosure.vip | @vampire",
@@ -154,12 +205,37 @@ do
         targetLabel:SetText(t and ("Locked: " .. t.Name) or "No target locked")
     end
 
+    Tgt:AddDropdown("RagePlayer", {
+        SpecialType = "Player", Text = "Player",
+        Tooltip = "Player to lock or add to multi-target",
+    })
+
+    local function selectedRagePlayer()
+        local name = Options.RagePlayer.Value
+        if not name or name == "" then return nil end
+        return F.players.find(name)
+    end
+
+    -- one-shot action buttons
     Tgt:AddButton({ Text = "Lock closest to mouse", Func = function()
         local p = F.ragebot.lockClosest()
         refreshTargetLabel()
         Library:Notify(p and ("Locked " .. p.Name) or "No target found", 2)
     end })
-    :AddButton({ Text = "Unlock", Func = function()
+    :AddButton({ Text = "Lock selected", Func = function()
+        local pl = selectedRagePlayer()
+        if not pl then Library:Notify("No player selected", 2); return end
+        F.ragebot.lockPlayer(pl); refreshTargetLabel()
+        Library:Notify("Locked " .. pl.Name, 2)
+    end })
+
+    Tgt:AddButton({ Text = "Add selected to multi-target", Func = function()
+        local pl = selectedRagePlayer()
+        if not pl then Library:Notify("No player selected", 2); return end
+        F.ragebot.addTarget(pl)
+        Library:Notify("Added " .. pl.Name .. " to multi-target", 2)
+    end })
+    :AddButton({ Text = "Unlock all", Func = function()
         F.ragebot.unlock(); refreshTargetLabel()
         Library:Notify("Unlocked", 2)
     end })
@@ -231,24 +307,34 @@ do
     Auto:AddToggle("RageSpeedPanic", { Text = "Speed panic",
         Default = F.ragebot.settings.SpeedPanic, Callback = F.ragebot.setSpeedPanic })
 
-    -- one-shot keybinds
+    -- one-shot keybinds (fired via InputBegan, no toggle visual)
     Tgt:AddLabel("Lock closest"):AddKeyPicker("RageLockKey", {
-        Default = "E", Mode = "Toggle", Text = "Lock closest", NoUI = false,
+        Default = "E", Mode = "Toggle", Text = "Lock closest / unlock", NoUI = false,
     })
-    Tgt:AddLabel("Unlock"):AddKeyPicker("RageUnlockKey", {
-        Default = "T", Mode = "Toggle", Text = "Unlock target", NoUI = false,
+    Tgt:AddLabel("Add to multi-target"):AddKeyPicker("RageMultiKey", {
+        Default = "M", Mode = "Toggle", Text = "Add closest to multi-target", NoUI = false,
     })
     Tgt:AddLabel("TP behind"):AddKeyPicker("RageTpKey", {
         Default = "Y", Mode = "Toggle", Text = "TP behind target", NoUI = false,
     })
 
-    Options.RageLockKey:OnClick(function()
-        F.ragebot.lockClosest(); refreshTargetLabel()
+    -- Lock-closest key: unlock if already locked, otherwise lock closest
+    bindFireKey("RageLockKey", function()
+        if F.ragebot.getTarget() then
+            F.ragebot.unlock()
+        else
+            F.ragebot.lockClosest()
+        end
+        refreshTargetLabel()
     end)
-    Options.RageUnlockKey:OnClick(function()
-        F.ragebot.unlock(); refreshTargetLabel()
+    -- Multi-target key: add closest to mouse to the multi-target list (does NOT unlock)
+    bindFireKey("RageMultiKey", function()
+        local closest = F.utils.findClosestPlayer({ fov = 9999 })
+        if not closest then Library:Notify("No player nearby", 2); return end
+        F.ragebot.addTarget(closest)
+        Library:Notify("Added " .. closest.Name .. " to multi-target", 2)
     end)
-    Options.RageTpKey:OnClick(F.ragebot.tpBehind)
+    bindFireKey("RageTpKey", F.ragebot.tpBehind)
 
     -- keep label fresh on auto-switches
     task.spawn(function()
@@ -433,15 +519,15 @@ do
         end,
     })
 
-    -- one-shot keybinds for blink / respawn
+    -- one-shot keybinds for blink / respawn (no toggle visual)
     Act:AddLabel("Blink key"):AddKeyPicker("BlinkKey", {
         Default = "B", Mode = "Toggle", Text = "Blink forward",
     })
     Act:AddLabel("Respawn key"):AddKeyPicker("RespawnKey", {
         Default = "R", Mode = "Toggle", Text = "Respawn",
     })
-    Options.BlinkKey:OnClick(F.blink.fire)
-    Options.RespawnKey:OnClick(F.respawn.fire)
+    bindFireKey("BlinkKey", F.blink.fire)
+    bindFireKey("RespawnKey", F.respawn.fire)
 end
 
 -- ============================================================
@@ -484,28 +570,6 @@ do
     P:AddButton({ Text = "Reset camera view", Func = function()
         workspace.CurrentCamera.CameraSubject =
             LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-    end })
-
-    -- Ragebot lock-by-player on the right side
-    local R = Tabs.Players:AddRightGroupbox("Ragebot lock")
-
-    R:AddLabel("Lock the ragebot to the selected player")
-    R:AddButton({ Text = "Lock selected", Func = function()
-        local pl = selectedPlayer()
-        if not pl then Library:Notify("No player selected", 2); return end
-        F.ragebot.lockPlayer(pl)
-        Library:Notify("Locked " .. pl.Name, 2)
-    end })
-    :AddButton({ Text = "Add to multi-target", Func = function()
-        local pl = selectedPlayer()
-        if not pl then Library:Notify("No player selected", 2); return end
-        F.ragebot.addTarget(pl)
-        Library:Notify("Added " .. pl.Name, 2)
-    end })
-
-    R:AddButton({ Text = "Unlock all", Func = function()
-        F.ragebot.unlock()
-        Library:Notify("Unlocked", 2)
     end })
 end
 
