@@ -270,10 +270,10 @@ do
 
     -- one-shot keybinds (fired via InputBegan, no toggle visual)
     Tgt:AddLabel("Lock closest"):AddKeyPicker("RageLockKey", {
-        Default = "L", Mode = "Hold", Text = "Lock closest", NoUI = false,
+        Default = "V", Mode = "Hold", Text = "Lock closest", NoUI = false,
     })
     Tgt:AddLabel("Unlock all"):AddKeyPicker("RageUnlockKey", {
-        Default = "M", Mode = "Hold", Text = "Unlock all targets", NoUI = false,
+        Default = "N", Mode = "Hold", Text = "Unlock all targets", NoUI = false,
     })
     Tgt:AddLabel("TP behind"):AddKeyPicker("RageTpKey", {
         Default = "H", Mode = "Hold", Text = "TP behind target", NoUI = false,
@@ -457,7 +457,7 @@ do
         Default = F.esp.settings.Enabled,
         Callback = function(v) if v then F.esp.start() else F.esp.stop() end end })
     EspEnabledToggle:AddKeyPicker("EspKey", {
-        Default = "Insert", Mode = "Toggle", Text = "ESP key", SyncToggleState = true,
+        Default = "M", Mode = "Toggle", Text = "ESP key", SyncToggleState = true,
     })
 
     TabEspPlayers:AddDivider()
@@ -584,11 +584,8 @@ do
     Move:AddSlider("SpeedMult", { Text = "Speed multiplier", Default = F.speed.getMultiplier(),
         Min = 1, Max = 20, Rounding = 1, Suffix = "x", Callback = F.speed.setMultiplier })
 
-    local BhopToggle = Move:AddToggle("Bhop", { Text = "Bunnyhop", Default = false,
+    Move:AddToggle("Bhop", { Text = "Bunnyhop", Default = false,
         Callback = function(v) if v then F.bhop.start() else F.bhop.stop() end end })
-    BhopToggle:AddKeyPicker("BhopKey", {
-        Default = "U", Mode = "Toggle", Text = "Bhop key", SyncToggleState = true,
-    })
 
     Move:AddToggle("InfJump",    { Text = "Infinite jump", Default = false,
         Callback = function(v) if v then F.infJump.start() else F.infJump.stop() end end })
@@ -604,7 +601,7 @@ do
     local NoclipToggle = Move:AddToggle("Noclip", { Text = "Noclip", Default = false,
         Callback = function(v) if v then F.noclip.start() else F.noclip.stop() end end })
     NoclipToggle:AddKeyPicker("NoclipKey", {
-        Default = "N", Mode = "Toggle", Text = "Noclip key", SyncToggleState = true,
+        Default = "U", Mode = "Toggle", Text = "Noclip key", SyncToggleState = true,
     })
 
     Move:AddToggle("AutoRespawn",{ Text = "Auto-respawn",  Default = false,
