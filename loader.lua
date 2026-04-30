@@ -135,7 +135,7 @@ do
         Callback = F.aimbot.setPredictionAmount })
 
     -- Triggerbot
-    local Trig = CombatRight:AddTab("Triggerbot")
+    local Trig = CombatLeft:AddTab("Triggerbot")
 
     local TrigEnabledToggle = Trig:AddToggle("TrigEnabled", { Text = "Enabled",
         Default = F.triggerbot.settings.Enabled, Callback = F.triggerbot.setEnabled })
@@ -156,7 +156,7 @@ do
         Min = 0, Max = 2000, Rounding = 0, Suffix = " ms", Callback = F.triggerbot.setDelay })
 
     -- Camlock
-    local Cam = CombatRight:AddTab("Camlock")
+    local Cam = CombatLeft:AddTab("Camlock")
 
     local CamEnabledToggle = Cam:AddToggle("CamEnabled", { Text = "Enabled",
         Default = F.camLock.settings.Enabled, Callback = F.camLock.setEnabled })
@@ -199,7 +199,7 @@ do
         Callback = F.camLock.setPredictionAmount })
 
     -- =================== RAGEBOT (target + auto/orbit) ===================
-    local Tgt = CombatLeft:AddTab("Ragebot")
+    local Tgt = CombatRight:AddTab("Ragebot")
 
     local targetLabel = Tgt:AddLabel("No target locked")
     local function refreshTargetLabel()
