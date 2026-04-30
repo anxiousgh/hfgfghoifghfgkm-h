@@ -79,9 +79,9 @@ local Tabs = {
     Ragebot  = Window:AddTab("Ragebot"),
     Visual   = Window:AddTab("Visual"),
     Movement = Window:AddTab("Movement"),
-    Fun      = Window:AddTab("Fun"),
     Players  = Window:AddTab("Players"),
     Config   = Window:AddTab("Config"),
+    Misc     = Window:AddTab("Misc"),
 }
 
 -- ============================================================
@@ -93,7 +93,7 @@ do
     local AimEnabledToggle = Aim:AddToggle("AimEnabled", { Text = "Enabled",
         Default = F.aimbot.settings.Enabled, Callback = F.aimbot.setEnabled })
     AimEnabledToggle:AddKeyPicker("AimKey", {
-        Default = "MB2", Mode = "Toggle", Text = "Silent aim key",
+        Default = "J", Mode = "Toggle", Text = "Silent aim key",
         SyncToggleState = true, NoUI = false,
     })
 
@@ -137,7 +137,7 @@ do
     local TrigEnabledToggle = Trig:AddToggle("TrigEnabled", { Text = "Enabled",
         Default = F.triggerbot.settings.Enabled, Callback = F.triggerbot.setEnabled })
     TrigEnabledToggle:AddKeyPicker("TrigKey", {
-        Default = "X", Mode = "Toggle", Text = "Triggerbot key",
+        Default = "Y", Mode = "Toggle", Text = "Triggerbot key",
         SyncToggleState = true, NoUI = false,
     })
 
@@ -269,14 +269,14 @@ do
         Callback = F.ragebot.setOrbitHeight })
 
     -- one-shot keybinds (fired via InputBegan, no toggle visual)
-    Tgt:AddLabel("Lock / add target"):AddKeyPicker("RageLockKey", {
-        Default = "E", Mode = "Hold", Text = "Lock closest (or add to multi-target)", NoUI = false,
+    Tgt:AddLabel("Lock closest"):AddKeyPicker("RageLockKey", {
+        Default = "L", Mode = "Hold", Text = "Lock closest", NoUI = false,
     })
     Tgt:AddLabel("Unlock all"):AddKeyPicker("RageUnlockKey", {
         Default = "M", Mode = "Hold", Text = "Unlock all targets", NoUI = false,
     })
     Tgt:AddLabel("TP behind"):AddKeyPicker("RageTpKey", {
-        Default = "Y", Mode = "Hold", Text = "TP behind target", NoUI = false,
+        Default = "H", Mode = "Hold", Text = "TP behind target", NoUI = false,
     })
 
     -- Lock key: first press locks closest, subsequent presses add closest to multi-target
@@ -503,7 +503,7 @@ do
         Default = false,
         Callback = function(v) if v then F.freecam.start() else F.freecam.stop() end end })
     FreecamToggle:AddKeyPicker("FreecamKey", {
-        Default = "K", Mode = "Toggle", Text = "Freecam key", SyncToggleState = true,
+        Default = "L", Mode = "Toggle", Text = "Freecam key", SyncToggleState = true,
     })
 
     TabCamera:AddToggle("Zoom", { Text = "Extended zoom", Default = false,
@@ -571,7 +571,7 @@ do
     local FlyToggle = Move:AddToggle("Fly", { Text = "Fly", Default = false,
         Callback = function(v) if v then F.fly.start() else F.fly.stop() end end })
     FlyToggle:AddKeyPicker("FlyKey", {
-        Default = "F", Mode = "Toggle", Text = "Fly key", SyncToggleState = true,
+        Default = "Z", Mode = "Toggle", Text = "Fly key", SyncToggleState = true,
     })
     Move:AddSlider("FlySpeed", { Text = "Fly speed", Default = F.fly.getSpeed(),
         Min = 5, Max = 500, Rounding = 0, Callback = F.fly.setSpeed })
@@ -579,7 +579,7 @@ do
     local SpeedToggle = Move:AddToggle("Speed", { Text = "Speed", Default = false,
         Callback = function(v) if v then F.speed.start(F.speed.getMultiplier()) else F.speed.stop() end end })
     SpeedToggle:AddKeyPicker("SpeedKey", {
-        Default = "G", Mode = "Toggle", Text = "Speed key", SyncToggleState = true,
+        Default = "X", Mode = "Toggle", Text = "Speed key", SyncToggleState = true,
     })
     Move:AddSlider("SpeedMult", { Text = "Speed multiplier", Default = F.speed.getMultiplier(),
         Min = 1, Max = 20, Rounding = 1, Suffix = "x", Callback = F.speed.setMultiplier })
@@ -587,7 +587,7 @@ do
     local BhopToggle = Move:AddToggle("Bhop", { Text = "Bunnyhop", Default = false,
         Callback = function(v) if v then F.bhop.start() else F.bhop.stop() end end })
     BhopToggle:AddKeyPicker("BhopKey", {
-        Default = "H", Mode = "Toggle", Text = "Bhop key", SyncToggleState = true,
+        Default = "U", Mode = "Toggle", Text = "Bhop key", SyncToggleState = true,
     })
 
     Move:AddToggle("InfJump",    { Text = "Infinite jump", Default = false,
@@ -598,7 +598,7 @@ do
     local ClickTpToggle = Move:AddToggle("ClickTp", { Text = "Click TP", Default = false,
         Callback = function(v) if v then F.clickTp.start() else F.clickTp.stop() end end })
     ClickTpToggle:AddKeyPicker("ClickTpKey", {
-        Default = "T", Mode = "Toggle", Text = "Click TP key", SyncToggleState = true,
+        Default = "K", Mode = "Toggle", Text = "Click TP key", SyncToggleState = true,
     })
 
     local NoclipToggle = Move:AddToggle("Noclip", { Text = "Noclip", Default = false,
@@ -609,34 +609,117 @@ do
 
     Move:AddToggle("AutoRespawn",{ Text = "Auto-respawn",  Default = false,
         Callback = function(v) if v then F.autoRespawn.start() else F.autoRespawn.stop() end end })
-end
 
--- ============================================================
---  FUN TAB
--- ============================================================
-do
-    local Fun = Tabs.Fun:AddLeftGroupbox("Movement extras")
+    -- right side: extras (spin/flip/ice + blink)
+    local Extras = Tabs.Movement:AddRightGroupbox("Extras")
 
-    Fun:AddToggle("Spin", { Text = "Spin", Default = false,
+    Extras:AddToggle("Spin", { Text = "Spin", Default = false,
         Callback = function(v) if v then F.spin.start() else F.spin.stop() end end })
-    Fun:AddSlider("SpinSpeed", { Text = "Spin speed", Default = 50,
+    Extras:AddSlider("SpinSpeed", { Text = "Spin speed", Default = 50,
         Min = 1, Max = 200, Rounding = 0, Callback = F.spin.setSpeed })
 
-    Fun:AddToggle("Flip", { Text = "Upside down", Tooltip = "Flip your character upside-down",
+    Extras:AddToggle("Flip", { Text = "Upside down",
+        Tooltip = "Flip your character upside-down",
         Default = false,
         Callback = function(v) if v then F.flip.start() else F.flip.stop() end end })
 
-    Fun:AddToggle("Ice", { Text = "Ice slide", Default = false,
+    Extras:AddToggle("Ice", { Text = "Ice slide", Default = false,
         Callback = function(v) if v then F.ice.start() else F.ice.stop() end end })
-    Fun:AddSlider("IceSlide", { Text = "Slide friction", Default = 0.98,
+    Extras:AddSlider("IceSlide", { Text = "Slide friction", Default = 0.98,
         Min = 0.5, Max = 0.99, Rounding = 2, Callback = F.ice.setSlide })
 
-    local Act = Tabs.Fun:AddRightGroupbox("Actions")
+    Extras:AddDivider()
 
-    Act:AddButton({ Text = "Blink forward", Func = F.blink.fire,
+    Extras:AddButton({ Text = "Blink forward", Func = F.blink.fire,
         Tooltip = "Teleport forward in camera direction" })
-    Act:AddSlider("BlinkDist", { Text = "Blink distance", Default = F.blink.getDistance(),
+    Extras:AddSlider("BlinkDist", { Text = "Blink distance", Default = F.blink.getDistance(),
         Min = 1, Max = 200, Rounding = 0, Callback = F.blink.setDistance })
+end
+
+-- ============================================================
+--  PLAYERS TAB
+-- ============================================================
+do
+    local P = Tabs.Players:AddLeftGroupbox("Actions")
+
+    local _selected = nil
+    local _selectedLabel = P:AddLabel("Selected: none")
+    local _playerButtons = {}  -- map [Player] = LinoriaLib button object
+
+    local function refreshSelectedLabel()
+        if _selected and _selected.Parent then
+            _selectedLabel:SetText("Selected: " .. _selected.Name)
+        else
+            _selectedLabel:SetText("Selected: none")
+        end
+    end
+
+    local function selectPlayer(pl)
+        _selected = pl
+        refreshSelectedLabel()
+    end
+
+    P:AddDivider()
+
+    P:AddButton({ Text = "Goto",  Func = function()
+        if _selected then F.players.goto(_selected)
+        else Library:Notify("No player selected", 2) end
+    end })
+    :AddButton({ Text = "View",  Func = function()
+        if _selected then F.players.view(_selected)
+        else Library:Notify("No player selected", 2) end
+    end })
+
+    P:AddButton({ Text = "Fling", Func = function()
+        if not _selected then Library:Notify("No player selected", 2); return end
+        F.players.fling(_selected)
+        Library:Notify("Flinging " .. _selected.Name, 3)
+    end })
+
+    P:AddDivider()
+
+    P:AddButton({ Text = "Reset camera view", Func = function()
+        workspace.CurrentCamera.CameraSubject =
+            LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    end })
+
+    -- right side: live player list
+    local List = Tabs.Players:AddRightGroupbox("Players")
+    List:AddLabel("Click a player to select them")
+    List:AddDivider()
+
+    local function removePlayerButton(pl)
+        local b = _playerButtons[pl]
+        if b and b.Outer then pcall(function() b.Outer:Destroy() end) end
+        _playerButtons[pl] = nil
+    end
+
+    local function addPlayerButton(pl)
+        if pl == LocalPlayer then return end
+        if _playerButtons[pl] then return end
+        local btn = List:AddButton({ Text = pl.Name, Func = function()
+            selectPlayer(pl)
+        end })
+        _playerButtons[pl] = btn
+    end
+
+    for _, pl in ipairs(Players:GetPlayers()) do addPlayerButton(pl) end
+
+    Players.PlayerAdded:Connect(function(pl)
+        if Library.Unloaded then return end
+        addPlayerButton(pl)
+    end)
+    Players.PlayerRemoving:Connect(function(pl)
+        removePlayerButton(pl)
+        if _selected == pl then selectPlayer(nil) end
+    end)
+end
+
+-- ============================================================
+--  MISC TAB  (one-shot actions)
+-- ============================================================
+do
+    local Act = Tabs.Misc:AddLeftGroupbox("Actions")
 
     Act:AddButton({ Text = "Respawn", Func = F.respawn.fire,
         Tooltip = "Respawn at current position" })
@@ -657,7 +740,6 @@ do
         Tooltip = "Double-click to disable every active feature",
         Func = function()
             F.disableAll()
-            -- reflect the change back into the UI toggles
             for _, name in ipairs({
                 "Fly","Speed","Bhop","InfJump","AntiAfk","ClickTp","Noclip","AutoRespawn",
                 "Fullbright","Freecam","Zoom","Spin","Flip","Ice",
@@ -671,54 +753,11 @@ do
         end,
     })
 
-    -- one-shot keybind for respawn (no toggle visual)
+    -- respawn keybind (Hold)
     Act:AddLabel("Respawn key"):AddKeyPicker("RespawnKey", {
-        Default = "R", Mode = "Hold", Text = "Respawn",
+        Default = "T", Mode = "Hold", Text = "Respawn",
     })
     bindFireKey("RespawnKey", F.respawn.fire)
-end
-
--- ============================================================
---  PLAYERS TAB
--- ============================================================
-do
-    local P = Tabs.Players:AddLeftGroupbox("Actions")
-
-    P:AddLabel("Pick a player and choose an action")
-
-    P:AddDropdown("PlayerPick", {
-        SpecialType = "Player", Text = "Player",
-        Tooltip = "All players except yourself",
-    })
-
-    local function selectedPlayer()
-        local name = Options.PlayerPick.Value
-        if not name or name == "" then return nil end
-        return F.players.find(name)
-    end
-
-    P:AddButton({ Text = "Goto",  Func = function()
-        local pl = selectedPlayer(); if pl then F.players.goto(pl)
-        else Library:Notify("No player selected", 2) end
-    end })
-    :AddButton({ Text = "View",  Func = function()
-        local pl = selectedPlayer(); if pl then F.players.view(pl)
-        else Library:Notify("No player selected", 2) end
-    end })
-
-    P:AddButton({ Text = "Fling", Func = function()
-        local pl = selectedPlayer()
-        if not pl then Library:Notify("No player selected", 2); return end
-        F.players.fling(pl)
-        Library:Notify("Flinging " .. pl.Name, 3)
-    end })
-
-    P:AddDivider()
-
-    P:AddButton({ Text = "Reset camera view", Func = function()
-        workspace.CurrentCamera.CameraSubject =
-            LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-    end })
 end
 
 -- ============================================================
@@ -739,7 +778,7 @@ local WatermarkConn = RunService.RenderStepped:Connect(function()
     Library:SetWatermark(("cclosure.vip | %d fps | %d ms"):format(math.floor(FPS), ping))
 end)
 
-Library.KeybindFrame.Visible = true
+-- KeybindFrame visibility is wired up to a Config toggle further down
 
 Library:OnUnload(function()
     pcall(function() WatermarkConn:Disconnect() end)
@@ -752,6 +791,14 @@ end)
 --  UI SETTINGS  (theme + saves + menu keybind + unload)
 -- ============================================================
 local Menu = Tabs.Config:AddLeftGroupbox("Menu")
+
+Menu:AddToggle("ShowKeybindFrame", { Text = "Show keybinds panel", Default = true,
+    Tooltip = "Show or hide the floating Keybinds list",
+    Callback = function(v)
+        if Library.KeybindFrame then Library.KeybindFrame.Visible = v end
+    end })
+
+Menu:AddDivider()
 
 Menu:AddButton({ Text = "Unload script", Func = function() Library:Unload() end })
 
