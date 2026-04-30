@@ -1703,7 +1703,7 @@ F.ragebot = {
     setFaceTarget  = function(b) RageSettings.FaceTarget = b == true end,
     setOrbit       = function(b) RageSettings.Orbit = b == true end,
     setOrbitDistance = function(n) RageSettings.OrbitDistance = math.clamp(tonumber(n) or 15, 2, 200) end,
-    setOrbitSpeed    = function(n) RageSettings.OrbitSpeed    = math.clamp(tonumber(n) or 60, 1, 360) end,
+    setOrbitSpeed    = function(n) RageSettings.OrbitSpeed    = math.clamp(tonumber(n) or 60, 1, 9999) end,
     setOrbitHeight   = function(n) RageSettings.OrbitHeight   = math.clamp(tonumber(n) or 5, -50, 50) end,
     setAutoShoot     = function(b) RageSettings.AutoShoot = b == true end,
     setAutoShootDist     = function(n) RageSettings.AutoShootDist = math.clamp(tonumber(n) or 50, 1, 500) end,
