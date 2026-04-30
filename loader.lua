@@ -33,15 +33,15 @@ local Tabs = {
 }
 
 -- ============================================================
---  COMBAT TAB  (aimbot / triggerbot / camlock)
+--  COMBAT TAB  (silent aim / triggerbot / camlock)
 -- ============================================================
 do
-    local Aim = Tabs.Combat:AddLeftGroupbox("Aimbot")
+    local Aim = Tabs.Combat:AddLeftGroupbox("Silent Aim")
 
     local AimEnabledToggle = Aim:AddToggle("AimEnabled", { Text = "Enabled",
         Default = F.aimbot.settings.Enabled, Callback = F.aimbot.setEnabled })
     AimEnabledToggle:AddKeyPicker("AimKey", {
-        Default = "MB2", Mode = "Hold", Text = "Aimbot key",
+        Default = "MB2", Mode = "Hold", Text = "Silent aim key",
         SyncToggleState = true, NoUI = false,
     })
 
@@ -82,8 +82,13 @@ do
     -- Triggerbot
     local Trig = Tabs.Combat:AddRightGroupbox("Triggerbot")
 
-    Trig:AddToggle("TrigEnabled",  { Text = "Enabled",       Default = F.triggerbot.settings.Enabled,
-        Callback = F.triggerbot.setEnabled })
+    local TrigEnabledToggle = Trig:AddToggle("TrigEnabled", { Text = "Enabled",
+        Default = F.triggerbot.settings.Enabled, Callback = F.triggerbot.setEnabled })
+    TrigEnabledToggle:AddKeyPicker("TrigKey", {
+        Default = "X", Mode = "Hold", Text = "Triggerbot key",
+        SyncToggleState = true, NoUI = false,
+    })
+
     Trig:AddToggle("TrigTeamCheck",{ Text = "Team check",    Default = F.triggerbot.settings.TeamCheck,
         Callback = F.triggerbot.setTeamCheck })
     Trig:AddToggle("TrigVisCheck", { Text = "Visible check", Default = F.triggerbot.settings.VisibleCheck,
@@ -98,8 +103,13 @@ do
     -- Camlock
     local Cam = Tabs.Combat:AddRightGroupbox("Camlock")
 
-    Cam:AddToggle("CamEnabled",   { Text = "Enabled",       Default = F.camLock.settings.Enabled,
-        Callback = F.camLock.setEnabled })
+    local CamEnabledToggle = Cam:AddToggle("CamEnabled", { Text = "Enabled",
+        Default = F.camLock.settings.Enabled, Callback = F.camLock.setEnabled })
+    CamEnabledToggle:AddKeyPicker("CamKey", {
+        Default = "C", Mode = "Hold", Text = "Camlock key",
+        SyncToggleState = true, NoUI = false,
+    })
+
     Cam:AddToggle("CamTeamCheck", { Text = "Team check",    Default = F.camLock.settings.TeamCheck,
         Callback = F.camLock.setTeamCheck })
     Cam:AddToggle("CamVisCheck",  { Text = "Visible check", Default = F.camLock.settings.VisibleCheck,
@@ -257,8 +267,12 @@ end
 do
     local Players_ = Tabs.ESP:AddLeftGroupbox("Players")
 
-    Players_:AddToggle("EspEnabled", { Text = "Enabled", Default = F.esp.settings.Enabled,
+    local EspEnabledToggle = Players_:AddToggle("EspEnabled", { Text = "Enabled",
+        Default = F.esp.settings.Enabled,
         Callback = function(v) if v then F.esp.start() else F.esp.stop() end end })
+    EspEnabledToggle:AddKeyPicker("EspKey", {
+        Default = "Insert", Mode = "Toggle", Text = "ESP key", SyncToggleState = true,
+    })
     Players_:AddToggle("EspBox",     { Text = "Boxes",         Default = F.esp.settings.BoxESP,
         Callback = F.esp.setBox })
     Players_:AddDropdown("EspBoxStyle", {
@@ -313,26 +327,41 @@ end
 do
     local Move = Tabs.Movement:AddLeftGroupbox("Movement")
 
-    Move:AddToggle("Fly", { Text = "Fly", Default = false,
+    local FlyToggle = Move:AddToggle("Fly", { Text = "Fly", Default = false,
         Callback = function(v) if v then F.fly.start() else F.fly.stop() end end })
+    FlyToggle:AddKeyPicker("FlyKey", {
+        Default = "F", Mode = "Toggle", Text = "Fly key", SyncToggleState = true,
+    })
     Move:AddSlider("FlySpeed", { Text = "Fly speed", Default = F.fly.getSpeed(),
         Min = 5, Max = 500, Rounding = 0, Callback = F.fly.setSpeed })
 
-    Move:AddToggle("Speed", { Text = "Speed", Default = false,
+    local SpeedToggle = Move:AddToggle("Speed", { Text = "Speed", Default = false,
         Callback = function(v) if v then F.speed.start(F.speed.getMultiplier()) else F.speed.stop() end end })
+    SpeedToggle:AddKeyPicker("SpeedKey", {
+        Default = "G", Mode = "Toggle", Text = "Speed key", SyncToggleState = true,
+    })
     Move:AddSlider("SpeedMult", { Text = "Speed multiplier", Default = F.speed.getMultiplier(),
         Min = 1, Max = 20, Rounding = 1, Suffix = "x", Callback = F.speed.setMultiplier })
 
-    Move:AddToggle("Bhop",       { Text = "Bunnyhop",      Default = false,
+    local BhopToggle = Move:AddToggle("Bhop", { Text = "Bunnyhop", Default = false,
         Callback = function(v) if v then F.bhop.start() else F.bhop.stop() end end })
+    BhopToggle:AddKeyPicker("BhopKey", {
+        Default = "H", Mode = "Toggle", Text = "Bhop key", SyncToggleState = true,
+    })
+
     Move:AddToggle("InfJump",    { Text = "Infinite jump", Default = false,
         Callback = function(v) if v then F.infJump.start() else F.infJump.stop() end end })
     Move:AddToggle("AntiAfk",    { Text = "Anti-AFK",      Default = false,
         Callback = function(v) if v then F.antiAfk.start() else F.antiAfk.stop() end end })
     Move:AddToggle("ClickTp",    { Text = "Click TP",      Default = false,
         Callback = function(v) if v then F.clickTp.start() else F.clickTp.stop() end end })
-    Move:AddToggle("Noclip",     { Text = "Noclip",        Default = false,
+
+    local NoclipToggle = Move:AddToggle("Noclip", { Text = "Noclip", Default = false,
         Callback = function(v) if v then F.noclip.start() else F.noclip.stop() end end })
+    NoclipToggle:AddKeyPicker("NoclipKey", {
+        Default = "N", Mode = "Toggle", Text = "Noclip key", SyncToggleState = true,
+    })
+
     Move:AddToggle("AutoRespawn",{ Text = "Auto-respawn",  Default = false,
         Callback = function(v) if v then F.autoRespawn.start() else F.autoRespawn.stop() end end })
 
@@ -340,8 +369,13 @@ do
 
     Cam:AddToggle("Fullbright", { Text = "Fullbright", Default = false,
         Callback = function(v) if v then F.fullbright.start() else F.fullbright.stop() end end })
-    Cam:AddToggle("Freecam",    { Text = "Freecam",    Default = false,
+
+    local FreecamToggle = Cam:AddToggle("Freecam", { Text = "Freecam", Default = false,
         Callback = function(v) if v then F.freecam.start() else F.freecam.stop() end end })
+    FreecamToggle:AddKeyPicker("FreecamKey", {
+        Default = "K", Mode = "Toggle", Text = "Freecam key", SyncToggleState = true,
+    })
+
     Cam:AddToggle("Zoom",       { Text = "Extended zoom", Default = false,
         Callback = function(v) if v then F.zoom.start() else F.zoom.stop() end end })
 
