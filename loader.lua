@@ -75,14 +75,13 @@ local Window = Library:CreateWindow({
 })
 
 local Tabs = {
-    Combat        = Window:AddTab("Combat"),
-    Ragebot       = Window:AddTab("Ragebot"),
-    ESP           = Window:AddTab("ESP"),
-    Visual        = Window:AddTab("Visual"),
-    Movement      = Window:AddTab("Movement"),
-    Fun           = Window:AddTab("Fun"),
-    Players       = Window:AddTab("Players"),
-    ["UI Settings"] = Window:AddTab("UI Settings"),
+    Combat   = Window:AddTab("Combat"),
+    Ragebot  = Window:AddTab("Ragebot"),
+    Visual   = Window:AddTab("Visual"),
+    Movement = Window:AddTab("Movement"),
+    Fun      = Window:AddTab("Fun"),
+    Players  = Window:AddTab("Players"),
+    Config   = Window:AddTab("Config"),
 }
 
 -- ============================================================
@@ -312,138 +311,255 @@ do
 end
 
 -- ============================================================
---  ESP TAB
--- ============================================================
-do
-    local Players_ = Tabs.ESP:AddLeftGroupbox("Players")
-
-    local EspEnabledToggle = Players_:AddToggle("EspEnabled", { Text = "Enabled",
-        Default = F.esp.settings.Enabled,
-        Callback = function(v) if v then F.esp.start() else F.esp.stop() end end })
-    EspEnabledToggle:AddKeyPicker("EspKey", {
-        Default = "Insert", Mode = "Toggle", Text = "ESP key", SyncToggleState = true,
-    })
-    Players_:AddToggle("EspBox",     { Text = "Boxes",         Default = F.esp.settings.BoxESP,
-        Callback = F.esp.setBox })
-    Players_:AddDropdown("EspBoxStyle", {
-        Values = { "Corners", "Full" }, Default = F.esp.settings.BoxStyle,
-        Text = "Box style", Callback = F.esp.setBoxStyle,
-    })
-    Players_:AddToggle("EspNames",     { Text = "Names",        Default = F.esp.settings.NameESP,
-        Callback = F.esp.setNames })
-    Players_:AddToggle("EspHealth",    { Text = "Health bars",  Default = F.esp.settings.HealthESP,
-        Callback = F.esp.setHealth })
-    Players_:AddToggle("EspHealthNum", { Text = "Health number", Default = F.esp.settings.HealthNum,
-        Callback = F.esp.setHealthNum })
-    Players_:AddToggle("EspDistance",  { Text = "Distance",     Default = F.esp.settings.DistanceESP,
-        Callback = F.esp.setDistance })
-    Players_:AddToggle("EspTracer",    { Text = "Tracers",      Default = F.esp.settings.TracerESP,
-        Callback = F.esp.setTracer })
-    Players_:AddDropdown("EspTracerOrigin", {
-        Values = { "Bottom", "Center", "Top", "Mouse" },
-        Default = F.esp.settings.TracerOrigin,
-        Text = "Tracer origin", Callback = F.esp.setTracerOrigin,
-    })
-    Players_:AddToggle("EspSkeleton",  { Text = "Skeleton",   Default = F.esp.settings.SkeletonESP,
-        Callback = F.esp.setSkeleton })
-    Players_:AddToggle("EspHeldItem",  { Text = "Held item",  Default = F.esp.settings.HeldItem,
-        Callback = F.esp.setHeldItem })
-    Players_:AddToggle("EspTeamColors",{ Text = "Team colors",Default = F.esp.settings.TeamCheck,
-        Callback = F.esp.setTeamCheck })
-
-    local World = Tabs.ESP:AddRightGroupbox("World")
-
-    World:AddToggle("EspChams", { Text = "Chams", Default = F.esp.settings.ChamsEnabled,
-        Callback = F.esp.setChams })
-    World:AddDropdown("EspChamsStyle", {
-        Values = { "Overlay", "Occluded", "Outline" },
-        Default = F.esp.settings.ChamsStyle,
-        Text = "Chams style", Callback = F.esp.setChamsStyle,
-    })
-
-    World:AddToggle("EspTracerHist", { Text = "Tracer history",
-        Default = F.esp.settings.TracerHistory, Callback = F.esp.setTracerHistory })
-    World:AddSlider("EspTracerHistLen", { Text = "History length",
-        Default = F.esp.settings.TracerHistLen, Min = 0.5, Max = 10, Rounding = 1,
-        Suffix = " s", Callback = F.esp.setTracerHistLen })
-
-    World:AddToggle("EspSelf", { Text = "Self ESP", Default = F.esp.settings.SelfESP,
-        Callback = F.esp.setSelf })
-end
-
--- ============================================================
---  VISUAL TAB  (lighting / atmosphere / camera)
+--  VISUAL TAB  (lighting + post FX + atmosphere + camera + ESP)
 -- ============================================================
 do
     local Lighting = game:GetService("Lighting")
+
+    -- helper: get-or-create a Lighting effect with a unique name so we don't
+    -- clobber whatever the game itself already has parented in there
+    local function fxInstance(class, name)
+        local existing = Lighting:FindFirstChild(name)
+        if existing and existing:IsA(class) then return existing end
+        local inst = Instance.new(class)
+        inst.Name = name
+        inst.Enabled = false
+        inst.Parent = Lighting
+        return inst
+    end
+
+    local CC      = fxInstance("ColorCorrectionEffect", "_cclosure_cc")
+    local Bloom   = fxInstance("BloomEffect",           "_cclosure_bloom")
+    local Blur    = fxInstance("BlurEffect",            "_cclosure_blur")
+    local SunRays = fxInstance("SunRaysEffect",         "_cclosure_sunrays")
+
     local LIGHTING_DEFAULTS = {
         Brightness     = 1, ClockTime = 14, FogStart = 0, FogEnd = 100000,
         Ambient        = Color3.fromRGB(70, 70, 70),
         OutdoorAmbient = Color3.fromRGB(128, 128, 128),
         FogColor       = Color3.fromRGB(192, 192, 192),
+        GlobalShadows  = true,
     }
 
-    local Light = Tabs.Visual:AddLeftGroupbox("Lighting")
+    -- ---------------- LEFT TABBOX ----------------
+    local Left = Tabs.Visual:AddLeftTabbox()
 
-    Light:AddToggle("Fullbright", { Text = "Fullbright", Default = false,
+    -- Lighting
+    local TabLight = Left:AddTab("Lighting")
+
+    TabLight:AddToggle("Fullbright", { Text = "Fullbright", Default = false,
         Callback = function(v) if v then F.fullbright.start() else F.fullbright.stop() end end })
+    TabLight:AddToggle("GlobalShadows", { Text = "Global shadows",
+        Default = Lighting.GlobalShadows,
+        Callback = function(v) Lighting.GlobalShadows = v end })
 
-    Light:AddDivider()
+    TabLight:AddDivider()
 
-    Light:AddSlider("LightBrightness", { Text = "Brightness",
-        Default = Lighting.Brightness, Min = 0, Max = 10, Rounding = 1,
+    TabLight:AddSlider("LightBrightness", { Text = "Brightness",
+        Default = Lighting.Brightness, Min = 0, Max = 10, Rounding = 2,
         Callback = function(v) Lighting.Brightness = v end })
-    Light:AddSlider("LightClockTime", { Text = "Time of day",
-        Default = Lighting.ClockTime, Min = 0, Max = 24, Rounding = 1,
+    TabLight:AddSlider("LightClockTime", { Text = "Time of day",
+        Default = Lighting.ClockTime, Min = 0, Max = 24, Rounding = 2,
         Callback = function(v) Lighting.ClockTime = v end })
+    TabLight:AddSlider("LightExposure", { Text = "Exposure",
+        Default = Lighting.ExposureCompensation, Min = -5, Max = 5, Rounding = 2,
+        Callback = function(v) Lighting.ExposureCompensation = v end })
 
-    Light:AddLabel("Ambient"):AddColorPicker("LightAmbient", {
+    TabLight:AddDivider()
+
+    TabLight:AddLabel("Ambient"):AddColorPicker("LightAmbient", {
         Default = Lighting.Ambient, Title = "Ambient",
         Callback = function(c) Lighting.Ambient = c end,
     })
-    Light:AddLabel("Outdoor ambient"):AddColorPicker("LightOutdoor", {
+    TabLight:AddLabel("Outdoor ambient"):AddColorPicker("LightOutdoor", {
         Default = Lighting.OutdoorAmbient, Title = "Outdoor ambient",
         Callback = function(c) Lighting.OutdoorAmbient = c end,
     })
 
-    Light:AddDivider()
+    TabLight:AddDivider()
 
-    Light:AddButton({ Text = "Restore default lighting", Func = function()
-        for k, v in pairs(LIGHTING_DEFAULTS) do
-            pcall(function() Lighting[k] = v end)
-        end
-        if Toggles.Fullbright then Toggles.Fullbright:SetValue(false) end
+    TabLight:AddButton({ Text = "Restore default lighting", Func = function()
+        for k, v in pairs(LIGHTING_DEFAULTS) do pcall(function() Lighting[k] = v end) end
+        if Toggles.Fullbright    then Toggles.Fullbright:SetValue(false)    end
+        if Toggles.GlobalShadows then Toggles.GlobalShadows:SetValue(true)  end
         Library:Notify("Lighting restored", 2)
     end })
 
-    -- Atmosphere
-    local Atmo = Tabs.Visual:AddRightGroupbox("Atmosphere")
+    -- Post FX
+    local TabFX = Left:AddTab("Post FX")
 
-    Atmo:AddSlider("FogStart", { Text = "Fog start",
-        Default = math.min(Lighting.FogStart, 5000), Min = 0, Max = 5000, Rounding = 0,
-        Callback = function(v) Lighting.FogStart = v end })
-    Atmo:AddSlider("FogEnd", { Text = "Fog end",
-        Default = math.min(Lighting.FogEnd, 50000), Min = 0, Max = 50000, Rounding = 0,
-        Callback = function(v) Lighting.FogEnd = v end })
-    Atmo:AddLabel("Fog color"):AddColorPicker("FogColor", {
-        Default = Lighting.FogColor, Title = "Fog color",
-        Callback = function(c) Lighting.FogColor = c end,
+    TabFX:AddLabel("Color correction")
+    TabFX:AddToggle("CCEnabled", { Text = "Enabled", Default = false,
+        Callback = function(v) CC.Enabled = v end })
+    TabFX:AddSlider("CCBrightness", { Text = "Brightness",
+        Default = 0, Min = -1, Max = 1, Rounding = 2,
+        Callback = function(v) CC.Brightness = v end })
+    TabFX:AddSlider("CCContrast", { Text = "Contrast",
+        Default = 0, Min = -1, Max = 1, Rounding = 2,
+        Callback = function(v) CC.Contrast = v end })
+    TabFX:AddSlider("CCSaturation", { Text = "Saturation",
+        Default = 0, Min = -1, Max = 5, Rounding = 2,
+        Callback = function(v) CC.Saturation = v end })
+    TabFX:AddLabel("Tint"):AddColorPicker("CCTint", {
+        Default = Color3.fromRGB(255, 255, 255), Title = "Tint",
+        Callback = function(c) CC.TintColor = c end,
     })
 
-    -- Camera
-    local CamG = Tabs.Visual:AddRightGroupbox("Camera")
+    TabFX:AddDivider()
 
-    local FreecamToggle = CamG:AddToggle("Freecam", { Text = "Freecam", Default = false,
+    TabFX:AddLabel("Bloom")
+    TabFX:AddToggle("BloomEnabled", { Text = "Enabled", Default = false,
+        Callback = function(v) Bloom.Enabled = v end })
+    TabFX:AddSlider("BloomIntensity", { Text = "Intensity",
+        Default = 0.4, Min = 0, Max = 5, Rounding = 2,
+        Callback = function(v) Bloom.Intensity = v end })
+    TabFX:AddSlider("BloomThreshold", { Text = "Threshold",
+        Default = 2.0, Min = 0, Max = 10, Rounding = 2,
+        Callback = function(v) Bloom.Threshold = v end })
+    TabFX:AddSlider("BloomSize", { Text = "Size",
+        Default = 24, Min = 0, Max = 64, Rounding = 0,
+        Callback = function(v) Bloom.Size = v end })
+
+    TabFX:AddDivider()
+
+    TabFX:AddLabel("Blur")
+    TabFX:AddToggle("BlurEnabled", { Text = "Enabled", Default = false,
+        Callback = function(v) Blur.Enabled = v end })
+    TabFX:AddSlider("BlurSize", { Text = "Size",
+        Default = 12, Min = 0, Max = 56, Rounding = 0,
+        Callback = function(v) Blur.Size = v end })
+
+    TabFX:AddDivider()
+
+    TabFX:AddLabel("Sun rays")
+    TabFX:AddToggle("SunRaysEnabled", { Text = "Enabled", Default = false,
+        Callback = function(v) SunRays.Enabled = v end })
+    TabFX:AddSlider("SunRaysIntensity", { Text = "Intensity",
+        Default = 0.25, Min = 0, Max = 1, Rounding = 2,
+        Callback = function(v) SunRays.Intensity = v end })
+    TabFX:AddSlider("SunRaysSpread", { Text = "Spread",
+        Default = 1.0, Min = 0, Max = 1, Rounding = 2,
+        Callback = function(v) SunRays.Spread = v end })
+
+    TabFX:AddDivider()
+
+    TabFX:AddButton({ Text = "Disable all post FX", Func = function()
+        if Toggles.CCEnabled      then Toggles.CCEnabled:SetValue(false)      end
+        if Toggles.BloomEnabled   then Toggles.BloomEnabled:SetValue(false)   end
+        if Toggles.BlurEnabled    then Toggles.BlurEnabled:SetValue(false)    end
+        if Toggles.SunRaysEnabled then Toggles.SunRaysEnabled:SetValue(false) end
+    end })
+
+    -- ESP players
+    local TabEspPlayers = Left:AddTab("ESP")
+
+    local EspEnabledToggle = TabEspPlayers:AddToggle("EspEnabled", { Text = "Enabled",
+        Default = F.esp.settings.Enabled,
+        Callback = function(v) if v then F.esp.start() else F.esp.stop() end end })
+    EspEnabledToggle:AddKeyPicker("EspKey", {
+        Default = "Insert", Mode = "Toggle", Text = "ESP key", SyncToggleState = true,
+    })
+
+    TabEspPlayers:AddDivider()
+
+    TabEspPlayers:AddToggle("EspBox", { Text = "Boxes",
+        Default = F.esp.settings.BoxESP, Callback = F.esp.setBox })
+    TabEspPlayers:AddDropdown("EspBoxStyle", {
+        Values = { "Corners", "Full" }, Default = F.esp.settings.BoxStyle,
+        Text = "Box style", Callback = F.esp.setBoxStyle,
+    })
+
+    TabEspPlayers:AddToggle("EspNames", { Text = "Names",
+        Default = F.esp.settings.NameESP, Callback = F.esp.setNames })
+    TabEspPlayers:AddToggle("EspHealth", { Text = "Health bars",
+        Default = F.esp.settings.HealthESP, Callback = F.esp.setHealth })
+    TabEspPlayers:AddToggle("EspHealthNum", { Text = "Health number",
+        Default = F.esp.settings.HealthNum, Callback = F.esp.setHealthNum })
+    TabEspPlayers:AddToggle("EspDistance", { Text = "Distance",
+        Default = F.esp.settings.DistanceESP, Callback = F.esp.setDistance })
+
+    TabEspPlayers:AddToggle("EspTracer", { Text = "Tracers",
+        Default = F.esp.settings.TracerESP, Callback = F.esp.setTracer })
+    TabEspPlayers:AddDropdown("EspTracerOrigin", {
+        Values = { "Bottom", "Center", "Top", "Mouse" },
+        Default = F.esp.settings.TracerOrigin,
+        Text = "Tracer origin", Callback = F.esp.setTracerOrigin,
+    })
+
+    TabEspPlayers:AddToggle("EspSkeleton", { Text = "Skeleton",
+        Default = F.esp.settings.SkeletonESP, Callback = F.esp.setSkeleton })
+    TabEspPlayers:AddToggle("EspHeldItem", { Text = "Held item",
+        Default = F.esp.settings.HeldItem, Callback = F.esp.setHeldItem })
+    TabEspPlayers:AddToggle("EspTeamColors", { Text = "Team colors",
+        Default = F.esp.settings.TeamCheck, Callback = F.esp.setTeamCheck })
+
+    -- ---------------- RIGHT TABBOX ----------------
+    local Right = Tabs.Visual:AddRightTabbox()
+
+    -- Camera
+    local TabCamera = Right:AddTab("Camera")
+
+    local FreecamToggle = TabCamera:AddToggle("Freecam", { Text = "Freecam",
+        Default = false,
         Callback = function(v) if v then F.freecam.start() else F.freecam.stop() end end })
     FreecamToggle:AddKeyPicker("FreecamKey", {
         Default = "K", Mode = "Toggle", Text = "Freecam key", SyncToggleState = true,
     })
 
-    CamG:AddToggle("Zoom", { Text = "Extended zoom", Default = false,
+    TabCamera:AddToggle("Zoom", { Text = "Extended zoom", Default = false,
         Callback = function(v) if v then F.zoom.start() else F.zoom.stop() end end })
 
-    CamG:AddSlider("Fov", { Text = "FOV", Default = F.fov.get(),
+    TabCamera:AddDivider()
+
+    TabCamera:AddSlider("Fov", { Text = "FOV", Default = F.fov.get(),
         Min = 30, Max = 120, Rounding = 0, Callback = F.fov.set })
+
+    -- Atmosphere
+    local TabAtmo = Right:AddTab("Atmosphere")
+
+    TabAtmo:AddSlider("FogStart", { Text = "Fog start",
+        Default = math.min(Lighting.FogStart, 5000), Min = 0, Max = 5000, Rounding = 0,
+        Callback = function(v) Lighting.FogStart = v end })
+    TabAtmo:AddSlider("FogEnd", { Text = "Fog end",
+        Default = math.min(Lighting.FogEnd, 50000), Min = 0, Max = 50000, Rounding = 0,
+        Callback = function(v) Lighting.FogEnd = v end })
+    TabAtmo:AddLabel("Fog color"):AddColorPicker("FogColor", {
+        Default = Lighting.FogColor, Title = "Fog color",
+        Callback = function(c) Lighting.FogColor = c end,
+    })
+
+    TabAtmo:AddDivider()
+
+    TabAtmo:AddButton({ Text = "Clear fog", Func = function()
+        Lighting.FogStart = 0
+        Lighting.FogEnd   = 100000
+        if Options.FogStart then Options.FogStart:SetValue(0) end
+        if Options.FogEnd   then Options.FogEnd:SetValue(50000) end
+    end })
+
+    -- World ESP
+    local TabEspWorld = Right:AddTab("World ESP")
+
+    TabEspWorld:AddToggle("EspChams", { Text = "Chams",
+        Default = F.esp.settings.ChamsEnabled, Callback = F.esp.setChams })
+    TabEspWorld:AddDropdown("EspChamsStyle", {
+        Values = { "Overlay", "Occluded", "Outline" },
+        Default = F.esp.settings.ChamsStyle,
+        Text = "Chams style", Callback = F.esp.setChamsStyle,
+    })
+
+    TabEspWorld:AddDivider()
+
+    TabEspWorld:AddToggle("EspTracerHist", { Text = "Tracer history",
+        Default = F.esp.settings.TracerHistory, Callback = F.esp.setTracerHistory })
+    TabEspWorld:AddSlider("EspTracerHistLen", { Text = "History length",
+        Default = F.esp.settings.TracerHistLen, Min = 0.5, Max = 10, Rounding = 1,
+        Suffix = " s", Callback = F.esp.setTracerHistLen })
+
+    TabEspWorld:AddDivider()
+
+    TabEspWorld:AddToggle("EspSelf", { Text = "Self ESP",
+        Default = F.esp.settings.SelfESP, Callback = F.esp.setSelf })
 end
 
 -- ============================================================
@@ -635,7 +751,7 @@ end)
 -- ============================================================
 --  UI SETTINGS  (theme + saves + menu keybind + unload)
 -- ============================================================
-local Menu = Tabs["UI Settings"]:AddLeftGroupbox("Menu")
+local Menu = Tabs.Config:AddLeftGroupbox("Menu")
 
 Menu:AddButton({ Text = "Unload script", Func = function() Library:Unload() end })
 
@@ -653,8 +769,8 @@ SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
 ThemeManager:SetFolder("cclosure.vip")
 SaveManager:SetFolder("cclosure.vip/configs")
 
-SaveManager:BuildConfigSection(Tabs["UI Settings"])
-ThemeManager:ApplyToTab(Tabs["UI Settings"])
+SaveManager:BuildConfigSection(Tabs.Config)
+ThemeManager:ApplyToTab(Tabs.Config)
 
 SaveManager:LoadAutoloadConfig()
 
