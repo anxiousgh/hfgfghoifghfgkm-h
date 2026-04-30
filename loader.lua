@@ -44,6 +44,7 @@ local function bindFireKey(optKey, fn) _fireKeys[optKey] = fn end
 UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
     if Library and Library.Unloaded then return end
+    if UserInputService:GetFocusedTextBox() then return end
     local kc  = input.KeyCode
     local uit = input.UserInputType
     local function matches(v)
@@ -521,6 +522,16 @@ do
 
     Act:AddButton({ Text = "Respawn", Func = F.respawn.fire,
         Tooltip = "Respawn at current position" })
+
+    Act:AddDivider()
+
+    Act:AddButton({ Text = "Anti VC ban", DoubleClick = true,
+        Tooltip = "Cycles voice connections + replaces mic button to bypass VC ban detection. Run once per session.",
+        Func = function()
+            F.antiVcBan.fire()
+            Library:Notify("Anti VC ban running — wait ~7s", 5)
+        end,
+    })
 
     Act:AddDivider()
 
