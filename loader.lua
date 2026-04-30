@@ -250,6 +250,12 @@ do
         Default = F.ragebot.settings.SwitchByMouse, Callback = F.ragebot.setSwitchByMouse })
     Tgt:AddToggle("RageShowLine",      { Text = "Show target line",
         Default = F.ragebot.settings.ShowLine,    Callback = F.ragebot.setShowLine })
+    Tgt:AddDropdown("RageLineOrigin", {
+        Values = { "Bottom", "Center", "Top", "Mouse" },
+        Default = F.ragebot.settings.LineOrigin,
+        Text = "Line origin",
+        Callback = F.ragebot.setLineOrigin,
+    })
     Tgt:AddToggle("RageShowOutline",   { Text = "Show target outline",
         Default = F.ragebot.settings.ShowOutline, Callback = F.ragebot.setShowOutline })
     Tgt:AddToggle("RageFaceTarget",    { Text = "Face target",
