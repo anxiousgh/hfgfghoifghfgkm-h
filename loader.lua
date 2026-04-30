@@ -80,8 +80,8 @@ local Tabs = {
     Visual   = Window:AddTab("Visual"),
     Movement = Window:AddTab("Movement"),
     Players  = Window:AddTab("Players"),
-    Config   = Window:AddTab("Config"),
     Misc     = Window:AddTab("Misc"),
+    Config   = Window:AddTab("Config"),
 }
 
 -- ============================================================
@@ -224,6 +224,10 @@ do
 
     Tgt:AddToggle("RageSwitchByMouse", { Text = "Switch by mouse",
         Default = F.ragebot.settings.SwitchByMouse, Callback = F.ragebot.setSwitchByMouse })
+    Tgt:AddToggle("RageShowLine",      { Text = "Show target line",
+        Default = F.ragebot.settings.ShowLine,    Callback = F.ragebot.setShowLine })
+    Tgt:AddToggle("RageShowOutline",   { Text = "Show target outline",
+        Default = F.ragebot.settings.ShowOutline, Callback = F.ragebot.setShowOutline })
     Tgt:AddToggle("RageFaceTarget",    { Text = "Face target",
         Default = F.ragebot.settings.FaceTarget,  Callback = F.ragebot.setFaceTarget })
     Tgt:AddToggle("RageCamSnap",       { Text = "Cam snap",
