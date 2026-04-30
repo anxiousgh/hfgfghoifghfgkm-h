@@ -3,7 +3,7 @@
 --  executor: Potassium
 -- ============================================================
 
-local F = loadstring(game:HttpGet("https://raw.githubusercontent.com/anxiousgh/asdasdasdasdasd/main/functions.lua"))()
+local F = loadstring(game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/functions.lua"))()
 
 local repo = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/"
 local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
