@@ -5,10 +5,10 @@
 
 local F = loadstring(game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/functions.lua"))()
 
-local repo = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/"
-local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager  = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+local repo = "https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/"
+local Library      = loadstring(game:HttpGet(repo .. "lib.lua"))()
+local ThemeManager = loadstring(game:HttpGet(repo .. "libaddons/tman.lua"))()
+local SaveManager  = loadstring(game:HttpGet(repo .. "libaddons/sman.lua"))()
 
 -- Patch: LinoriaLib button labels render a hair too low because the font's
 -- visual midpoint sits below its line-box center. Shift button labels up by 1px.
