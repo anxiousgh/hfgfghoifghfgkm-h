@@ -1165,6 +1165,29 @@ local rbCachedTarget = nil
 local _rbFaceStepBound = false
 local rbOrbitAngle = 0
 
+-- target visualization
+local RB_targetLine, RB_outlineHL
+if Drawing and Drawing.new then
+    RB_targetLine = Drawing.new("Line")
+    RB_targetLine.Visible     = false
+    RB_targetLine.Thickness   = 2
+    RB_targetLine.Color       = Color3.fromRGB(255, 80, 80)
+    RB_targetLine.Transparency= 1
+end
+local function ensureRBHighlight()
+    if RB_outlineHL and RB_outlineHL.Parent then return RB_outlineHL end
+    RB_outlineHL = Instance.new("Highlight")
+    RB_outlineHL.Name = "_cclosure_rb_outline"
+    RB_outlineHL.FillTransparency    = 1
+    RB_outlineHL.OutlineColor        = Color3.fromRGB(255, 80, 80)
+    RB_outlineHL.OutlineTransparency = 0
+    RB_outlineHL.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
+    RB_outlineHL.Enabled             = false
+    pcall(function() RB_outlineHL.Parent = game:GetService("CoreGui") end)
+    if not RB_outlineHL.Parent then RB_outlineHL.Parent = workspace end
+    return RB_outlineHL
+end
+
 local function rbIsVisible(plr)
     local char = plr.Character; local lchar = lplr.Character
     if not char or not lchar then return false end
@@ -1272,6 +1295,29 @@ RunService.RenderStepped:Connect(function(dt)
     local char = plr and plr.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     rbCachedTarget = hrp
+
+    -- target line: bottom-center of viewport -> target
+    if RB_targetLine then
+        if RageSettings.ShowLine and hrp then
+            local cam = workspace.CurrentCamera
+            local sp, on = cam:WorldToViewportPoint(hrp.Position)
+            if on then
+                local vs = cam.ViewportSize
+                RB_targetLine.From = Vector2.new(vs.X * 0.5, vs.Y)
+                RB_targetLine.To   = Vector2.new(sp.X, sp.Y)
+                RB_targetLine.Visible = true
+            else RB_targetLine.Visible = false end
+        else RB_targetLine.Visible = false end
+    end
+
+    -- target outline: highlight on the locked character
+    if RageSettings.ShowOutline and char then
+        local hl = ensureRBHighlight()
+        if hl.Adornee ~= char then hl.Adornee = char end
+        hl.Enabled = true
+    elseif RB_outlineHL then
+        RB_outlineHL.Enabled = false
+    end
 
     if RageSettings.CamSnap and hrp then
         local cam = workspace.CurrentCamera
@@ -1757,6 +1803,20 @@ F.ragebot = {
     setSpeedPanic    = function(b) RageSettings.SpeedPanic = b == true end,
     setSwitchByMouse = function(b) RageSettings.SwitchByMouse = b == true end,
     getTarget        = function() return RageSettings.TargetPlayer end,
+    getTargetList    = function()
+        local out = {}
+        for _, e in ipairs(_rbTargetList) do
+            if e.plr and e.plr.Parent then table.insert(out, e.plr) end
+        end
+        return out
+    end,
+    isTargeted       = function(plr)
+        if not plr then return false end
+        for _, e in ipairs(_rbTargetList) do
+            if e.userId == plr.UserId then return true end
+        end
+        return false
+    end,
 }
 
 -- ESP
@@ -1805,9 +1865,11 @@ F.utils = {
         local cam = workspace.CurrentCamera
         local mp  = UserInputService:GetMouseLocation()
         local maxDist = opts.fov or math.huge
+        local exclude = opts.exclude  -- table mapping [Player] = true
         local best, bestD = nil, maxDist + 1
         for _, p in ipairs(plrs:GetPlayers()) do
             if p == lplr then continue end
+            if exclude and exclude[p] then continue end
             if opts.teamCheck and p.Team == lplr.Team then continue end
             local char = p.Character; if not char then continue end
             local hum = char:FindFirstChildOfClass("Humanoid"); local hrp = char:FindFirstChild("HumanoidRootPart")
