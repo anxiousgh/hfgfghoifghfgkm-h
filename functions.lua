@@ -1923,6 +1923,101 @@ end
 
 F.antiVcBan = { fire = antiVcBanFire }
 
+-- ============================================================
+--  GAMES: HOOD CUSTOMS - GODMODE
+--  Detaches LeftHip/RightHip Motor6Ds and CFrames the leg parts
+--  off-screen. Server still keeps the legs as kill-zone, so any
+--  damage to those (which is most damage in HC) is voided.
+--  Client owns its character parts so the CFrame replicates.
+-- ============================================================
+local HC_R15_MOTORS = {"LeftHip", "RightHip"}
+local HC_R15_PARTS  = {"LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot"}
+local HC_R6_MOTORS  = {"Left Hip", "Right Hip"}
+local HC_R6_PARTS   = {"Left Leg", "Right Leg"}
+local HC_VOID       = CFrame.new(0, 9999, 0)
+
+local function hcFindRig(c)
+    local lt = c:FindFirstChild("LowerTorso"); if lt then return lt, HC_R15_MOTORS, HC_R15_PARTS end
+    local t  = c:FindFirstChild("Torso");      if t  then return t,  HC_R6_MOTORS,  HC_R6_PARTS  end
+    return nil
+end
+
+local function hcReattach()
+    if G._hcSavedJoints then
+        for m, info in pairs(G._hcSavedJoints) do
+            if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
+        end
+    end
+    if G._hcCurLegParts then
+        for _, p in ipairs(G._hcCurLegParts) do
+            if p.Parent then pcall(function() p.LocalTransparencyModifier = 0 end) end
+        end
+    end
+end
+
+local function hcStop()
+    G._hcGmActive = false
+    if G._hcGmHb       then G._hcGmHb:Disconnect();       G._hcGmHb = nil end
+    if G._hcGmRs       then G._hcGmRs:Disconnect();       G._hcGmRs = nil end
+    if G._hcGmCharConn then G._hcGmCharConn:Disconnect(); G._hcGmCharConn = nil end
+    hcReattach()
+    G._hcSavedJoints = nil; G._hcCurLegParts = nil; G._hcGmCurChar = nil
+end
+
+local function hcApply(c)
+    if not G._hcGmActive or not c then return end
+    if G._hcGmHb then G._hcGmHb:Disconnect(); G._hcGmHb = nil end
+    if G._hcGmRs then G._hcGmRs:Disconnect(); G._hcGmRs = nil end
+    G._hcGmCurChar = c
+
+    local rig, motorNames, partNames
+    local t0 = os.clock()
+    repeat
+        rig, motorNames, partNames = hcFindRig(c)
+        if rig then break end
+        task.wait(0.1)
+    until os.clock() - t0 > 5 or not G._hcGmActive or c.Parent == nil
+    if not rig or not G._hcGmActive then return end
+
+    local legParts = {}
+    for _, n in ipairs(partNames) do
+        local p = c:FindFirstChild(n) or c:WaitForChild(n, 2)
+        if p then table.insert(legParts, p) end
+    end
+    if #legParts == 0 then return end
+
+    local saved = {}
+    for _, n in ipairs(motorNames) do
+        local m = rig:FindFirstChild(n) or rig:WaitForChild(n, 2)
+        if m then saved[m] = { part0 = m.Part0, part1 = m.Part1 } end
+    end
+    for m, _ in pairs(saved) do pcall(function() m.Part0 = nil end) end
+    G._hcSavedJoints = saved; G._hcCurLegParts = legParts
+
+    G._hcGmHb = RunService.Heartbeat:Connect(function()
+        for _, p in ipairs(legParts) do
+            if p.Parent then pcall(function() p.CFrame = HC_VOID end) end
+        end
+    end)
+    G._hcGmRs = RunService.RenderStepped:Connect(function()
+        for _, p in ipairs(legParts) do
+            if p.Parent then p.LocalTransparencyModifier = 1 end
+        end
+    end)
+end
+
+local function hcStart()
+    if G._hcGmActive then return end
+    G._hcGmActive = true
+    G._hcGmCharConn = lplr.CharacterAdded:Connect(function(c) task.spawn(hcApply, c) end)
+    if lplr.Character then task.spawn(hcApply, lplr.Character) end
+end
+
+F.games = F.games or {}
+F.games.hoodCustoms = {
+    godmode = makeToggle(hcStart, hcStop, "_hcGmActive"),
+}
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
