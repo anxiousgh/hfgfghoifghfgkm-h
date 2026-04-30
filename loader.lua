@@ -41,7 +41,7 @@ do
     local AimEnabledToggle = Aim:AddToggle("AimEnabled", { Text = "Enabled",
         Default = F.aimbot.settings.Enabled, Callback = F.aimbot.setEnabled })
     AimEnabledToggle:AddKeyPicker("AimKey", {
-        Default = "MB2", Mode = "Hold", Text = "Silent aim key",
+        Default = "MB2", Mode = "Toggle", Text = "Silent aim key",
         SyncToggleState = true, NoUI = false,
     })
 
@@ -85,7 +85,7 @@ do
     local TrigEnabledToggle = Trig:AddToggle("TrigEnabled", { Text = "Enabled",
         Default = F.triggerbot.settings.Enabled, Callback = F.triggerbot.setEnabled })
     TrigEnabledToggle:AddKeyPicker("TrigKey", {
-        Default = "X", Mode = "Hold", Text = "Triggerbot key",
+        Default = "X", Mode = "Toggle", Text = "Triggerbot key",
         SyncToggleState = true, NoUI = false,
     })
 
@@ -106,7 +106,7 @@ do
     local CamEnabledToggle = Cam:AddToggle("CamEnabled", { Text = "Enabled",
         Default = F.camLock.settings.Enabled, Callback = F.camLock.setEnabled })
     CamEnabledToggle:AddKeyPicker("CamKey", {
-        Default = "C", Mode = "Hold", Text = "Camlock key",
+        Default = "C", Mode = "Toggle", Text = "Camlock key",
         SyncToggleState = true, NoUI = false,
     })
 
