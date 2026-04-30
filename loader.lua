@@ -77,6 +77,7 @@ local Tabs = {
     Combat        = Window:AddTab("Combat"),
     Ragebot       = Window:AddTab("Ragebot"),
     ESP           = Window:AddTab("ESP"),
+    Visual        = Window:AddTab("Visual"),
     Movement      = Window:AddTab("Movement"),
     Fun           = Window:AddTab("Fun"),
     Players       = Window:AddTab("Players"),
@@ -167,6 +168,8 @@ do
         Callback = F.camLock.setVisibleCheck })
     Cam:AddToggle("CamSticky",    { Text = "Sticky target", Default = F.camLock.settings.Sticky,
         Callback = F.camLock.setSticky })
+    Cam:AddToggle("CamClosestPart",{ Text = "Closest bodypart", Default = F.camLock.settings.ClosestPart,
+        Callback = F.camLock.setClosestPart })
 
     Cam:AddDropdown("CamHitPart", {
         Values = { "Head", "HumanoidRootPart", "UpperTorso", "Random" },
@@ -205,41 +208,6 @@ do
         targetLabel:SetText(t and ("Locked: " .. t.Name) or "No target locked")
     end
 
-    Tgt:AddDropdown("RagePlayer", {
-        SpecialType = "Player", Text = "Player",
-        Tooltip = "Player to lock or add to multi-target",
-    })
-
-    local function selectedRagePlayer()
-        local name = Options.RagePlayer.Value
-        if not name or name == "" then return nil end
-        return F.players.find(name)
-    end
-
-    -- one-shot action buttons
-    Tgt:AddButton({ Text = "Lock closest to mouse", Func = function()
-        local p = F.ragebot.lockClosest()
-        refreshTargetLabel()
-        Library:Notify(p and ("Locked " .. p.Name) or "No target found", 2)
-    end })
-    :AddButton({ Text = "Lock selected", Func = function()
-        local pl = selectedRagePlayer()
-        if not pl then Library:Notify("No player selected", 2); return end
-        F.ragebot.lockPlayer(pl); refreshTargetLabel()
-        Library:Notify("Locked " .. pl.Name, 2)
-    end })
-
-    Tgt:AddButton({ Text = "Add selected to multi-target", Func = function()
-        local pl = selectedRagePlayer()
-        if not pl then Library:Notify("No player selected", 2); return end
-        F.ragebot.addTarget(pl)
-        Library:Notify("Added " .. pl.Name .. " to multi-target", 2)
-    end })
-    :AddButton({ Text = "Unlock all", Func = function()
-        F.ragebot.unlock(); refreshTargetLabel()
-        Library:Notify("Unlocked", 2)
-    end })
-
     Tgt:AddButton({ Text = "TP behind target", Func = F.ragebot.tpBehind })
 
     Tgt:AddDivider()
@@ -256,10 +224,6 @@ do
 
     Tgt:AddToggle("RageSwitchByMouse", { Text = "Switch by mouse",
         Default = F.ragebot.settings.SwitchByMouse, Callback = F.ragebot.setSwitchByMouse })
-    Tgt:AddToggle("RageShowLine",      { Text = "Show line",
-        Default = F.ragebot.settings.ShowLine,    Callback = F.ragebot.setShowLine })
-    Tgt:AddToggle("RageShowOutline",   { Text = "Show outline",
-        Default = F.ragebot.settings.ShowOutline, Callback = F.ragebot.setShowOutline })
     Tgt:AddToggle("RageFaceTarget",    { Text = "Face target",
         Default = F.ragebot.settings.FaceTarget,  Callback = F.ragebot.setFaceTarget })
     Tgt:AddToggle("RageCamSnap",       { Text = "Cam snap",
@@ -298,24 +262,21 @@ do
         Default = F.ragebot.settings.OrbitDistance, Min = 2, Max = 200, Rounding = 0,
         Callback = F.ragebot.setOrbitDistance })
     Auto:AddSlider("RageOrbitSpeed",  { Text = "Orbit speed",
-        Default = F.ragebot.settings.OrbitSpeed, Min = 1, Max = 360, Rounding = 0,
+        Default = F.ragebot.settings.OrbitSpeed, Min = 1, Max = 9999, Rounding = 0,
         Callback = F.ragebot.setOrbitSpeed })
     Auto:AddSlider("RageOrbitHeight", { Text = "Orbit height",
         Default = F.ragebot.settings.OrbitHeight, Min = -50, Max = 50, Rounding = 0,
         Callback = F.ragebot.setOrbitHeight })
-
-    Auto:AddToggle("RageSpeedPanic", { Text = "Speed panic",
-        Default = F.ragebot.settings.SpeedPanic, Callback = F.ragebot.setSpeedPanic })
 
     -- one-shot keybinds (fired via InputBegan, no toggle visual)
     Tgt:AddLabel("Lock closest"):AddKeyPicker("RageLockKey", {
         Default = "E", Mode = "Toggle", Text = "Lock closest / unlock", NoUI = false,
     })
     Tgt:AddLabel("Add to multi-target"):AddKeyPicker("RageMultiKey", {
-        Default = "M", Mode = "Toggle", Text = "Add closest to multi-target", NoUI = false,
+        Default = "M", Mode = "Hold", Text = "Add closest to multi-target", NoUI = false,
     })
     Tgt:AddLabel("TP behind"):AddKeyPicker("RageTpKey", {
-        Default = "Y", Mode = "Toggle", Text = "TP behind target", NoUI = false,
+        Default = "Y", Mode = "Hold", Text = "TP behind target", NoUI = false,
     })
 
     -- Lock-closest key: unlock if already locked, otherwise lock closest
@@ -408,6 +369,81 @@ do
 end
 
 -- ============================================================
+--  VISUAL TAB  (lighting / atmosphere / camera)
+-- ============================================================
+do
+    local Lighting = game:GetService("Lighting")
+    local LIGHTING_DEFAULTS = {
+        Brightness     = 1, ClockTime = 14, FogStart = 0, FogEnd = 100000,
+        Ambient        = Color3.fromRGB(70, 70, 70),
+        OutdoorAmbient = Color3.fromRGB(128, 128, 128),
+        FogColor       = Color3.fromRGB(192, 192, 192),
+    }
+
+    local Light = Tabs.Visual:AddLeftGroupbox("Lighting")
+
+    Light:AddToggle("Fullbright", { Text = "Fullbright", Default = false,
+        Callback = function(v) if v then F.fullbright.start() else F.fullbright.stop() end end })
+
+    Light:AddDivider()
+
+    Light:AddSlider("LightBrightness", { Text = "Brightness",
+        Default = Lighting.Brightness, Min = 0, Max = 10, Rounding = 1,
+        Callback = function(v) Lighting.Brightness = v end })
+    Light:AddSlider("LightClockTime", { Text = "Time of day",
+        Default = Lighting.ClockTime, Min = 0, Max = 24, Rounding = 1,
+        Callback = function(v) Lighting.ClockTime = v end })
+
+    Light:AddLabel("Ambient"):AddColorPicker("LightAmbient", {
+        Default = Lighting.Ambient, Title = "Ambient",
+        Callback = function(c) Lighting.Ambient = c end,
+    })
+    Light:AddLabel("Outdoor ambient"):AddColorPicker("LightOutdoor", {
+        Default = Lighting.OutdoorAmbient, Title = "Outdoor ambient",
+        Callback = function(c) Lighting.OutdoorAmbient = c end,
+    })
+
+    Light:AddDivider()
+
+    Light:AddButton({ Text = "Restore default lighting", Func = function()
+        for k, v in pairs(LIGHTING_DEFAULTS) do
+            pcall(function() Lighting[k] = v end)
+        end
+        if Toggles.Fullbright then Toggles.Fullbright:SetValue(false) end
+        Library:Notify("Lighting restored", 2)
+    end })
+
+    -- Atmosphere
+    local Atmo = Tabs.Visual:AddRightGroupbox("Atmosphere")
+
+    Atmo:AddSlider("FogStart", { Text = "Fog start",
+        Default = math.min(Lighting.FogStart, 5000), Min = 0, Max = 5000, Rounding = 0,
+        Callback = function(v) Lighting.FogStart = v end })
+    Atmo:AddSlider("FogEnd", { Text = "Fog end",
+        Default = math.min(Lighting.FogEnd, 50000), Min = 0, Max = 50000, Rounding = 0,
+        Callback = function(v) Lighting.FogEnd = v end })
+    Atmo:AddLabel("Fog color"):AddColorPicker("FogColor", {
+        Default = Lighting.FogColor, Title = "Fog color",
+        Callback = function(c) Lighting.FogColor = c end,
+    })
+
+    -- Camera
+    local CamG = Tabs.Visual:AddRightGroupbox("Camera")
+
+    local FreecamToggle = CamG:AddToggle("Freecam", { Text = "Freecam", Default = false,
+        Callback = function(v) if v then F.freecam.start() else F.freecam.stop() end end })
+    FreecamToggle:AddKeyPicker("FreecamKey", {
+        Default = "K", Mode = "Toggle", Text = "Freecam key", SyncToggleState = true,
+    })
+
+    CamG:AddToggle("Zoom", { Text = "Extended zoom", Default = false,
+        Callback = function(v) if v then F.zoom.start() else F.zoom.stop() end end })
+
+    CamG:AddSlider("Fov", { Text = "FOV", Default = F.fov.get(),
+        Min = 30, Max = 120, Rounding = 0, Callback = F.fov.set })
+end
+
+-- ============================================================
 --  MOVEMENT TAB
 -- ============================================================
 do
@@ -439,8 +475,12 @@ do
         Callback = function(v) if v then F.infJump.start() else F.infJump.stop() end end })
     Move:AddToggle("AntiAfk",    { Text = "Anti-AFK",      Default = false,
         Callback = function(v) if v then F.antiAfk.start() else F.antiAfk.stop() end end })
-    Move:AddToggle("ClickTp",    { Text = "Click TP",      Default = false,
+
+    local ClickTpToggle = Move:AddToggle("ClickTp", { Text = "Click TP", Default = false,
         Callback = function(v) if v then F.clickTp.start() else F.clickTp.stop() end end })
+    ClickTpToggle:AddKeyPicker("ClickTpKey", {
+        Default = "T", Mode = "Toggle", Text = "Click TP key", SyncToggleState = true,
+    })
 
     local NoclipToggle = Move:AddToggle("Noclip", { Text = "Noclip", Default = false,
         Callback = function(v) if v then F.noclip.start() else F.noclip.stop() end end })
@@ -450,23 +490,6 @@ do
 
     Move:AddToggle("AutoRespawn",{ Text = "Auto-respawn",  Default = false,
         Callback = function(v) if v then F.autoRespawn.start() else F.autoRespawn.stop() end end })
-
-    local Cam = Tabs.Movement:AddRightGroupbox("Camera / Visual")
-
-    Cam:AddToggle("Fullbright", { Text = "Fullbright", Default = false,
-        Callback = function(v) if v then F.fullbright.start() else F.fullbright.stop() end end })
-
-    local FreecamToggle = Cam:AddToggle("Freecam", { Text = "Freecam", Default = false,
-        Callback = function(v) if v then F.freecam.start() else F.freecam.stop() end end })
-    FreecamToggle:AddKeyPicker("FreecamKey", {
-        Default = "K", Mode = "Toggle", Text = "Freecam key", SyncToggleState = true,
-    })
-
-    Cam:AddToggle("Zoom",       { Text = "Extended zoom", Default = false,
-        Callback = function(v) if v then F.zoom.start() else F.zoom.stop() end end })
-
-    Cam:AddSlider("Fov", { Text = "FOV", Default = F.fov.get(),
-        Min = 30, Max = 120, Rounding = 0, Callback = F.fov.set })
 end
 
 -- ============================================================
@@ -510,7 +533,7 @@ do
                 "Fly","Speed","Bhop","InfJump","AntiAfk","ClickTp","Noclip","AutoRespawn",
                 "Fullbright","Freecam","Zoom","Spin","Flip","Ice",
                 "AimEnabled","TrigEnabled","CamEnabled",
-                "RageSilentForce","RageAutoShoot","RageOrbit","RageFaceTarget","RageCamSnap","RageSpeedPanic",
+                "RageSilentForce","RageAutoShoot","RageOrbit","RageFaceTarget","RageCamSnap",
                 "EspEnabled",
             }) do
                 if Toggles[name] then Toggles[name]:SetValue(false) end
@@ -519,14 +542,10 @@ do
         end,
     })
 
-    -- one-shot keybinds for blink / respawn (no toggle visual)
-    Act:AddLabel("Blink key"):AddKeyPicker("BlinkKey", {
-        Default = "B", Mode = "Toggle", Text = "Blink forward",
-    })
+    -- one-shot keybind for respawn (no toggle visual)
     Act:AddLabel("Respawn key"):AddKeyPicker("RespawnKey", {
-        Default = "R", Mode = "Toggle", Text = "Respawn",
+        Default = "R", Mode = "Hold", Text = "Respawn",
     })
-    bindFireKey("BlinkKey", F.blink.fire)
     bindFireKey("RespawnKey", F.respawn.fire)
 end
 
