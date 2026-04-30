@@ -66,6 +66,7 @@ local TrigSettings = {
     Enabled=false, TeamCheck=false, VisibleCheck=false,
     Prediction=false, PredictionAmount=0.1,
     ClickDelay=0, FOVRadius=20, ShowFOV=false,
+    TargetPart="HumanoidRootPart", ShowTarget=false,
 }
 
 local RageSettings = {
@@ -1057,11 +1058,30 @@ end)
 -- ============================================================
 --  TRIGGERBOT
 -- ============================================================
-local TB_fovCircle
+local TB_fovCircle, TB_targetBox
 if Drawing and Drawing.new then
     TB_fovCircle = Drawing.new("Circle"); TB_fovCircle.Thickness=1; TB_fovCircle.NumSides=100
     TB_fovCircle.Radius=TrigSettings.FOVRadius; TB_fovCircle.Filled=false; TB_fovCircle.Visible=false
     TB_fovCircle.Color=Color3.fromRGB(255,180,0); TB_fovCircle.Transparency=1
+
+    TB_targetBox = Drawing.new("Circle")
+    TB_targetBox.Visible=false; TB_targetBox.ZIndex=999
+    TB_targetBox.Color=Color3.fromRGB(255,180,0)
+    TB_targetBox.Thickness=1; TB_targetBox.Filled=true; TB_targetBox.Radius=4; TB_targetBox.NumSides=32
+end
+
+-- pick the target part by name, with R6/R15 friendly fallbacks
+local function tbResolvePart(char, name)
+    if not char then return nil end
+    if name == "Random" then
+        local parts = {}
+        for _, p in ipairs(char:GetChildren()) do
+            if p:IsA("BasePart") then table.insert(parts, p) end
+        end
+        if #parts == 0 then return char:FindFirstChild("HumanoidRootPart") end
+        return parts[math.random(1, #parts)]
+    end
+    return char:FindFirstChild(name) or char:FindFirstChild("HumanoidRootPart")
 end
 
 local function trigIsVisible(plr)
@@ -1077,34 +1097,52 @@ local function trigIsVisible(plr)
 end
 
 local _trigLastShot = 0
+local _trigCurrentPart = nil  -- currently-best target part this frame, for ShowTarget
 RunService.Heartbeat:Connect(function()
+    local cam = workspace.CurrentCamera
+    local mousePos = UserInputService:GetMouseLocation()
+
     if TB_fovCircle then
         TB_fovCircle.Visible = TrigSettings.ShowFOV
         if TrigSettings.ShowFOV then
-            TB_fovCircle.Position = UserInputService:GetMouseLocation()
-            TB_fovCircle.Radius = TrigSettings.FOVRadius
+            TB_fovCircle.Position = mousePos
+            TB_fovCircle.Radius   = TrigSettings.FOVRadius
         end
     end
-    if not TrigSettings.Enabled then return end
-    if (tick() - _trigLastShot) * 1000 < TrigSettings.ClickDelay then return end
-    local cam = workspace.CurrentCamera
-    local mousePos = UserInputService:GetMouseLocation()
-    -- find any player inside FOV
-    local hit = nil
+
+    -- find best player inside FOV using the configured target part
+    local hitPlr, hitPart, bestD = nil, nil, math.huge
     for _, plr in ipairs(_cachedPlayers or plrs:GetPlayers()) do
         if plr == lplr then continue end
         if TrigSettings.TeamCheck and plr.Team == lplr.Team then continue end
         local char = plr.Character; if not char then continue end
         local hum = char:FindFirstChildOfClass("Humanoid")
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if not hrp or not hum or hum.Health <= 0 then continue end
+        if not hum or hum.Health <= 0 then continue end
         if TrigSettings.VisibleCheck and not trigIsVisible(plr) then continue end
-        local sp, onScreen = cam:WorldToViewportPoint(hrp.Position)
+        local part = tbResolvePart(char, TrigSettings.TargetPart)
+        if not part then continue end
+        local sp, onScreen = cam:WorldToViewportPoint(part.Position)
         if not onScreen then continue end
         local d = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
-        if d <= TrigSettings.FOVRadius then hit = plr; break end
+        if d <= TrigSettings.FOVRadius and d < bestD then
+            hitPlr, hitPart, bestD = plr, part, d
+        end
     end
-    if not hit then return end
+    _trigCurrentPart = hitPart
+
+    if TB_targetBox then
+        if TrigSettings.ShowTarget and TrigSettings.Enabled and hitPart then
+            local sp, onScreen = cam:WorldToViewportPoint(hitPart.Position)
+            if onScreen then
+                TB_targetBox.Position = Vector2.new(sp.X, sp.Y)
+                TB_targetBox.Visible  = true
+            else TB_targetBox.Visible = false end
+        else TB_targetBox.Visible = false end
+    end
+
+    if not TrigSettings.Enabled then return end
+    if (tick() - _trigLastShot) * 1000 < TrigSettings.ClickDelay then return end
+    if not hitPlr then return end
     _trigLastShot = tick()
     pcall(function()
         local vim = game:GetService("VirtualInputManager")
@@ -1686,6 +1724,8 @@ F.triggerbot = {
     setTeamCheck    = function(b) TrigSettings.TeamCheck = b == true end,
     setVisibleCheck = function(b) TrigSettings.VisibleCheck = b == true end,
     setShowFov      = function(b) TrigSettings.ShowFOV = b == true end,
+    setHitPart      = function(s) TrigSettings.TargetPart = tostring(s) end,
+    setShowTarget   = function(b) TrigSettings.ShowTarget = b == true end,
 }
 
 -- ragebot
