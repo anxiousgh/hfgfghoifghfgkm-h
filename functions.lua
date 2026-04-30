@@ -71,7 +71,7 @@ local TrigSettings = {
 
 local RageSettings = {
     TargetUserId=nil, TargetPlayer=nil,
-    ShowLine=true, ShowOutline=true, FaceTarget=false,
+    ShowLine=true, ShowOutline=true, LineOrigin="Bottom", FaceTarget=false,
     Orbit=false, OrbitDistance=15, OrbitSpeed=60, OrbitHeight=5,
     AutoShoot=false, AutoShootDist=50, AutoShootVis=true, AutoShootRequireTool=false,
     AutoShootCooldown=100, EquipDelay=0.5, FFCheck=true,
@@ -1296,14 +1296,25 @@ RunService.RenderStepped:Connect(function(dt)
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     rbCachedTarget = hrp
 
-    -- target line: bottom-center of viewport -> target
+    -- target line origin: Bottom / Center / Top / Mouse
     if RB_targetLine then
         if RageSettings.ShowLine and hrp then
             local cam = workspace.CurrentCamera
             local sp, on = cam:WorldToViewportPoint(hrp.Position)
             if on then
                 local vs = cam.ViewportSize
-                RB_targetLine.From = Vector2.new(vs.X * 0.5, vs.Y)
+                local origin = RageSettings.LineOrigin
+                local from
+                if origin == "Top" then
+                    from = Vector2.new(vs.X * 0.5, 0)
+                elseif origin == "Center" then
+                    from = Vector2.new(vs.X * 0.5, vs.Y * 0.5)
+                elseif origin == "Mouse" then
+                    from = UserInputService:GetMouseLocation()
+                else  -- "Bottom" (default)
+                    from = Vector2.new(vs.X * 0.5, vs.Y)
+                end
+                RB_targetLine.From = from
                 RB_targetLine.To   = Vector2.new(sp.X, sp.Y)
                 RB_targetLine.Visible = true
             else RB_targetLine.Visible = false end
@@ -1784,8 +1795,9 @@ F.ragebot = {
     tpBehind    = rbTpBehind,
     setSilentForce  = function(b) RageSettings.SilentForce = b == true end,
     setSilentMethod = function(s) RageSettings.SilentMethod = tostring(s) end,
-    setShowLine    = function(b) RageSettings.ShowLine = b == true end,
-    setShowOutline = function(b) RageSettings.ShowOutline = b == true end,
+    setShowLine     = function(b) RageSettings.ShowLine = b == true end,
+    setShowOutline  = function(b) RageSettings.ShowOutline = b == true end,
+    setLineOrigin   = function(s) RageSettings.LineOrigin = tostring(s) end,
     setFaceTarget  = function(b) RageSettings.FaceTarget = b == true end,
     setOrbit       = function(b) RageSettings.Orbit = b == true end,
     setOrbitDistance = function(n) RageSettings.OrbitDistance = math.clamp(tonumber(n) or 15, 2, 200) end,
