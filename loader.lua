@@ -144,16 +144,41 @@ do
         SyncToggleState = true, NoUI = false,
     })
 
-    Trig:AddToggle("TrigTeamCheck",{ Text = "Team check",    Default = F.triggerbot.settings.TeamCheck,
-        Callback = F.triggerbot.setTeamCheck })
-    Trig:AddToggle("TrigVisCheck", { Text = "Visible check", Default = F.triggerbot.settings.VisibleCheck,
-        Callback = F.triggerbot.setVisibleCheck })
-    Trig:AddToggle("TrigShowFov",  { Text = "Show FOV",      Default = F.triggerbot.settings.ShowFOV,
-        Callback = F.triggerbot.setShowFov })
-    Trig:AddSlider("TrigFov",      { Text = "FOV radius", Default = F.triggerbot.settings.FOVRadius,
+    Trig:AddToggle("TrigTeamCheck", { Text = "Team check",
+        Default = F.triggerbot.settings.TeamCheck, Callback = F.triggerbot.setTeamCheck })
+    Trig:AddToggle("TrigVisCheck",  { Text = "Visible check",
+        Default = F.triggerbot.settings.VisibleCheck, Callback = F.triggerbot.setVisibleCheck })
+
+    Trig:AddDropdown("TrigHitPart", {
+        Values = {
+            -- shared
+            "HumanoidRootPart", "Head",
+            -- R15
+            "UpperTorso", "LowerTorso",
+            "LeftUpperArm", "LeftLowerArm", "LeftHand",
+            "RightUpperArm", "RightLowerArm", "RightHand",
+            "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+            "RightUpperLeg", "RightLowerLeg", "RightFoot",
+            -- R6
+            "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg",
+            -- random
+            "Random",
+        },
+        Default = F.triggerbot.settings.TargetPart,
+        Text = "Hit part",
+        Tooltip = "Body part the crosshair must be over to fire. Falls back to HumanoidRootPart if the part doesn't exist on the rig.",
+        Callback = F.triggerbot.setHitPart,
+    })
+
+    Trig:AddSlider("TrigFov", { Text = "FOV radius", Default = F.triggerbot.settings.FOVRadius,
         Min = 1, Max = 500, Rounding = 0, Callback = F.triggerbot.setFov })
-    Trig:AddSlider("TrigDelay",    { Text = "Click delay", Default = F.triggerbot.settings.ClickDelay,
+    Trig:AddSlider("TrigDelay", { Text = "Click delay", Default = F.triggerbot.settings.ClickDelay,
         Min = 0, Max = 2000, Rounding = 0, Suffix = " ms", Callback = F.triggerbot.setDelay })
+
+    Trig:AddToggle("TrigShowFov",    { Text = "Show FOV",
+        Default = F.triggerbot.settings.ShowFOV, Callback = F.triggerbot.setShowFov })
+    Trig:AddToggle("TrigShowTarget", { Text = "Show target",
+        Default = F.triggerbot.settings.ShowTarget, Callback = F.triggerbot.setShowTarget })
 
     -- Camlock
     local Cam = CombatLeft:AddTab("Camlock")
