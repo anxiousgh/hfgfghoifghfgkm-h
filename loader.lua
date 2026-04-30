@@ -814,6 +814,19 @@ Menu:AddToggle("ShowKeybindFrame", { Text = "Show keybinds panel", Default = tru
         if Library.KeybindFrame then Library.KeybindFrame.Visible = v end
     end })
 
+Menu:AddButton({ Text = "Unbind all keybinds", DoubleClick = true,
+    Tooltip = "Sets every KeyPicker (except the menu key) to None",
+    Func = function()
+        local n = 0
+        for idx, opt in pairs(Options) do
+            if opt and opt.Type == "KeyPicker" and idx ~= "MenuKeybind" then
+                pcall(function() opt:SetValue({ "None", opt.Mode or "Toggle" }) end)
+                n = n + 1
+            end
+        end
+        Library:Notify(("Unbound %d keybinds"):format(n), 3)
+    end })
+
 Menu:AddDivider()
 
 Menu:AddButton({ Text = "Unload script", Func = function() Library:Unload() end })
