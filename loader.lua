@@ -76,19 +76,22 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Combat   = Window:AddTab("Combat"),
-    Ragebot  = Window:AddTab("Ragebot"),
     Visual   = Window:AddTab("Visual"),
     Movement = Window:AddTab("Movement"),
     Players  = Window:AddTab("Players"),
     Misc     = Window:AddTab("Misc"),
+    Games    = Window:AddTab("Games"),
     Config   = Window:AddTab("Config"),
 }
 
 -- ============================================================
---  COMBAT TAB  (silent aim / triggerbot / camlock)
+--  COMBAT TAB  (silent aim / ragebot / triggerbot / camlock)
 -- ============================================================
 do
-    local Aim = Tabs.Combat:AddLeftGroupbox("Silent Aim")
+    local CombatLeft  = Tabs.Combat:AddLeftTabbox()
+    local CombatRight = Tabs.Combat:AddRightTabbox()
+
+    local Aim = CombatLeft:AddTab("Silent Aim")
 
     local AimEnabledToggle = Aim:AddToggle("AimEnabled", { Text = "Enabled",
         Default = F.aimbot.settings.Enabled, Callback = F.aimbot.setEnabled })
@@ -132,7 +135,7 @@ do
         Callback = F.aimbot.setPredictionAmount })
 
     -- Triggerbot
-    local Trig = Tabs.Combat:AddRightGroupbox("Triggerbot")
+    local Trig = CombatRight:AddTab("Triggerbot")
 
     local TrigEnabledToggle = Trig:AddToggle("TrigEnabled", { Text = "Enabled",
         Default = F.triggerbot.settings.Enabled, Callback = F.triggerbot.setEnabled })
@@ -153,7 +156,7 @@ do
         Min = 0, Max = 2000, Rounding = 0, Suffix = " ms", Callback = F.triggerbot.setDelay })
 
     -- Camlock
-    local Cam = Tabs.Combat:AddRightGroupbox("Camlock")
+    local Cam = CombatRight:AddTab("Camlock")
 
     local CamEnabledToggle = Cam:AddToggle("CamEnabled", { Text = "Enabled",
         Default = F.camLock.settings.Enabled, Callback = F.camLock.setEnabled })
@@ -194,13 +197,9 @@ do
     Cam:AddSlider("CamPredictionAmt", { Text = "Prediction amount",
         Default = F.camLock.settings.PredictionAmount, Min = 0, Max = 2, Rounding = 3,
         Callback = F.camLock.setPredictionAmount })
-end
 
--- ============================================================
---  RAGEBOT TAB
--- ============================================================
-do
-    local Tgt = Tabs.Ragebot:AddLeftGroupbox("Target")
+    -- =================== RAGEBOT (target + auto/orbit) ===================
+    local Tgt = CombatLeft:AddTab("Ragebot")
 
     local targetLabel = Tgt:AddLabel("No target locked")
     local function refreshTargetLabel()
@@ -237,7 +236,7 @@ do
         Callback = F.ragebot.setCamSmoothing })
 
     -- auto / orbit
-    local Auto = Tabs.Ragebot:AddRightGroupbox("Auto / Orbit")
+    local Auto = CombatRight:AddTab("Auto / Orbit")
 
     Auto:AddToggle("RageAutoShoot",        { Text = "Auto shoot",
         Default = F.ragebot.settings.AutoShoot, Callback = F.ragebot.setAutoShoot })
@@ -759,6 +758,22 @@ do
         Default = "T", Mode = "Hold", Text = "Respawn",
     })
     bindFireKey("RespawnKey", F.respawn.fire)
+end
+
+-- ============================================================
+--  GAMES TAB  (per-game features)
+-- ============================================================
+do
+    local HC = Tabs.Games:AddLeftGroupbox("Hood Customs")
+
+    HC:AddToggle("HCGodmode", { Text = "Godmode",
+        Tooltip = "Detaches your leg motors and offsets them off-screen — anything that hits your legs (most damage in HC) does nothing server-side. Only works in Hood Customs.",
+        Default = false,
+        Callback = function(v)
+            if v then F.games.hoodCustoms.godmode.start()
+            else      F.games.hoodCustoms.godmode.stop() end
+        end,
+    })
 end
 
 -- ============================================================
