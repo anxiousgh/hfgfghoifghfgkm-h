@@ -270,31 +270,33 @@ do
         Callback = F.ragebot.setOrbitHeight })
 
     -- one-shot keybinds (fired via InputBegan, no toggle visual)
-    Tgt:AddLabel("Lock closest"):AddKeyPicker("RageLockKey", {
-        Default = "E", Mode = "Toggle", Text = "Lock closest / unlock", NoUI = false,
+    Tgt:AddLabel("Lock / add target"):AddKeyPicker("RageLockKey", {
+        Default = "E", Mode = "Hold", Text = "Lock closest (or add to multi-target)", NoUI = false,
     })
-    Tgt:AddLabel("Add to multi-target"):AddKeyPicker("RageMultiKey", {
-        Default = "M", Mode = "Hold", Text = "Add closest to multi-target", NoUI = false,
+    Tgt:AddLabel("Unlock all"):AddKeyPicker("RageUnlockKey", {
+        Default = "M", Mode = "Hold", Text = "Unlock all targets", NoUI = false,
     })
     Tgt:AddLabel("TP behind"):AddKeyPicker("RageTpKey", {
         Default = "Y", Mode = "Hold", Text = "TP behind target", NoUI = false,
     })
 
-    -- Lock-closest key: unlock if already locked, otherwise lock closest
+    -- Lock key: first press locks closest, subsequent presses add closest to multi-target
     bindFireKey("RageLockKey", function()
+        local closest = F.utils.findClosestPlayer({ fov = 9999 })
+        if not closest then Library:Notify("No player nearby", 2); return end
         if F.ragebot.getTarget() then
-            F.ragebot.unlock()
+            F.ragebot.addTarget(closest)
+            Library:Notify("Added " .. closest.Name .. " to multi-target", 2)
         else
-            F.ragebot.lockClosest()
+            F.ragebot.lockPlayer(closest)
+            Library:Notify("Locked " .. closest.Name, 2)
         end
         refreshTargetLabel()
     end)
-    -- Multi-target key: add closest to mouse to the multi-target list (does NOT unlock)
-    bindFireKey("RageMultiKey", function()
-        local closest = F.utils.findClosestPlayer({ fov = 9999 })
-        if not closest then Library:Notify("No player nearby", 2); return end
-        F.ragebot.addTarget(closest)
-        Library:Notify("Added " .. closest.Name .. " to multi-target", 2)
+    bindFireKey("RageUnlockKey", function()
+        F.ragebot.unlock()
+        refreshTargetLabel()
+        Library:Notify("Unlocked", 2)
     end)
     bindFireKey("RageTpKey", F.ragebot.tpBehind)
 
