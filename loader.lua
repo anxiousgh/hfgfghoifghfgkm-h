@@ -395,28 +395,9 @@ do
         end
     end)
 
-    -- =================== AUTO (reload + equip), right tabbox ===================
+    -- =================== AUTO (equip), right tabbox ===================
     local AutoT = CombatRight:AddTab("Auto")
 
-    AutoT:AddToggle("AutoReload", { Text = "Auto reload",
-        Tooltip = "Watches the equipped tool / character for any ammo-like attribute or IntValue/NumberValue. When it hits the threshold, sends the reload key.",
-        Default = false,
-        Callback = function(v) if v then F.autoReload.start() else F.autoReload.stop() end end,
-    })
-    AutoT:AddSlider("AutoReloadThreshold", { Text = "Reload at",
-        Default = F.autoReload.getThreshold(), Min = 0, Max = 10, Rounding = 0,
-        Callback = F.autoReload.setThreshold })
-    AutoT:AddSlider("AutoReloadCooldown", { Text = "Cooldown",
-        Default = F.autoReload.getCooldown(), Min = 0.1, Max = 10, Rounding = 1,
-        Suffix = " s", Callback = F.autoReload.setCooldown })
-    AutoT:AddLabel("Reload key"):AddKeyPicker("AutoReloadKey", {
-        Default = "R", NoUI = true, Text = "Reload key",
-    })
-    Options.AutoReloadKey:OnChanged(function()
-        F.autoReload.setKey(Options.AutoReloadKey.Value)
-    end)
-
-    AutoT:AddDivider()
     AutoT:AddLabel("Auto equip")
 
     AutoT:AddDropdown("AutoEquipTool", {
@@ -1034,6 +1015,34 @@ do
         Min = 0, Max = 1, Rounding = 2,
         Suffix = " s",
         Callback = F.games.hoodCustoms.autoStomp.setInterval })
+
+    HC:AddDivider()
+
+    HC:AddToggle("HCAutoReload", { Text = "Auto reload",
+        Tooltip = "Watches Character.<Tool>.Script.Ammo. When it hits the threshold, sends the reload key.",
+        Default = false,
+        Callback = function(v)
+            if v then F.games.hoodCustoms.autoReload.start()
+            else      F.games.hoodCustoms.autoReload.stop() end
+        end,
+    })
+
+    HC:AddSlider("HCAutoReloadThreshold", { Text = "Reload at",
+        Default = F.games.hoodCustoms.autoReload.getThreshold(),
+        Min = 0, Max = 10, Rounding = 0,
+        Callback = F.games.hoodCustoms.autoReload.setThreshold })
+
+    HC:AddSlider("HCAutoReloadCooldown", { Text = "Cooldown",
+        Default = F.games.hoodCustoms.autoReload.getCooldown(),
+        Min = 0.1, Max = 10, Rounding = 1, Suffix = " s",
+        Callback = F.games.hoodCustoms.autoReload.setCooldown })
+
+    HC:AddLabel("Reload key"):AddKeyPicker("HCAutoReloadKey", {
+        Default = "R", NoUI = true, Text = "Reload key",
+    })
+    Options.HCAutoReloadKey:OnChanged(function()
+        F.games.hoodCustoms.autoReload.setKey(Options.HCAutoReloadKey.Value)
+    end)
 end
 
 -- ============================================================
