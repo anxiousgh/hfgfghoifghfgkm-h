@@ -2612,11 +2612,75 @@ F.servers = {
     end,
 }
 
+-- ============================================================
+--  GAMES: HOOD CUSTOMS - AUTO STOMP
+--  Spams ReplicatedStorage.MainEvent:FireServer("Stomp") on Heartbeat,
+--  but only while the local player is standing over another player
+--  (within a small horizontal radius and slightly above them) so we
+--  don't flood the server when there's nothing to stomp.
+-- ============================================================
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local _hcStompConn   = nil
+local HC_STOMP_RADIUS    = 5    -- horizontal studs
+local HC_STOMP_VERT_UP   = 7    -- max studs we can be above them
+local HC_STOMP_VERT_DOWN = 1    -- max studs they can be above us
+local HC_STOMP_INTERVAL  = 0    -- seconds between fires; 0 = every Heartbeat
+local _hcStompLast = 0
+
+local function _hcSomeoneBelowMe()
+    local lc = lplr.Character
+    local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
+    if not lhrp then return false end
+    for _, p in ipairs(plrs:GetPlayers()) do
+        if p == lplr then continue end
+        local char = p.Character; if not char then continue end
+        local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then continue end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local d = lhrp.Position - hrp.Position
+        local horizD = Vector2.new(d.X, d.Z).Magnitude
+        if horizD <= HC_STOMP_RADIUS
+            and d.Y <= HC_STOMP_VERT_UP
+            and d.Y >= -HC_STOMP_VERT_DOWN then
+            return true
+        end
+    end
+    return false
+end
+
+local function startHcAutoStomp()
+    G.hcAutoStompActive = true
+    if _hcStompConn then _hcStompConn:Disconnect() end
+    _hcStompConn = RunService.Heartbeat:Connect(function()
+        if not G.hcAutoStompActive then return end
+        if HC_STOMP_INTERVAL > 0 and tick() - _hcStompLast < HC_STOMP_INTERVAL then return end
+        if not _hcSomeoneBelowMe() then return end
+        local me = ReplicatedStorage:FindFirstChild("MainEvent")
+        if not me then return end
+        _hcStompLast = tick()
+        pcall(function() me:FireServer("Stomp") end)
+    end)
+end
+
+local function stopHcAutoStomp()
+    G.hcAutoStompActive = false
+    if _hcStompConn then _hcStompConn:Disconnect(); _hcStompConn = nil end
+end
+
+F.games = F.games or {}
+F.games.hoodCustoms = F.games.hoodCustoms or {}
+F.games.hoodCustoms.autoStomp = makeToggle(startHcAutoStomp, stopHcAutoStomp, "hcAutoStompActive")
+F.games.hoodCustoms.autoStomp.setRadius   = function(n) HC_STOMP_RADIUS   = math.clamp(tonumber(n) or 5, 1, 30) end
+F.games.hoodCustoms.autoStomp.getRadius   = function() return HC_STOMP_RADIUS end
+F.games.hoodCustoms.autoStomp.setInterval = function(n) HC_STOMP_INTERVAL = math.clamp(tonumber(n) or 0, 0, 5) end
+F.games.hoodCustoms.autoStomp.getInterval = function() return HC_STOMP_INTERVAL end
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
     stopClickTp(); stopAutoRe(); stopAutoReload(); stopAutoEquip(); stopHitboxExtender()
-    stopNoclip(); stopFullbright(); stopFreecam()
+    stopHcAutoStomp(); stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
     TrigSettings.Enabled=false
