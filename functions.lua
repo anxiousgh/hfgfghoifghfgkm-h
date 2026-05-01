@@ -2919,11 +2919,55 @@ F.games.hoodCustoms.antiAfkTag = makeToggle(startHcAntiAfkTag, stopHcAntiAfkTag,
 -- turn it off if needed; this just means the user doesn't have to touch it.
 task.spawn(startHcAntiAfkTag)
 
+-- ============================================================
+--  GAMES: HOOD CUSTOMS - GODMODE
+--  Continuously overrides leg-part CFrames each Heartbeat to stack
+--  them inside HRP. The Heartbeat write is what gets shipped to the
+--  server (we own our character's physics), so the server stores
+--  the hidden CFrame — others see no legs, hit detection on the
+--  legs fails. Locally, the Animator runs after Heartbeat and the
+--  Motor6Ds yank the legs back to their natural pose for the render
+--  frame, so visually you keep your legs.
+--  Motor6Ds are never touched — toggling off lets them snap back.
+-- ============================================================
+local HC_GM_LEG_PARTS = {
+    -- R15
+    "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+    "RightUpperLeg", "RightLowerLeg", "RightFoot",
+    -- R6 fallback
+    "Left Leg", "Right Leg",
+}
+local _hcGmConn = nil
+
+local function startHcGodmode()
+    G.hcGmActive = true
+    if _hcGmConn then _hcGmConn:Disconnect() end
+    _hcGmConn = RunService.Heartbeat:Connect(function()
+        if not G.hcGmActive then return end
+        local char = lplr.Character; if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+        local hrpCF = hrp.CFrame
+        for _, name in ipairs(HC_GM_LEG_PARTS) do
+            local limb = char:FindFirstChild(name)
+            if limb and limb:IsA("BasePart") then
+                pcall(function() limb.CFrame = hrpCF end)
+            end
+        end
+    end)
+end
+
+local function stopHcGodmode()
+    G.hcGmActive = false
+    if _hcGmConn then _hcGmConn:Disconnect(); _hcGmConn = nil end
+end
+
+F.games.hoodCustoms.godmode = makeToggle(startHcGodmode, stopHcGodmode, "hcGmActive")
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
     stopClickTp(); stopAutoRe(); stopHcAutoReload(); stopHcKnifeReach(); stopHcAntiAfkTag(); stopAutoEquip(); stopHitboxExtender()
-    stopHcAutoStomp(); stopNoclip(); stopFullbright(); stopFreecam()
+    stopHcAutoStomp(); stopHcGodmode(); stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
     TrigSettings.Enabled=false
