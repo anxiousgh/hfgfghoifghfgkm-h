@@ -2115,8 +2115,34 @@ local function hcApply(c)
     G._hcSavedJoints = saved
     G._hcCurLegParts = legParts
 
-    -- server view: legs at HC_VOID, written every Heartbeat to replicate
+    -- abort if we couldn't detach anything — writing HC_VOID with motors still
+    -- attached would drag the entire rig through the joint (= player launches
+    -- into the sky)
+    if next(saved) == nil then
+        if G._hcGmHb then G._hcGmHb:Disconnect(); G._hcGmHb = nil end
+        if G._hcGmRs then G._hcGmRs:Disconnect(); G._hcGmRs = nil end
+        return
+    end
+
+    -- helper: are the hip motors still detached? (something could re-attach
+    -- them — anti-cheat, animation reset, ChangeState, etc.)
+    local function hipsStillDetached()
+        for m, _ in pairs(saved) do
+            if m.Part0 ~= nil then return false end
+        end
+        return true
+    end
+
+    -- server view: legs at HC_VOID, written every Heartbeat to replicate.
+    -- Only write while hips are confirmed-detached; if something snaps the
+    -- joints back we re-detach instead of writing CFrame (which would yank us).
     G._hcGmHb = RunService.Heartbeat:Connect(function()
+        if not hipsStillDetached() then
+            for m, _ in pairs(saved) do
+                if m.Part0 ~= nil then pcall(function() m.Part0 = nil end) end
+            end
+            return
+        end
         for _, p in ipairs(legParts) do
             if p.Parent then pcall(function() p.CFrame = HC_VOID end) end
         end
