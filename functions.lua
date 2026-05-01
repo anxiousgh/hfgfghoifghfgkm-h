@@ -2919,11 +2919,41 @@ F.games.hoodCustoms.antiAfkTag = makeToggle(startHcAntiAfkTag, stopHcAntiAfkTag,
 -- turn it off if needed; this just means the user doesn't have to touch it.
 task.spawn(startHcAntiAfkTag)
 
+-- HC godmode: send legs to (0, -50000, 0) every Heartbeat so the server
+-- stores them at that hidden position. Local Animator re-renders them at
+-- their natural pose each frame via Motor6D. No motor detach.
+local _hcGmConn
+local _hcGmLegs = {"LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot","Left Leg","Right Leg"}
+
+local function startHcGodmode()
+    G.hcGmActive = true
+    if _hcGmConn then _hcGmConn:Disconnect() end
+    _hcGmConn = RunService.Heartbeat:Connect(function()
+        if not G.hcGmActive then return end
+        local char = lplr.Character
+        if not char then return end
+        local void = CFrame.new(0, -50000, 0)
+        for i = 1, #_hcGmLegs do
+            local limb = char:FindFirstChild(_hcGmLegs[i])
+            if limb then
+                pcall(function() limb.CFrame = void end)
+            end
+        end
+    end)
+end
+
+local function stopHcGodmode()
+    G.hcGmActive = false
+    if _hcGmConn then _hcGmConn:Disconnect(); _hcGmConn = nil end
+end
+
+F.games.hoodCustoms.godmode = makeToggle(startHcGodmode, stopHcGodmode, "hcGmActive")
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
     stopClickTp(); stopAutoRe(); stopHcAutoReload(); stopHcKnifeReach(); stopHcAntiAfkTag(); stopAutoEquip(); stopHitboxExtender()
-    stopHcAutoStomp(); stopNoclip(); stopFullbright(); stopFreecam()
+    stopHcAutoStomp(); stopHcGodmode(); stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
     TrigSettings.Enabled=false
