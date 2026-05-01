@@ -2044,15 +2044,37 @@ F.antiVcBan = { fire = antiVcBanFire }
 --  damage to those (which is most damage in HC) is voided.
 --  Client owns its character parts so the CFrame replicates.
 -- ============================================================
-local HC_R15_MOTORS = {"LeftHip", "RightHip"}
-local HC_R15_PARTS  = {"LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot"}
-local HC_R6_MOTORS  = {"Left Hip", "Right Hip"}
-local HC_R6_PARTS   = {"Left Leg", "Right Leg"}
-local HC_VOID       = CFrame.new(0, 9999, 0)
+-- legs go on LowerTorso (R15) / Torso (R6); arms go on UpperTorso (R15) / Torso (R6)
+local HC_R15_LEG_MOTORS = {"LeftHip", "RightHip"}
+local HC_R15_ARM_MOTORS = {"LeftShoulder", "RightShoulder"}
+local HC_R15_PARTS = {
+    "LeftUpperLeg","LeftLowerLeg","LeftFoot",
+    "RightUpperLeg","RightLowerLeg","RightFoot",
+    "LeftUpperArm","LeftLowerArm","LeftHand",
+    "RightUpperArm","RightLowerArm","RightHand",
+}
+local HC_R6_LEG_MOTORS = {"Left Hip", "Right Hip"}
+local HC_R6_ARM_MOTORS = {"Left Shoulder", "Right Shoulder"}
+local HC_R6_PARTS = { "Left Leg", "Right Leg", "Left Arm", "Right Arm" }
+local HC_VOID = CFrame.new(0, 9999, 0)
 
+-- returns the rig "anchor" used to find motors, list of all motors to detach, list of parts to fling
 local function hcFindRig(c)
-    local lt = c:FindFirstChild("LowerTorso"); if lt then return lt, HC_R15_MOTORS, HC_R15_PARTS end
-    local t  = c:FindFirstChild("Torso");      if t  then return t,  HC_R6_MOTORS,  HC_R6_PARTS  end
+    local lt = c:FindFirstChild("LowerTorso")
+    local ut = c:FindFirstChild("UpperTorso")
+    if lt or ut then
+        local motors = {}
+        for _, n in ipairs(HC_R15_LEG_MOTORS) do table.insert(motors, n) end
+        for _, n in ipairs(HC_R15_ARM_MOTORS) do table.insert(motors, n) end
+        return (lt or ut), motors, HC_R15_PARTS
+    end
+    local t = c:FindFirstChild("Torso")
+    if t then
+        local motors = {}
+        for _, n in ipairs(HC_R6_LEG_MOTORS) do table.insert(motors, n) end
+        for _, n in ipairs(HC_R6_ARM_MOTORS) do table.insert(motors, n) end
+        return t, motors, HC_R6_PARTS
+    end
     return nil
 end
 
@@ -2060,11 +2082,6 @@ local function hcReattach()
     if G._hcSavedJoints then
         for m, info in pairs(G._hcSavedJoints) do
             if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
-        end
-    end
-    if G._hcCurLegParts then
-        for _, p in ipairs(G._hcCurLegParts) do
-            if p.Parent then pcall(function() p.LocalTransparencyModifier = 0 end) end
         end
     end
 end
@@ -2093,31 +2110,38 @@ local function hcApply(c)
     until os.clock() - t0 > 5 or not G._hcGmActive or c.Parent == nil
     if not rig or not G._hcGmActive then return end
 
-    local legParts = {}
+    -- collect parts to fling
+    local limbParts = {}
     for _, n in ipairs(partNames) do
-        local p = c:FindFirstChild(n) or c:WaitForChild(n, 2)
-        if p then table.insert(legParts, p) end
+        local p = c:FindFirstChild(n)
+        if p then table.insert(limbParts, p) end
     end
-    if #legParts == 0 then return end
+    if #limbParts == 0 then return end
 
+    -- search the whole character for motors (hip motors live on LowerTorso,
+    -- shoulder motors on UpperTorso, so a single rig:FindFirstChild misses them)
     local saved = {}
     for _, n in ipairs(motorNames) do
-        local m = rig:FindFirstChild(n) or rig:WaitForChild(n, 2)
+        local m
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("Motor6D") and d.Name == n then m = d; break end
+        end
         if m then saved[m] = { part0 = m.Part0, part1 = m.Part1 } end
     end
     for m, _ in pairs(saved) do pcall(function() m.Part0 = nil end) end
-    G._hcSavedJoints = saved; G._hcCurLegParts = legParts
+    G._hcSavedJoints = saved; G._hcCurLegParts = limbParts
 
+    -- fling the detached parts up out of the kill-zone every Heartbeat
+    -- (the client already owns its own character parts so the CFrame replicates)
     G._hcGmHb = RunService.Heartbeat:Connect(function()
-        for _, p in ipairs(legParts) do
+        for _, p in ipairs(limbParts) do
             if p.Parent then pcall(function() p.CFrame = HC_VOID end) end
         end
     end)
-    G._hcGmRs = RunService.RenderStepped:Connect(function()
-        for _, p in ipairs(legParts) do
-            if p.Parent then p.LocalTransparencyModifier = 1 end
-        end
-    end)
+    -- NOTE: previously we forced LocalTransparencyModifier=1 every RenderStep
+    -- which kept limbs invisible locally forever. The engine briefly hides them
+    -- on detach and then animates from your IK rig, so we just don't touch it
+    -- and let the local view recover naturally.
 end
 
 local function hcStart()
