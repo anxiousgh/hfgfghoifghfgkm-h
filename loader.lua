@@ -793,7 +793,7 @@ do
 
     Extras:AddDivider()
 
-    Extras:AddButton({ Text = "Blink forward", Func = F.blink.fire,
+    Extras:AddButton({ Text = "Blink forward", Func = F.blink.fire })
     Extras:AddSlider("BlinkDist", { Text = "Blink distance", Default = F.blink.getDistance(),
         Min = 1, Max = 200, Rounding = 0, Callback = F.blink.setDistance })
 end
@@ -903,7 +903,7 @@ end
 do
     local Act = Tabs.Misc:AddLeftGroupbox("Actions")
 
-    Act:AddButton({ Text = "Respawn", Func = F.respawn.fire,
+    Act:AddButton({ Text = "Respawn", Func = F.respawn.fire })
 
     Act:AddDivider()
 
