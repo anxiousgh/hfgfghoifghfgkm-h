@@ -1125,17 +1125,20 @@ end
 -- ============================================================
 Library:SetWatermarkVisibility(true)
 
+-- only update watermark text once per second instead of every frame —
+-- reading Stats.Network + string.format + label rewrite was happening
+-- every render frame, wasted at 240 fps.
 local FrameTimer, FrameCounter, FPS = tick(), 0, 60
 local WatermarkConn = RunService.RenderStepped:Connect(function()
     FrameCounter += 1
     if (tick() - FrameTimer) >= 1 then
         FPS = FrameCounter; FrameTimer = tick(); FrameCounter = 0
+        local ping = 0
+        pcall(function()
+            ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())
+        end)
+        Library:SetWatermark(("cclosure.vip | %d fps | %d ms"):format(math.floor(FPS), ping))
     end
-    local ping = 0
-    pcall(function()
-        ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())
-    end)
-    Library:SetWatermark(("cclosure.vip | %d fps | %d ms"):format(math.floor(FPS), ping))
 end)
 
 -- KeybindFrame visibility is wired up to a Config toggle further down

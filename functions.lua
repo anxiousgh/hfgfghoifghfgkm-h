@@ -485,6 +485,9 @@ local function stopNoclip()
 end
 local function startNoclip()
     G.noclipActive=true
+    -- only the 5 collision-relevant parts need CanCollide=false; iterating
+    -- char:GetDescendants() every Heartbeat (accessories, decals, attachments,
+    -- scripts) was wasted work. Audit flagged this as a freeze contributor.
     RunService:BindToRenderStep("NoclipStep", Enum.RenderPriority.First.Value, function()
         if not G.noclipActive then return end
         local c=lplr.Character; if not c then return end
@@ -492,14 +495,6 @@ local function startNoclip()
             local p=c:FindFirstChild(name); if p then p.CanCollide=false end
         end
     end)
-    G.noclipHBConn=RunService.Heartbeat:Connect(function()
-        if not G.noclipActive then return end
-        local c=lplr.Character; if not c then return end
-        for _,p in ipairs(c:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide=false end
-        end
-    end)
-    G.noclipConn=lplr.CharacterAdded:Connect(function() end)
 end
 
 local function stopFullbright()
@@ -909,17 +904,34 @@ end)
 local function saDirection(origin, targetPos) return (targetPos - origin).Unit * 1000 end
 
 if hookmetamethod then
-    -- track tool presence
+    -- track tool presence with event-driven updates instead of per-frame
+    -- char:GetChildren() walks. Saves an unconditional RenderStepped that
+    -- ran forever even when aimbot was off.
     local hasTool = false
-    RunService.RenderStepped:Connect(function()
-        local c = lplr.Character
-        if not c then hasTool=false; return end
+    local _toolWatchers = {}
+    local function _refreshTool(c)
+        if not c then hasTool = false; return end
         hasTool = false
-        for _,v in ipairs(c:GetChildren()) do
-            if v:IsA("Tool") then hasTool=true; break end
+        for _, v in ipairs(c:GetChildren()) do
+            if v:IsA("Tool") then hasTool = true; break end
         end
-    end)
+    end
+    local function _hookChar(c)
+        if not c then return end
+        for _, conn in ipairs(_toolWatchers) do pcall(function() conn:Disconnect() end) end
+        _toolWatchers = {}
+        table.insert(_toolWatchers, c.ChildAdded:Connect(function(ch) if ch:IsA("Tool") then hasTool = true end end))
+        table.insert(_toolWatchers, c.ChildRemoved:Connect(function(ch) if ch:IsA("Tool") then _refreshTool(c) end end))
+        _refreshTool(c)
+    end
+    lplr.CharacterAdded:Connect(_hookChar)
+    if lplr.Character then _hookChar(lplr.Character) end
 
+    -- guard against re-stacking on script reload: if we've already
+    -- installed __namecall, bail. Each stacked wrapper adds latency to
+    -- every Raycast call, which compounds freezing on rerun.
+    if not getgenv()._F_NAMECALL_HOOKED then
+        getgenv()._F_NAMECALL_HOOKED = true
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
         local method = getnamecallmethod()
@@ -982,6 +994,7 @@ if hookmetamethod then
         if key == "Target" or key == "target" then return part end
         return CFrame.new(tp)
     end))
+    end -- _F_NAMECALL_HOOKED guard
 end
 
 -- ============================================================
@@ -1062,7 +1075,7 @@ local function clFindTarget()
         clStickyTarget = nil
     end
     local closest, closestDist = nil, CamLockSettings.FOVRadius + 1
-    for _, plr in ipairs(plrs:GetPlayers()) do
+    for _, plr in ipairs(_cachedPlayers or plrs:GetPlayers()) do
         local ok, char, hrp = clIsValidTarget(plr); if not ok then continue end
         local checkPart = char:FindFirstChild(CamLockSettings.TargetPart) or hrp
         local sp, onScreen = cam:WorldToViewportPoint(checkPart.Position)
@@ -1152,6 +1165,15 @@ RunService.Heartbeat:Connect(function()
             TB_fovCircle.Position = mousePos
             TB_fovCircle.Radius   = TrigSettings.FOVRadius
         end
+    end
+
+    -- early-out: if nothing is asking for a target this frame, skip the
+    -- per-player + per-part scan entirely. Without this gate the trigger-
+    -- bot did a full server scan every Heartbeat even when disabled —
+    -- the #1 freeze cause per the audit.
+    if not TrigSettings.Enabled and not TrigSettings.ShowTarget then
+        if TB_targetBox then TB_targetBox.Visible = false end
+        return
     end
 
     -- find best player inside FOV.
@@ -1364,6 +1386,24 @@ end
 
 -- ragebot per-frame: face target / orbit / cam snap / speed panic
 RunService.RenderStepped:Connect(function(dt)
+    -- early-out when nothing is asking for ragebot work — skips the
+    -- rbGetTarget() player-iteration each frame at idle. Audit flagged
+    -- this as an always-on RenderStepped consumer.
+    if not RageSettings.SilentForce
+        and not RageSettings.AutoShoot
+        and not RageSettings.ShowLine
+        and not RageSettings.ShowOutline
+        and not RageSettings.CamSnap
+        and not RageSettings.FaceTarget
+        and not RageSettings.SpeedPanic
+        and not RageSettings.TargetPlayer
+        and (not _rbTargetList or #_rbTargetList == 0)
+    then
+        if RB_targetLine then RB_targetLine.Visible = false end
+        if RB_outlineHL  then RB_outlineHL.Enabled  = false end
+        rbCachedTarget = nil
+        return
+    end
     local plr = rbGetTarget()
     local char = plr and plr.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -1477,8 +1517,11 @@ RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
--- silent force hooks (independent of aimbot)
-if hookmetamethod then
+-- silent force hooks (independent of aimbot).
+-- Guard against re-stacking on script reload — ragebot's namecall+index
+-- hooks compound the same freezing problem the aimbot ones did.
+if hookmetamethod and not getgenv()._F_RB_NAMECALL_HOOKED then
+    getgenv()._F_RB_NAMECALL_HOOKED = true
     local rbOldNamecall
     rbOldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
         local method = getnamecallmethod()
@@ -2578,7 +2621,7 @@ F.games.hoodCustoms.autoStomp = (function()
         local lc = lplr.Character
         local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
         if not lhrp then return false end
-        for _, p in ipairs(plrs:GetPlayers()) do
+        for _, p in ipairs(_cachedPlayers or plrs:GetPlayers()) do
             if p == lplr then continue end
             local char = p.Character; if not char then continue end
             local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then continue end
@@ -2811,8 +2854,11 @@ F.games.hoodCustoms.antiAfkTag = (function()
         if charConn then charConn:Disconnect(); charConn = nil end
     end
 
-    -- always-on by default
-    task.spawn(start)
+    -- always-on by default — but only auto-start in Hood Customs.
+    -- Outside HC, hook() does WaitForChild("CharacterAFK", 5) which times
+    -- out (5s noise) on every character spawn for no reason.
+    local _HC_PLACE_IDS = { [138995385694035] = true, [9825515356] = true }
+    if _HC_PLACE_IDS[game.PlaceId] then task.spawn(start) end
     return makeToggle(start, stop, "hcAntiAfkTagActive")
 end)()
 
