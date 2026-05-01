@@ -16,6 +16,11 @@ local plrs             = game:GetService("Players")
 local lplr             = plrs.LocalPlayer
 local Camera           = workspace.CurrentCamera
 
+--// forward-declare the public API table so functions defined below can
+--   reference it (otherwise `F.games` etc. resolve to a global lookup that
+--   stays nil even after `local F = {}` further down).
+local F
+
 --// cached player list
 local _cachedPlayers = plrs:GetPlayers()
 plrs.PlayerAdded:Connect(function() _cachedPlayers = plrs:GetPlayers() end)
@@ -1771,7 +1776,7 @@ local function makeToggle(startFn, stopFn, isActiveKey)
     }
 end
 
-local F = {}
+F = {}  -- assigns the forward-declared local
 
 F.fly = makeToggle(startFly, stopFly, "flyActive")
 F.fly.setSpeed   = function(n) FLY_SPEED = tonumber(n) or FLY_SPEED end
@@ -2540,31 +2545,8 @@ F.servers = {
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 -- HC-specific knocked check via workspace.Players.Characters.<name>.BodyEffects["K.O"].Value
--- Belt-and-suspenders: if the K.O flag says knocked but the Humanoid is in a
--- normal moving state, the player is clearly walking around and not actually
--- knocked. We require BOTH (K.O = true) AND (Humanoid not running) to count.
-local _HC_RUNNING_STATES = {
-    [Enum.HumanoidStateType.Running]            = true,
-    [Enum.HumanoidStateType.RunningNoPhysics]   = true,
-    [Enum.HumanoidStateType.Jumping]            = true,
-    [Enum.HumanoidStateType.Landed]             = true,
-    [Enum.HumanoidStateType.Freefall]           = true,
-    [Enum.HumanoidStateType.Climbing]           = true,
-    [Enum.HumanoidStateType.Swimming]           = true,
-    [Enum.HumanoidStateType.GettingUp]          = true,
-}
-
 local function _hcIsKnocked(plr)
     if not plr then return false end
-    local pchar = plr.Character; if not pchar then return false end
-    local hum = pchar:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-
-    -- if they're actively moving, they're not knocked regardless of K.O
-    local ok, state = pcall(function() return hum:GetState() end)
-    if ok and _HC_RUNNING_STATES[state] then return false end
-
-    -- and the K.O flag has to actually be set
     local wsPlayers = workspace:FindFirstChild("Players")
     local chars = wsPlayers and wsPlayers:FindFirstChild("Characters")
     if not chars then return false end
