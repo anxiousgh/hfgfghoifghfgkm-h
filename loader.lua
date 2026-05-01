@@ -1096,12 +1096,33 @@ do
     HC:AddDivider()
 
     -- ---- Anti-AFK tag ----
-    HC:AddLabel("Anti-AFK")
-    HC:AddToggle("HCAntiAfkTag", { Text = "Anti-AFK tag",
+    HC:AddLabel("AFK badge")
+    HC:AddToggle("HCAntiAfkTag", { Text = "Anti-AFK tag (hide)",
         Default = true,
         Callback = function(v)
-            if v then F.games.hoodCustoms.antiAfkTag.start()
-            else      F.games.hoodCustoms.antiAfkTag.stop() end
+            if v then
+                -- mutually exclusive with force-AFK; flip its toggle off too
+                if Toggles.HCForceAfkTag and Toggles.HCForceAfkTag.Value then
+                    Toggles.HCForceAfkTag:SetValue(false)
+                end
+                F.games.hoodCustoms.antiAfkTag.start()
+            else
+                F.games.hoodCustoms.antiAfkTag.stop()
+            end
+        end,
+    })
+    HC:AddToggle("HCForceAfkTag", { Text = "Force-AFK tag (always show)",
+        Default = false,
+        Callback = function(v)
+            if v then
+                -- mutually exclusive with anti-AFK; flip its toggle off too
+                if Toggles.HCAntiAfkTag and Toggles.HCAntiAfkTag.Value then
+                    Toggles.HCAntiAfkTag:SetValue(false)
+                end
+                F.games.hoodCustoms.forceAfkTag.start()
+            else
+                F.games.hoodCustoms.forceAfkTag.stop()
+            end
         end,
     })
 

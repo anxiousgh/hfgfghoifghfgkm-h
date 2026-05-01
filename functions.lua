@@ -2840,6 +2840,10 @@ F.games.hoodCustoms.antiAfkTag = (function()
     end
 
     local function start()
+        -- mutually exclusive with force-AFK tag
+        if G.hcForceAfkTagActive and F.games.hoodCustoms.forceAfkTag then
+            pcall(function() F.games.hoodCustoms.forceAfkTag.stop() end)
+        end
         G.hcAntiAfkTagActive = true
         if charConn then charConn:Disconnect() end
         charConn = lplr.CharacterAdded:Connect(function(c)
@@ -2860,6 +2864,66 @@ F.games.hoodCustoms.antiAfkTag = (function()
     local _HC_PLACE_IDS = { [138995385694035] = true, [9825515356] = true }
     if _HC_PLACE_IDS[game.PlaceId] then task.spawn(start) end
     return makeToggle(start, stop, "hcAntiAfkTagActive")
+end)()
+
+-- ============================================================
+--  GAMES: HOOD CUSTOMS - FORCE AFK TAG
+--  Reverse of antiAfkTag: keeps HumanoidRootPart.CharacterAFK
+--  (BillboardGui).Enabled = true, and fires
+--  MainEvent:FireServer("RequestAFKDisplay", true) so the server
+--  also flags you as AFK to other players. Re-asserts whenever
+--  anything sets Enabled back to false. Survives respawn.
+--  Mutually exclusive with antiAfkTag — turning this on disables
+--  the anti tag, and vice versa (the loader handles that wiring).
+-- ============================================================
+F.games.hoodCustoms.forceAfkTag = (function()
+    local propConn, charConn
+
+    local function setOnce()
+        local me = getMainEvent()
+        if me then pcall(function() me:FireServer("RequestAFKDisplay", true) end) end
+    end
+
+    local function hook(char)
+        if not char then return end
+        local hrp = char:WaitForChild("HumanoidRootPart", 5); if not hrp then return end
+        local gui = hrp:WaitForChild("CharacterAFK", 5); if not gui then return end
+        if propConn then propConn:Disconnect() end
+        if not gui.Enabled then
+            pcall(function() gui.Enabled = true end)
+            setOnce()
+        end
+        propConn = gui:GetPropertyChangedSignal("Enabled"):Connect(function()
+            if not G.hcForceAfkTagActive then return end
+            if not gui.Enabled then
+                pcall(function() gui.Enabled = true end)
+                setOnce()
+            end
+        end)
+    end
+
+    local function start()
+        -- mutually exclusive with anti-AFK tag
+        if G.hcAntiAfkTagActive and F.games.hoodCustoms.antiAfkTag then
+            pcall(function() F.games.hoodCustoms.antiAfkTag.stop() end)
+        end
+        G.hcForceAfkTagActive = true
+        if charConn then charConn:Disconnect() end
+        charConn = lplr.CharacterAdded:Connect(function(c)
+            if G.hcForceAfkTagActive then task.spawn(hook, c) end
+        end)
+        if lplr.Character then task.spawn(hook, lplr.Character) end
+    end
+
+    local function stop()
+        G.hcForceAfkTagActive = false
+        if propConn then propConn:Disconnect(); propConn = nil end
+        if charConn then charConn:Disconnect(); charConn = nil end
+        -- restore the badge to whatever the server thinks (don't force off
+        -- here — antiAfkTag is the explicit "always off" toggle)
+    end
+
+    return makeToggle(start, stop, "hcForceAfkTagActive")
 end)()
 
 -- HC godmode: built inside an IIFE so all its locals live in the inner
@@ -2965,7 +3029,8 @@ end)()
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
     stopClickTp(); stopAutoRe(); F.autoEquip.stop()
-    F.games.hoodCustoms.antiAfkTag.stop(); F.games.hoodCustoms.autoStomp.stop()
+    F.games.hoodCustoms.antiAfkTag.stop(); F.games.hoodCustoms.forceAfkTag.stop()
+    F.games.hoodCustoms.autoStomp.stop()
     F.games.hoodCustoms.autoReload.stop(); F.games.hoodCustoms.godmode.stop()
     F.games.hoodCustoms.knifeReach.stop()
     stopNoclip(); stopFullbright(); stopFreecam()
