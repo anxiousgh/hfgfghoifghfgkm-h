@@ -3,7 +3,12 @@
 --  executor: Potassium
 -- ============================================================
 
-local F = loadstring(game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/functions.lua"))()
+local _functionsSrc = game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/functions.lua")
+local _fnFn, _fnErr = loadstring(_functionsSrc)
+if not _fnFn then
+    error("[cclosure.vip] functions.lua failed to compile: " .. tostring(_fnErr), 0)
+end
+local F = _fnFn()
 
 local repo = "https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/"
 local Library      = loadstring(game:HttpGet(repo .. "lib.lua"))()
