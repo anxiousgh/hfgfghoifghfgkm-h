@@ -2919,36 +2919,37 @@ F.games.hoodCustoms.antiAfkTag = makeToggle(startHcAntiAfkTag, stopHcAntiAfkTag,
 -- turn it off if needed; this just means the user doesn't have to touch it.
 task.spawn(startHcAntiAfkTag)
 
--- HC godmode: scoped in a do/end block to keep its locals out of the
--- file-top-level chunk's 200-register Luau budget (we're at the limit).
-do
+-- HC godmode: built inside an IIFE so all its locals live in the inner
+-- function's own register pool — none of them count against the file-
+-- top-level chunk's 200-register Luau budget (we're at the limit).
+F.games.hoodCustoms.godmode = (function()
     local conn
     local legs = {"LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot","Left Leg","Right Leg"}
 
-    local function startGm()
-        G.hcGmActive = true
-        if conn then conn:Disconnect() end
-        conn = RunService.Heartbeat:Connect(function()
-            if not G.hcGmActive then return end
-            local char = lplr.Character
-            if not char then return end
-            local void = CFrame.new(0, -50000, 0)
-            for i = 1, #legs do
-                local limb = char:FindFirstChild(legs[i])
-                if limb then
-                    pcall(function() limb.CFrame = void end)
+    return makeToggle(
+        function()
+            G.hcGmActive = true
+            if conn then conn:Disconnect() end
+            conn = RunService.Heartbeat:Connect(function()
+                if not G.hcGmActive then return end
+                local char = lplr.Character
+                if not char then return end
+                local void = CFrame.new(0, -50000, 0)
+                for i = 1, #legs do
+                    local limb = char:FindFirstChild(legs[i])
+                    if limb then
+                        pcall(function() limb.CFrame = void end)
+                    end
                 end
-            end
-        end)
-    end
-
-    local function stopGm()
-        G.hcGmActive = false
-        if conn then conn:Disconnect(); conn = nil end
-    end
-
-    F.games.hoodCustoms.godmode = makeToggle(startGm, stopGm, "hcGmActive")
-end
+            end)
+        end,
+        function()
+            G.hcGmActive = false
+            if conn then conn:Disconnect(); conn = nil end
+        end,
+        "hcGmActive"
+    )
+end)()
 
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
