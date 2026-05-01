@@ -262,13 +262,6 @@ do
             if v then F.ragebot.targetGui.start() else F.ragebot.targetGui.stop() end
         end })
 
-    Tgt:AddToggle("RageSkipKnocked", {
-        Text = "Skip knocked targets",
-        Tooltip = "Hood Customs: when on, ragebot ignores any target whose BodyEffects.K.O is true — no shooting, no orbit while they're down.",
-        Default = false,
-        Callback = F.ragebot.setSkipKnocked,
-    })
-
     Tgt:AddDivider()
 
     Tgt:AddToggle("RageSilentForce", { Text = "Silent force",
@@ -1036,6 +1029,19 @@ do
             true)
     else
 
+    -- ---- Ragebot (HC-specific) ----
+    HC:AddLabel("Ragebot")
+    HC:AddToggle("RageSkipKnocked", {
+        Text = "Skip knocked targets",
+        Tooltip = "Ragebot ignores any target whose BodyEffects.K.O is true — no shooting, no orbit while they're down.",
+        Default = false,
+        Callback = F.ragebot.setSkipKnocked,
+    })
+
+    HC:AddDivider()
+
+    -- ---- Auto stomp ----
+    HC:AddLabel("Auto stomp")
     HC:AddToggle("HCAutoStomp", { Text = "Auto stomp",
         Tooltip = "Spams ReplicatedStorage.MainEvent:FireServer(\"Stomp\") on Heartbeat, but only when another player is right under your feet — keeps the server quiet otherwise.",
         Default = false,
