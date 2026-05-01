@@ -2612,20 +2612,8 @@ local function _hcIsKnocked(plr)
     return ko ~= nil and ko.Value == true
 end
 
-local function _hcReadDead(node)
-    local fx = node and node:FindFirstChild("BodyEffects")
-    local d  = fx and fx:FindFirstChild("Dead")
-    if d == nil then return false end
-    return d.Value == true
-end
-
 local function _hcIsDead(plr)
-    if not plr then return false end
-    if _hcReadDead(plr.Character) then return true end
-    local wsp = workspace:FindFirstChild("Players")
-    local chars = wsp and wsp:FindFirstChild("Characters")
-    local mdl = chars and chars:FindFirstChild(plr.Name)
-    return _hcReadDead(mdl)
+    return false
 end
 
 local _hcStompConn   = nil
