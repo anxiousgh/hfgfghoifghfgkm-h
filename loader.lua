@@ -784,7 +784,14 @@ do
 
     local _selected = nil
     local _selectedLabel = P:AddLabel("Selected: none")
-    local _playerButtons = {}  -- map [Player] = LinoriaLib button object
+    -- pool: name → { btn = LinoriaButton, player = currentPlayerInstance }
+    -- We NEVER destroy buttons. Linoria's groupbox doesn't reclaim space when
+    -- buttons are externally Destroy()'d, so over an hour of joins/leaves the
+    -- canvas grows and old slots stay reserved → list drifts down off-screen.
+    -- Instead, hide the Outer frame on player leave and unhide / re-bind on
+    -- join (or on rejoin by the same name).
+    local _btnPool = {}        -- [lowerName] = { btn, player, key }
+    local _playerToKey = {}    -- [Player] = lowerName (so we can look up on remove)
 
     local function refreshSelectedLabel()
         if _selected and _selected.Parent then
@@ -829,37 +836,74 @@ do
     List:AddDivider()
 
     -- alphabetical order via LayoutOrder so the underlying UIListLayout sorts
-    -- buttons without us having to destroy + recreate them on every join
+    -- visible buttons without us having to destroy + recreate them
     local function reorderPlayers()
-        local names = {}
-        for plr, _ in pairs(_playerButtons) do
-            if plr.Parent then table.insert(names, plr.Name) end
+        local visibleKeys = {}
+        for key, slot in pairs(_btnPool) do
+            if slot.player and slot.player.Parent then
+                table.insert(visibleKeys, key)
+            end
         end
-        table.sort(names, function(a, b) return a:lower() < b:lower() end)
+        table.sort(visibleKeys)
         local rank = {}
-        for i, n in ipairs(names) do rank[n] = i end
-        for plr, btn in pairs(_playerButtons) do
-            local order = rank[plr.Name]
-            if btn and btn.Outer and order then
-                pcall(function() btn.Outer.LayoutOrder = order end)
+        for i, k in ipairs(visibleKeys) do rank[k] = i end
+        for key, slot in pairs(_btnPool) do
+            if slot.btn and slot.btn.Outer then
+                local order = rank[key]
+                pcall(function()
+                    slot.btn.Outer.LayoutOrder = order or 9999
+                    slot.btn.Outer.Visible = order ~= nil
+                end)
             end
         end
     end
 
     local function removePlayerButton(pl)
-        local b = _playerButtons[pl]
-        if b and b.Outer then pcall(function() b.Outer:Destroy() end) end
-        _playerButtons[pl] = nil
+        local key = _playerToKey[pl]
+        if not key then return end
+        local slot = _btnPool[key]
+        if slot then
+            slot.player = nil
+            if slot.btn and slot.btn.Outer then
+                pcall(function() slot.btn.Outer.Visible = false end)
+            end
+        end
+        _playerToKey[pl] = nil
         reorderPlayers()
     end
 
     local function addPlayerButton(pl)
         if pl == LocalPlayer then return end
-        if _playerButtons[pl] then return end
-        local btn = List:AddButton({ Text = pl.Name, Func = function()
-            selectPlayer(pl)
-        end })
-        _playerButtons[pl] = btn
+        local key = pl.Name:lower()
+        local slot = _btnPool[key]
+        if slot then
+            -- recycle: re-bind to the new Player instance + re-show
+            slot.player = pl
+            _playerToKey[pl] = key
+            if slot.btn and slot.btn.Outer then
+                pcall(function() slot.btn.Outer.Visible = true end)
+            end
+        else
+            -- first time we see this name → create exactly one button.
+            -- Capture the slot itself so the click handler always uses
+            -- whichever Player instance is currently bound (handles rejoin).
+            slot = { player = pl, btn = nil, key = key }
+            _btnPool[key] = slot
+            _playerToKey[pl] = key
+            slot.btn = List:AddButton({ Text = pl.Name, Func = function()
+                if slot.player and slot.player.Parent then
+                    selectPlayer(slot.player)
+                end
+            end })
+            -- on the very first button, walk up to find the parent
+            -- UIListLayout and tell it to ignore invisible children, so
+            -- hiding a button reclaims its vertical space (default is
+            -- IgnoreInvisibleChildren=false → hidden buttons leave gaps)
+            if slot.btn and slot.btn.Outer and slot.btn.Outer.Parent then
+                local layout = slot.btn.Outer.Parent:FindFirstChildOfClass("UIListLayout")
+                if layout then pcall(function() layout.IgnoreInvisibleChildren = true end) end
+            end
+        end
         reorderPlayers()
     end
 
