@@ -244,6 +244,15 @@ do
     end
 
     Tgt:AddButton({ Text = "TP behind target", Func = F.ragebot.tpBehind })
+    :AddButton({ Text = "TP shoot",
+        Tooltip = "TP behind target → fire one click → TP back",
+        Func = F.ragebot.tpShoot })
+
+    Tgt:AddToggle("RageAutoTargetDamager", {
+        Text = "Auto target damager",
+        Tooltip = "When something parents a creator/DamageSource tag to your Humanoid, the attacker gets added to the multi-target list.",
+        Default = false,
+    })
 
     Tgt:AddDivider()
 
@@ -303,6 +312,35 @@ do
 
     Auto:AddToggle("RageOrbit", { Text = "Orbit",
         Default = F.ragebot.settings.Orbit, Callback = F.ragebot.setOrbit })
+
+    -- =================== HITBOX EXTENDER ===================
+    local Hb = CombatRight:AddTab("Hitbox")
+
+    Hb:AddToggle("HitboxEnabled", { Text = "Hitbox extender",
+        Tooltip = "Locally inflates a chosen part on every other player so silent aim and triggerbot land more reliably. Cosmetic locally — server still has the original size.",
+        Default = false,
+        Callback = function(v) if v then F.hitboxExtender.start() else F.hitboxExtender.stop() end end,
+    })
+
+    Hb:AddSlider("HitboxSize", { Text = "Hitbox size",
+        Default = F.hitboxExtender.getSize(), Min = 1, Max = 50, Rounding = 0,
+        Callback = F.hitboxExtender.setSize })
+
+    Hb:AddDropdown("HitboxPart", {
+        Values = {
+            "HumanoidRootPart","Head","UpperTorso","LowerTorso","Torso",
+            "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand",
+            "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
+            "Left Arm","Right Arm","Left Leg","Right Leg",
+        },
+        Default = F.hitboxExtender.getTargetPart(),
+        Text = "Target part",
+        Callback = F.hitboxExtender.setTargetPart,
+    })
+
+    Hb:AddSlider("HitboxTransparency", { Text = "Transparency",
+        Default = 0.6, Min = 0, Max = 1, Rounding = 2,
+        Callback = F.hitboxExtender.setTransparency })
     Auto:AddSlider("RageOrbitDist",   { Text = "Orbit distance",
         Default = F.ragebot.settings.OrbitDistance, Min = 2, Max = 200, Rounding = 0,
         Callback = F.ragebot.setOrbitDistance })
@@ -346,6 +384,20 @@ do
         Library:Notify("Unlocked", 2)
     end)
     bindFireKey("RageTpKey", F.ragebot.tpBehind)
+
+    -- Tp-shoot keybind
+    Tgt:AddLabel("TP shoot"):AddKeyPicker("RageTpShootKey", {
+        Default = "G", Mode = "Hold", Text = "TP shoot", NoUI = false,
+    })
+    bindFireKey("RageTpShootKey", F.ragebot.tpShoot)
+
+    -- Auto-target damager wiring
+    F.damage.onDamaged(function(attacker)
+        if not Toggles.RageAutoTargetDamager or not Toggles.RageAutoTargetDamager.Value then return end
+        if F.ragebot.isTargeted(attacker) then return end
+        F.ragebot.addTarget(attacker)
+        Library:Notify("Auto-targeted " .. attacker.Name .. " (damaged you)", 3)
+    end)
 
     -- keep labels fresh on auto-switches and list changes
     task.spawn(function()
@@ -837,6 +889,47 @@ do
     Options.AutoReloadKey:OnChanged(function()
         F.autoReload.setKey(Options.AutoReloadKey.Value)
     end)
+
+    -- =================== AUTO EQUIP ===================
+    Auto:AddDivider()
+    Auto:AddLabel("Auto equip")
+
+    Auto:AddDropdown("AutoEquipTool", {
+        Values = { "(refresh)" }, Default = "(refresh)",
+        Text = "Tool",
+        Callback = function(v) F.autoEquip.setName(v) end,
+    })
+
+    local function refreshToolList()
+        local list = F.autoEquip.list()
+        if #list == 0 then list = { "(no tools)" } end
+        Options.AutoEquipTool:SetValues(list)
+        Options.AutoEquipTool:SetValue(list[1])
+    end
+
+    Auto:AddButton({ Text = "Refresh tool list", Func = refreshToolList })
+    :AddButton({ Text = "Equip now", Func = function()
+        local name = Options.AutoEquipTool.Value
+        if F.autoEquip.equip(name) then
+            Library:Notify("Equipped " .. name, 2)
+        else
+            Library:Notify("Couldn't equip " .. tostring(name), 2)
+        end
+    end })
+
+    Auto:AddToggle("AutoEquipOnRespawn", { Text = "Auto equip on respawn",
+        Default = false,
+        Callback = function(v)
+            if v then F.autoEquip.start() else F.autoEquip.stop() end
+        end })
+
+    -- auto-refresh tool list on backpack changes (optional, cheap)
+    if lplr:FindFirstChild("Backpack") then
+        lplr.Backpack.ChildAdded:Connect(function() task.defer(refreshToolList) end)
+        lplr.Backpack.ChildRemoved:Connect(function() task.defer(refreshToolList) end)
+    end
+    lplr.CharacterAdded:Connect(function() task.wait(0.5); pcall(refreshToolList) end)
+    task.defer(refreshToolList)
 
     -- =================== SERVER HOPPER ===================
     local Srv = Tabs.Misc:AddLeftGroupbox("Server hop")
