@@ -77,7 +77,7 @@ local RageSettings = {
     AutoShootCooldown=100, EquipDelay=0.5, FFCheck=true,
     SilentForce=false, SilentMethod="All",
     SpeedPanic=false, SpeedPanicVal=0,
-    TpBehind=false, TpBehindDist=3,
+    TpBehind=false, TpBehindDist=0,
     CamSnap=false, CamSmoothing=0.15,
     AutoSwitch=true, NotifyTarget=true,
     SwitchByMouse=false,
@@ -330,8 +330,11 @@ local function startClickTp()
         local cam=workspace.CurrentCamera; local ray=cam:ScreenPointToRay(inp.Position.X,inp.Position.Y)
         local result=workspace:Raycast(ray.Origin,ray.Direction*1000)
         if result then
-            local hrp=lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then hrp.CFrame=CFrame.new(result.Position+Vector3.new(0,3,0)) end
+            local lc=lplr.Character
+            local hrp=lc and lc:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                _uprightTp(lc, hrp, result.Position + Vector3.new(0, 3, 0), nil)
+            end
         end
     end)
 end
@@ -369,6 +372,32 @@ local function _forceStanding(newChar)
             pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
         end
     end)
+end
+
+-- generic upright-teleport helper used by every TP path so we never tip
+-- over into a ragdoll on landing.
+--   char     - lplr.Character (used for the standing fix)
+--   hrp      - HumanoidRootPart (BasePart)
+--   position - Vector3 destination
+--   faceDir  - Vector3 to face (only horizontal component is used).
+--              Pass nil to keep current horizontal facing.
+local function _uprightTp(char, hrp, position, faceDir)
+    local horiz
+    if faceDir then
+        horiz = Vector3.new(faceDir.X, 0, faceDir.Z)
+    end
+    if not horiz or horiz.Magnitude < 0.01 then
+        local lv = hrp.CFrame.LookVector
+        horiz = Vector3.new(lv.X, 0, lv.Z)
+        if horiz.Magnitude < 0.01 then horiz = Vector3.new(0, 0, -1) end
+    end
+    horiz = horiz.Unit
+    pcall(function()
+        hrp.CFrame = CFrame.new(position, position + horiz)
+        hrp.AssemblyLinearVelocity  = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end)
+    if char then _forceStanding(char) end
 end
 
 local function hookAutoReChar(char)
@@ -687,7 +716,7 @@ local function cmdBlink()
     local dir=cam.CFrame.LookVector*dist
     local result=workspace:Raycast(origin,dir,params)
     local target=result and (result.Position+Vector3.new(0,2.5,0)) or (hrp.Position+dir)
-    hrp.CFrame=CFrame.new(target,target+cam.CFrame.LookVector)
+    _uprightTp(char, hrp, target, cam.CFrame.LookVector)
 end
 
 -- ============================================================
@@ -716,8 +745,9 @@ local function gotoPlayer(plr)
     if typeof(plr)=="string" then plr=findPlayerByName(plr) end
     if not plr then return end
     local tHrp=plr.Character and plr.Character:FindFirstChild("HumanoidRootPart"); if not tHrp then return end
-    local hrp=lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
-    if hrp then hrp.CFrame=tHrp.CFrame+Vector3.new(3,0,0) end
+    local lc=lplr.Character
+    local hrp=lc and lc:FindFirstChild("HumanoidRootPart")
+    if hrp then _uprightTp(lc, hrp, tHrp.Position + Vector3.new(3, 0, 0), tHrp.CFrame.LookVector) end
 end
 
 local _viewPrevSubject, _viewPrevType, _viewConn = nil, nil, nil
@@ -1315,12 +1345,23 @@ local function rbUnlock()
 end
 local function rbTpBehind()
     local plr = RageSettings.TargetPlayer; if not plr then return end
-    local char = plr.Character; local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local char = plr.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-    local lchar = lplr.Character; local lhrp = lchar and lchar:FindFirstChild("HumanoidRootPart")
+    local lchar = lplr.Character
+    local lhrp = lchar and lchar:FindFirstChild("HumanoidRootPart")
     if not lhrp then return end
-    local behind = hrp.CFrame * CFrame.new(0, 0, RageSettings.TpBehindDist)
-    lhrp.CFrame = CFrame.new(behind.Position, hrp.Position)
+
+    -- direction the target is facing, projected horizontal
+    local lv = hrp.CFrame.LookVector
+    local horiz = Vector3.new(lv.X, 0, lv.Z)
+    if horiz.Magnitude < 0.01 then horiz = Vector3.new(0, 0, -1) end
+    horiz = horiz.Unit
+
+    -- TpBehindDist=0 (default) puts us inside the target's HRP, larger values
+    -- step back along their look direction
+    local position = hrp.Position - horiz * (RageSettings.TpBehindDist or 0)
+    _uprightTp(lchar, lhrp, position, horiz)
 end
 
 -- ragebot per-frame: face target / orbit / cam snap / speed panic
@@ -2233,8 +2274,13 @@ F.ragebot.tpShoot = function()
     if not lhrp then return end
 
     local saved = lhrp.CFrame
-    local behind = hrp.CFrame * CFrame.new(0, 0, RageSettings.TpBehindDist)
-    lhrp.CFrame = CFrame.new(behind.Position, hrp.Position)
+    -- TP into the target, upright, facing target's horizontal direction
+    local lv = hrp.CFrame.LookVector
+    local horiz = Vector3.new(lv.X, 0, lv.Z)
+    if horiz.Magnitude < 0.01 then horiz = Vector3.new(0, 0, -1) end
+    horiz = horiz.Unit
+    local position = hrp.Position - horiz * (RageSettings.TpBehindDist or 0)
+    _uprightTp(lc, lhrp, position, horiz)
 
     pcall(function()
         local vim = game:GetService("VirtualInputManager")
@@ -2243,8 +2289,159 @@ F.ragebot.tpShoot = function()
     end)
 
     task.wait(0.15)
-    if lhrp and lhrp.Parent then pcall(function() lhrp.CFrame = saved end) end
+    if lhrp and lhrp.Parent then
+        -- restore the original spot, also upright + standing
+        _uprightTp(lc, lhrp, saved.Position, saved.LookVector)
+    end
 end
+
+-- ============================================================
+--  RAGEBOT: TARGET HUD  (floating panel with avatar/name/hp/tool/dist)
+--  Built once, then toggled visible. Hides itself when nothing is
+--  locked. Mirrors the pattern from vampireware.lua.
+-- ============================================================
+local _rbHud, _rbHudConn, _rbHudFrame, _rbAvatar, _rbName, _rbHpFill, _rbHeld, _rbDist
+local _rbHudLastUid = nil
+
+local function _buildRbHud()
+    if _rbHud and _rbHud.Parent then return end
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "_cclosure_rb_hud"
+    sg.ResetOnSpawn = false
+    sg.IgnoreGuiInset = true
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    sg.DisplayOrder = 9997
+    pcall(function() sg.Parent = lplr:WaitForChild("PlayerGui") end)
+    if not sg.Parent then sg.Parent = game:GetService("CoreGui") end
+    _rbHud = sg
+
+    local frame = Instance.new("Frame")
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+    frame.BackgroundTransparency = 0.12
+    frame.BorderSizePixel = 0
+    frame.AnchorPoint = Vector2.new(0.5, 1)
+    frame.Position = UDim2.new(0.5, 0, 1, -90)
+    frame.Size = UDim2.new(0, 320, 0, 64)
+    frame.Visible = false
+    frame.Parent = sg
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = frame end
+    do local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(60, 60, 70); s.Thickness = 1
+       s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; s.Parent = frame end
+    _rbHudFrame = frame
+
+    local avatar = Instance.new("ImageLabel")
+    avatar.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+    avatar.BorderSizePixel = 0
+    avatar.Size = UDim2.new(0, 52, 0, 52)
+    avatar.AnchorPoint = Vector2.new(0, 0.5)
+    avatar.Position = UDim2.new(0, 6, 0.5, 0)
+    avatar.ScaleType = Enum.ScaleType.Crop
+    avatar.Image = ""
+    avatar.Parent = frame
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 4); c.Parent = avatar end
+    _rbAvatar = avatar
+
+    local text = Instance.new("Frame")
+    text.BackgroundTransparency = 1
+    text.BorderSizePixel = 0
+    text.AnchorPoint = Vector2.new(0, 0)
+    text.Position = UDim2.new(0, 64, 0, 4)
+    text.Size = UDim2.new(1, -70, 1, -8)
+    text.Parent = frame
+    do local l = Instance.new("UIListLayout"); l.SortOrder = Enum.SortOrder.LayoutOrder
+       l.Padding = UDim.new(0, 2); l.Parent = text end
+
+    local function lbl(order, h)
+        local l = Instance.new("TextLabel"); l.BackgroundTransparency = 1; l.BorderSizePixel = 0
+        l.Size = UDim2.new(1, 0, 0, h or 13); l.LayoutOrder = order
+        l.Font = Enum.Font.Gotham; l.Text = ""; l.TextColor3 = Color3.fromRGB(235, 235, 240)
+        l.TextScaled = true; l.TextXAlignment = Enum.TextXAlignment.Left; l.Parent = text
+        local c = Instance.new("UITextSizeConstraint"); c.MaxTextSize = 11; c.Parent = l
+        return l
+    end
+
+    _rbName = lbl(1, 13)
+    -- health bar (between name and held)
+    local hpBg = Instance.new("Frame"); hpBg.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    hpBg.BorderSizePixel = 0; hpBg.Size = UDim2.new(1, 0, 0, 6); hpBg.LayoutOrder = 2
+    hpBg.Parent = text
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 3); c.Parent = hpBg end
+    _rbHpFill = Instance.new("Frame")
+    _rbHpFill.BackgroundColor3 = Color3.fromRGB(75, 200, 95)
+    _rbHpFill.BorderSizePixel = 0; _rbHpFill.Size = UDim2.new(1, 0, 1, 0); _rbHpFill.Parent = hpBg
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 3); c.Parent = _rbHpFill end
+
+    _rbHeld = lbl(3, 11)
+    _rbDist = lbl(4, 11)
+end
+
+local function _rbHudUpdate()
+    if not _rbHudFrame then return end
+    local plr = RageSettings.TargetPlayer
+    local char = plr and plr.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not plr or not hrp or not hum or hum.Health <= 0 then
+        _rbHudFrame.Visible = false
+        return
+    end
+    _rbHudFrame.Visible = true
+
+    local dn = plr.DisplayName
+    local un = plr.Name
+    _rbName.Text = (dn ~= un and dn .. " (@" .. un .. ")" or "@" .. un) .. " / " .. tostring(plr.UserId)
+    _rbName.TextColor3 = Color3.fromRGB(140, 200, 255)
+
+    local pct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+    _rbHpFill.Size = UDim2.new(pct, 0, 1, 0)
+    _rbHpFill.BackgroundColor3 = Color3.fromRGB(
+        math.floor((1 - pct) * 220) + 35,
+        math.floor(pct * 180) + 55,
+        40)
+
+    local tool = char:FindFirstChildOfClass("Tool")
+    _rbHeld.Text = "Holding: " .. (tool and tool.Name or "none")
+    _rbHeld.TextColor3 = tool and Color3.fromRGB(255, 215, 60) or Color3.fromRGB(160, 160, 170)
+
+    local lc = lplr.Character
+    local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
+    if lhrp then
+        _rbDist.Text = ("Distance: %d studs"):format(math.floor((lhrp.Position - hrp.Position).Magnitude))
+    else _rbDist.Text = "" end
+    _rbDist.TextColor3 = Color3.fromRGB(160, 160, 170)
+
+    if plr.UserId ~= _rbHudLastUid then
+        _rbHudLastUid = plr.UserId
+        _rbAvatar.Image = ""
+        task.spawn(function()
+            local ok, img = pcall(function()
+                return plrs:GetUserThumbnailAsync(plr.UserId,
+                    Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+            end)
+            if ok and _rbAvatar then _rbAvatar.Image = img end
+        end)
+    end
+end
+
+local function startRbTargetGui()
+    G.rbTargetGuiActive = true
+    _buildRbHud()
+    if _rbHud then _rbHud.Enabled = true end
+    if _rbHudConn then _rbHudConn:Disconnect() end
+    _rbHudConn = RunService.RenderStepped:Connect(function()
+        if not G.rbTargetGuiActive then return end
+        _rbHudUpdate()
+    end)
+end
+
+local function stopRbTargetGui()
+    G.rbTargetGuiActive = false
+    if _rbHudConn then _rbHudConn:Disconnect(); _rbHudConn = nil end
+    if _rbHudFrame then _rbHudFrame.Visible = false end
+    if _rbHud then _rbHud.Enabled = false end
+end
+
+F.ragebot.targetGui = makeToggle(startRbTargetGui, stopRbTargetGui, "rbTargetGuiActive")
 
 -- ============================================================
 --  AUTO-EQUIP
