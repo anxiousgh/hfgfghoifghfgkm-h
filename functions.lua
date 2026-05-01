@@ -2705,7 +2705,8 @@ local function startHcAutoStomp()
         -- dies, TP user back to that CFrame. If they get up before dying,
         -- abort silently (no TP back) and look for another knocked target.
         if HC_STOMP_RAGE_TARGETS then
-            -- already chasing? check death/recovery
+            -- already chasing? check death first
+            local restored = false
             if _hcChaseTarget then
                 if _hcIsDead(_hcChaseTarget) then
                     if _hcChaseSavedCF then
@@ -2717,12 +2718,14 @@ local function startHcAutoStomp()
                     end
                     _hcChaseTarget  = nil
                     _hcChaseSavedCF = nil
-                    return
-                elseif not _hcIsKnocked(_hcChaseTarget) then
-                    -- got up before dying; abort, no TP back
-                    _hcChaseTarget  = nil
-                    _hcChaseSavedCF = nil
+                    restored = true
                 end
+            end
+            if restored then return end
+            -- check recovery (got up before dying)
+            if _hcChaseTarget and not _hcIsKnocked(_hcChaseTarget) then
+                _hcChaseTarget  = nil
+                _hcChaseSavedCF = nil
             end
 
             -- find a fresh knocked target if we don't have one
