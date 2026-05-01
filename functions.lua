@@ -2613,7 +2613,14 @@ local function _hcIsKnocked(plr)
 end
 
 local function _hcIsDead(plr)
-    return false
+    if not plr then return false end
+    local char = plr.Character
+    if not char then return false end
+    local fx = char:FindFirstChild("BodyEffects")
+    if not fx then return false end
+    local d = fx:FindFirstChild("Dead")
+    if not d then return false end
+    return d.Value == true
 end
 
 local _hcStompConn   = nil
