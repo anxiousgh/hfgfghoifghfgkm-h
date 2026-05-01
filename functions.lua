@@ -2037,10 +2037,97 @@ end
 
 F.antiVcBan = { fire = antiVcBanFire }
 
+-- ============================================================
+--  AUTO RELOAD
+--  Watches the equipped tool (and the character) for any ammo-like
+--  attribute or IntValue/NumberValue. When it drops to <= threshold,
+--  presses the configured reload key once. Cooldown-gated so it
+--  doesn't spam during the actual reload animation.
+-- ============================================================
+local AutoReloadKey       = Enum.KeyCode.R
+local AutoReloadThreshold = 0
+local AutoReloadCooldown  = 1.5
+local _arLastFire         = 0
+local _arConn             = nil
+local AR_KEYWORDS = { "ammo", "bullet", "magazine", "mag", "round", "clip", "shell" }
+
+local function _arNameMatches(name)
+    if not name then return false end
+    local lo = string.lower(name)
+    for _, k in ipairs(AR_KEYWORDS) do
+        if string.find(lo, k, 1, true) then return true end
+    end
+    return false
+end
+
+local function _arScan(inst)
+    if not inst then return nil end
+    -- attributes
+    for k, v in pairs(inst:GetAttributes()) do
+        if type(v) == "number" and _arNameMatches(k) then
+            return function() return inst:GetAttribute(k) end
+        end
+    end
+    -- IntValue / NumberValue children
+    for _, child in ipairs(inst:GetChildren()) do
+        if (child:IsA("IntValue") or child:IsA("NumberValue")) and _arNameMatches(child.Name) then
+            return function() return child.Value end
+        end
+    end
+    return nil
+end
+
+local function _arFireKey()
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        vim:SendKeyEvent(true,  AutoReloadKey, false, game)
+        task.wait(0.05)
+        vim:SendKeyEvent(false, AutoReloadKey, false, game)
+    end)
+end
+
+local function startAutoReload()
+    G.autoReloadActive = true
+    if _arConn then _arConn:Disconnect() end
+    _arConn = RunService.Heartbeat:Connect(function()
+        if not G.autoReloadActive then return end
+        if tick() - _arLastFire < AutoReloadCooldown then return end
+
+        local char = lplr.Character; if not char then return end
+        local tool = char:FindFirstChildOfClass("Tool")
+
+        -- prefer scanning the equipped tool, fall back to the character itself
+        local getter = (tool and _arScan(tool)) or _arScan(char)
+        if not getter then return end
+
+        local n = getter()
+        if type(n) == "number" and n <= AutoReloadThreshold then
+            _arLastFire = tick()
+            _arFireKey()
+        end
+    end)
+end
+
+local function stopAutoReload()
+    G.autoReloadActive = false
+    if _arConn then _arConn:Disconnect(); _arConn = nil end
+end
+
+F.autoReload = makeToggle(startAutoReload, stopAutoReload, "autoReloadActive")
+F.autoReload.setKey = function(k)
+    if typeof(k) == "EnumItem" then AutoReloadKey = k
+    elseif type(k) == "string" then AutoReloadKey = Enum.KeyCode[k] or AutoReloadKey end
+end
+F.autoReload.getKey       = function() return AutoReloadKey end
+F.autoReload.setThreshold = function(n) AutoReloadThreshold = tonumber(n) or 0 end
+F.autoReload.getThreshold = function() return AutoReloadThreshold end
+F.autoReload.setCooldown  = function(n) AutoReloadCooldown  = math.clamp(tonumber(n) or 1.5, 0.1, 10) end
+F.autoReload.getCooldown  = function() return AutoReloadCooldown end
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
-    stopClickTp(); stopAutoRe(); stopNoclip(); stopFullbright(); stopFreecam()
+    stopClickTp(); stopAutoRe(); stopAutoReload(); stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
     TrigSettings.Enabled=false
