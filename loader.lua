@@ -254,6 +254,14 @@ do
         Default = false,
     })
 
+    Tgt:AddToggle("RageTargetGui", {
+        Text = "Show target HUD",
+        Tooltip = "Floating panel at the bottom of the screen with the locked target's avatar, name, health bar, held tool, and distance.",
+        Default = false,
+        Callback = function(v)
+            if v then F.ragebot.targetGui.start() else F.ragebot.targetGui.stop() end
+        end })
+
     Tgt:AddDivider()
 
     Tgt:AddToggle("RageSilentForce", { Text = "Silent force",
