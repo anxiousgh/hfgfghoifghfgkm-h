@@ -2848,11 +2848,21 @@ local function _hcAfkHook(char)
     local hrp = char:WaitForChild("HumanoidRootPart", 5); if not hrp then return end
     local gui = hrp:WaitForChild("CharacterAFK", 5); if not gui then return end
     if _hcAfkPropConn then _hcAfkPropConn:Disconnect() end
-    -- if it's already flagged when we hook in, clear immediately
-    if gui.Enabled then _hcAfkClearOnce() end
+
+    -- Hide locally immediately so the tag never visually appears, even for one
+    -- frame. The property-changed signal fires synchronously on assignment, so
+    -- when the game tries to set Enabled=true we override it to false in the
+    -- same call stack — the engine never gets a chance to render it.
+    if gui.Enabled then
+        pcall(function() gui.Enabled = false end)
+        _hcAfkClearOnce()
+    end
     _hcAfkPropConn = gui:GetPropertyChangedSignal("Enabled"):Connect(function()
         if not G.hcAntiAfkTagActive then return end
-        if gui.Enabled then _hcAfkClearOnce() end
+        if gui.Enabled then
+            pcall(function() gui.Enabled = false end)
+            _hcAfkClearOnce()
+        end
     end)
 end
 
