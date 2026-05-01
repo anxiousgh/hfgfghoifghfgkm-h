@@ -810,6 +810,33 @@ do
         Default = "T", Mode = "Hold", Text = "Respawn",
     })
     bindFireKey("RespawnKey", F.respawn.fire)
+
+    -- =================== AUTO RELOAD ===================
+    local Auto = Tabs.Misc:AddRightGroupbox("Auto")
+
+    Auto:AddToggle("AutoReload", { Text = "Auto reload",
+        Tooltip = "Watches the equipped tool / character for any ammo-like attribute or IntValue/NumberValue. When it hits the threshold, sends the reload key.",
+        Default = false,
+        Callback = function(v) if v then F.autoReload.start() else F.autoReload.stop() end end,
+    })
+
+    Auto:AddSlider("AutoReloadThreshold", { Text = "Reload at",
+        Default = F.autoReload.getThreshold(), Min = 0, Max = 10, Rounding = 0,
+        Callback = F.autoReload.setThreshold })
+
+    Auto:AddSlider("AutoReloadCooldown", { Text = "Cooldown",
+        Default = F.autoReload.getCooldown(), Min = 0.1, Max = 10, Rounding = 1,
+        Suffix = " s", Callback = F.autoReload.setCooldown })
+
+    -- key the reload presses; uses a NoUI keybind so it doesn't appear in the
+    -- floating keybinds panel (it's not a hotkey you press, it's the key the
+    -- script *fires*)
+    Auto:AddLabel("Reload key"):AddKeyPicker("AutoReloadKey", {
+        Default = "R", NoUI = true, Text = "Reload key",
+    })
+    Options.AutoReloadKey:OnChanged(function()
+        F.autoReload.setKey(Options.AutoReloadKey.Value)
+    end)
 end
 
 -- ============================================================
