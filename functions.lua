@@ -339,7 +339,16 @@ local function startClickTp()
             local lc=lplr.Character
             local hrp=lc and lc:FindFirstChild("HumanoidRootPart")
             if hrp then
-                _uprightTp(lc, hrp, result.Position + Vector3.new(0, 3, 0), nil)
+                local pos = result.Position + Vector3.new(0, 3, 0)
+                local lv  = hrp.CFrame.LookVector
+                local horiz = Vector3.new(lv.X, 0, lv.Z)
+                if horiz.Magnitude < 0.01 then horiz = Vector3.new(0, 0, -1) end
+                horiz = horiz.Unit
+                pcall(function()
+                    hrp.CFrame = CFrame.new(pos, pos + horiz)
+                    hrp.AssemblyLinearVelocity  = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                end)
             end
         end
     end)
