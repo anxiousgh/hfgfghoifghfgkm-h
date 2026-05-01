@@ -1019,7 +1019,22 @@ end
 --  GAMES TAB  (per-game features)
 -- ============================================================
 do
+    local HC_PLACE_IDS = { 138995385694035, 9825515356 }
+    local function inHoodCustoms()
+        for _, id in ipairs(HC_PLACE_IDS) do
+            if game.PlaceId == id then return true end
+        end
+        return false
+    end
+
     local HC = Tabs.Games:AddLeftGroupbox("Hood Customs")
+
+    if not inHoodCustoms() then
+        HC:AddLabel(
+            ("Hood Customs only.\nCurrent place: %d\nValid: %d, %d"):format(
+                game.PlaceId, HC_PLACE_IDS[1], HC_PLACE_IDS[2]),
+            true)
+    else
 
     HC:AddToggle("HCAutoStomp", { Text = "Auto stomp",
         Tooltip = "Spams ReplicatedStorage.MainEvent:FireServer(\"Stomp\") on Heartbeat, but only when another player is right under your feet — keeps the server quiet otherwise.",
@@ -1077,6 +1092,8 @@ do
     Options.HCAutoReloadKey:OnChanged(function()
         F.games.hoodCustoms.autoReload.setKey(Options.HCAutoReloadKey.Value)
     end)
+
+    end -- close: if not inHoodCustoms() then ... else ...
 end
 
 -- ============================================================
