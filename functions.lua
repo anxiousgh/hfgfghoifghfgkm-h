@@ -2139,6 +2139,201 @@ local function _serversFetch(placeId, cursor)
     return data
 end
 
+-- ============================================================
+--  DAMAGE DETECTION  ("creator" tag pattern)
+--  Watches the local Humanoid for transient ObjectValue children that
+--  most Roblox combat scripts parent on hit (creator / DamageSource /
+--  Attacker / Killer). Fires registered callbacks with the attacker.
+-- ============================================================
+local _damageCallbacks = {}
+
+local function _isDamageTag(name)
+    if not name then return false end
+    local n = string.lower(name)
+    return n == "creator" or n == "damagesource" or n == "attacker" or n == "killer"
+end
+
+local function _watchDamage(char)
+    if not char then return end
+    local hum = char:WaitForChild("Humanoid", 5); if not hum then return end
+    local conn = hum.ChildAdded:Connect(function(c)
+        if not c:IsA("ObjectValue") then return end
+        if not _isDamageTag(c.Name) then return end
+        local v = c.Value
+        if typeof(v) ~= "Instance" then return end
+        local attacker
+        if v:IsA("Player") then attacker = v
+        elseif v:IsA("Model") then attacker = plrs:GetPlayerFromCharacter(v)
+        end
+        if attacker and attacker ~= lplr then
+            for _, cb in ipairs(_damageCallbacks) do pcall(cb, attacker) end
+        end
+    end)
+    char.AncestryChanged:Connect(function()
+        if not char.Parent then pcall(function() conn:Disconnect() end) end
+    end)
+end
+
+if lplr.Character then task.spawn(_watchDamage, lplr.Character) end
+lplr.CharacterAdded:Connect(_watchDamage)
+
+F.damage = {
+    onDamaged = function(fn) table.insert(_damageCallbacks, fn) end,
+}
+
+-- ============================================================
+--  RAGEBOT: TP-SHOOT
+--  Saves your CFrame, teleports behind the current locked target,
+--  fires one click, then restores the saved CFrame. Distance and
+--  return delay are reused from the existing tpBehind config.
+-- ============================================================
+F.ragebot.tpShoot = function()
+    local target = RageSettings.TargetPlayer
+    if not target then return end
+    local char = target.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local lc   = lplr.Character
+    local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
+    if not lhrp then return end
+
+    local saved = lhrp.CFrame
+    local behind = hrp.CFrame * CFrame.new(0, 0, RageSettings.TpBehindDist)
+    lhrp.CFrame = CFrame.new(behind.Position, hrp.Position)
+
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        vim:SendMouseButtonEvent(0, 0, 0, true,  game, 0)
+        vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    end)
+
+    task.wait(0.15)
+    if lhrp and lhrp.Parent then pcall(function() lhrp.CFrame = saved end) end
+end
+
+-- ============================================================
+--  AUTO-EQUIP
+--  Picks a tool by name and equips it. Optionally auto-equips it
+--  on respawn so you never spawn empty-handed.
+-- ============================================================
+local AutoEquipName  = nil
+local _aeCharConn    = nil
+
+local function _aeListTools()
+    local out, seen = {}, {}
+    local function consider(t)
+        if t:IsA("Tool") and not seen[t.Name] then seen[t.Name] = true; table.insert(out, t.Name) end
+    end
+    if lplr:FindFirstChild("Backpack") then
+        for _, t in ipairs(lplr.Backpack:GetChildren()) do consider(t) end
+    end
+    if lplr.Character then
+        for _, t in ipairs(lplr.Character:GetChildren()) do consider(t) end
+    end
+    table.sort(out)
+    return out
+end
+
+local function _aeEquip(name)
+    if not name or name == "" then return false end
+    local char = lplr.Character; if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid"); if not hum then return false end
+    local tool = (lplr:FindFirstChild("Backpack") and lplr.Backpack:FindFirstChild(name))
+              or char:FindFirstChild(name)
+    if not tool or not tool:IsA("Tool") then return false end
+    pcall(function() hum:EquipTool(tool) end)
+    return true
+end
+
+local function startAutoEquip()
+    G.autoEquipActive = true
+    if _aeCharConn then _aeCharConn:Disconnect() end
+    _aeCharConn = lplr.CharacterAdded:Connect(function()
+        if not G.autoEquipActive then return end
+        task.wait(0.5)  -- let backpack repopulate
+        _aeEquip(AutoEquipName)
+    end)
+end
+local function stopAutoEquip()
+    G.autoEquipActive = false
+    if _aeCharConn then _aeCharConn:Disconnect(); _aeCharConn = nil end
+end
+
+F.autoEquip = makeToggle(startAutoEquip, stopAutoEquip, "autoEquipActive")
+F.autoEquip.list   = _aeListTools
+F.autoEquip.equip  = function(name) AutoEquipName = name; return _aeEquip(name) end
+F.autoEquip.setName = function(name) AutoEquipName = name end
+F.autoEquip.getName = function() return AutoEquipName end
+
+-- ============================================================
+--  HITBOX EXTENDER
+--  Locally inflates the size of a chosen part on every other player.
+--  Raycasts (and Mouse.Hit) honor the new size client-side, so silent
+--  aim / triggerbot land far more reliably. Cosmetic locally — server
+--  still has the original size, this can't hurt other players directly.
+-- ============================================================
+local _hbOriginal     = setmetatable({}, { __mode = "k" })  -- weak keys
+local _hbConn         = nil
+local HitboxSize      = 8
+local HitboxTargetPart = "HumanoidRootPart"
+local HitboxTransparency = 0.6  -- visual hint that the box is huge; 1=invisible
+
+local function _hbApply()
+    for _, plr in ipairs(plrs:GetPlayers()) do
+        if plr == lplr then continue end
+        local char = plr.Character; if not char then continue end
+        local part = char:FindFirstChild(HitboxTargetPart); if not part then continue end
+        if not part:IsA("BasePart") then continue end
+        if not _hbOriginal[part] then
+            _hbOriginal[part] = {
+                Size = part.Size, Transparency = part.Transparency,
+                CanCollide = part.CanCollide, Massless = part.Massless,
+            }
+        end
+        local s = HitboxSize
+        if part.Size ~= Vector3.new(s, s, s) then
+            pcall(function()
+                part.Size         = Vector3.new(s, s, s)
+                part.Transparency = HitboxTransparency
+                part.CanCollide   = false
+                part.Massless     = true
+            end)
+        end
+    end
+end
+
+local function _hbRestore()
+    for part, info in pairs(_hbOriginal) do
+        if part.Parent then
+            pcall(function()
+                part.Size         = info.Size
+                part.Transparency = info.Transparency
+                part.CanCollide   = info.CanCollide
+                part.Massless     = info.Massless
+            end)
+        end
+    end
+    _hbOriginal = setmetatable({}, { __mode = "k" })
+end
+
+local function startHitboxExtender()
+    G.hitboxActive = true
+    _hbConn = RunService.Heartbeat:Connect(_hbApply)
+end
+local function stopHitboxExtender()
+    G.hitboxActive = false
+    if _hbConn then _hbConn:Disconnect(); _hbConn = nil end
+    _hbRestore()
+end
+
+F.hitboxExtender = makeToggle(startHitboxExtender, stopHitboxExtender, "hitboxActive")
+F.hitboxExtender.setSize         = function(n) HitboxSize = math.clamp(tonumber(n) or 8, 1, 50) end
+F.hitboxExtender.getSize         = function() return HitboxSize end
+F.hitboxExtender.setTargetPart   = function(s) HitboxTargetPart = tostring(s) end
+F.hitboxExtender.getTargetPart   = function() return HitboxTargetPart end
+F.hitboxExtender.setTransparency = function(n) HitboxTransparency = math.clamp(tonumber(n) or 0.6, 0, 1) end
+
 F.servers = {
     list = function(maxPages)
         maxPages = maxPages or 2
@@ -2189,7 +2384,8 @@ F.servers = {
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
-    stopClickTp(); stopAutoRe(); stopAutoReload(); stopNoclip(); stopFullbright(); stopFreecam()
+    stopClickTp(); stopAutoRe(); stopAutoReload(); stopAutoEquip(); stopHitboxExtender()
+    stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
     TrigSettings.Enabled=false
