@@ -2848,13 +2848,50 @@ end)()
 F.games.hoodCustoms.godmode = (function()
     local conn
     local legs = {"LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot","Left Leg","Right Leg"}
+    local saved = setmetatable({}, { __mode = "k" })  -- weak: part -> {col, mls}
+
+    local function configureLegs(char)
+        if not char then return end
+        for i = 1, #legs do
+            local limb = char:FindFirstChild(legs[i])
+            if limb and limb:IsA("BasePart") and not saved[limb] then
+                saved[limb] = { col = limb.CanCollide, mls = limb.Massless }
+                pcall(function()
+                    limb.CanCollide = false
+                    limb.Massless   = true
+                end)
+            end
+        end
+    end
+
+    local function restoreLegs()
+        for limb, info in pairs(saved) do
+            if limb.Parent then
+                pcall(function()
+                    limb.CanCollide = info.col
+                    limb.Massless   = info.mls
+                end)
+            end
+        end
+        saved = setmetatable({}, { __mode = "k" })
+    end
 
     return makeToggle(
         function()
             G.hcGmActive = true
             if conn then conn:Disconnect() end
-            conn = RunService.Heartbeat:Connect(function()
+            configureLegs(lplr.Character)
+            -- re-configure on respawn so the legs stay massless / non-colliding
+            local charAdded = lplr.CharacterAdded:Connect(function(c)
                 if not G.hcGmActive then return end
+                task.wait(0.3)
+                if G.hcGmActive then configureLegs(c) end
+            end)
+            conn = RunService.Heartbeat:Connect(function()
+                if not G.hcGmActive then
+                    if charAdded then charAdded:Disconnect(); charAdded = nil end
+                    return
+                end
                 local char = lplr.Character
                 if not char then return end
                 local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -2871,6 +2908,7 @@ F.games.hoodCustoms.godmode = (function()
         function()
             G.hcGmActive = false
             if conn then conn:Disconnect(); conn = nil end
+            restoreLegs()
         end,
         "hcGmActive"
     )
