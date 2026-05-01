@@ -1008,10 +1008,32 @@ do
 end
 
 -- ============================================================
---  GAMES TAB  (per-game features — empty for now)
+--  GAMES TAB  (per-game features)
 -- ============================================================
 do
-    Tabs.Games:AddLeftGroupbox("Games"):AddLabel("No game-specific features yet.", true)
+    local HC = Tabs.Games:AddLeftGroupbox("Hood Customs")
+
+    HC:AddToggle("HCAutoStomp", { Text = "Auto stomp",
+        Tooltip = "Spams ReplicatedStorage.MainEvent:FireServer(\"Stomp\") on Heartbeat, but only when another player is right under your feet — keeps the server quiet otherwise.",
+        Default = false,
+        Callback = function(v)
+            if v then F.games.hoodCustoms.autoStomp.start()
+            else      F.games.hoodCustoms.autoStomp.stop() end
+        end,
+    })
+
+    HC:AddSlider("HCAutoStompRadius", { Text = "Stomp radius",
+        Default = F.games.hoodCustoms.autoStomp.getRadius(),
+        Min = 1, Max = 20, Rounding = 1,
+        Suffix = " studs",
+        Callback = F.games.hoodCustoms.autoStomp.setRadius })
+
+    HC:AddSlider("HCAutoStompInterval", { Text = "Min interval",
+        Tooltip = "Seconds between fires. 0 = every Heartbeat (~60/s).",
+        Default = F.games.hoodCustoms.autoStomp.getInterval(),
+        Min = 0, Max = 1, Rounding = 2,
+        Suffix = " s",
+        Callback = F.games.hoodCustoms.autoStomp.setInterval })
 end
 
 -- ============================================================
