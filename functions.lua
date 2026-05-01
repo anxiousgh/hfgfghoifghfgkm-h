@@ -1179,7 +1179,9 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- find best player inside FOV using the configured target part
+    -- find best player inside FOV using the configured target part.
+    -- If TargetPart is "All", we iterate every BasePart on the character
+    -- and pick the one closest to mouse.
     local hitPlr, hitPart, bestD = nil, nil, math.huge
     for _, plr in ipairs(_cachedPlayers or plrs:GetPlayers()) do
         if plr == lplr then continue end
@@ -1188,13 +1190,30 @@ RunService.Heartbeat:Connect(function()
         local hum = char:FindFirstChildOfClass("Humanoid")
         if not hum or hum.Health <= 0 then continue end
         if TrigSettings.VisibleCheck and not trigIsVisible(plr) then continue end
-        local part = tbResolvePart(char, TrigSettings.TargetPart)
-        if not part then continue end
-        local sp, onScreen = cam:WorldToViewportPoint(part.Position)
-        if not onScreen then continue end
-        local d = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
-        if d <= TrigSettings.FOVRadius and d < bestD then
-            hitPlr, hitPart, bestD = plr, part, d
+
+        if TrigSettings.TargetPart == "All" then
+            for _, part in ipairs(char:GetChildren()) do
+                if part:IsA("BasePart") then
+                    local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+                    if onScreen then
+                        local d = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
+                        if d <= TrigSettings.FOVRadius and d < bestD then
+                            hitPlr, hitPart, bestD = plr, part, d
+                        end
+                    end
+                end
+            end
+        else
+            local part = tbResolvePart(char, TrigSettings.TargetPart)
+            if part then
+                local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+                if onScreen then
+                    local d = (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
+                    if d <= TrigSettings.FOVRadius and d < bestD then
+                        hitPlr, hitPart, bestD = plr, part, d
+                    end
+                end
+            end
         end
     end
     _trigCurrentPart = hitPart
@@ -2459,7 +2478,11 @@ local function startAutoEquip()
     if _aeCharConn then _aeCharConn:Disconnect() end
     _aeCharConn = lplr.CharacterAdded:Connect(function()
         if not G.autoEquipActive then return end
-        task.wait(0.5)  -- let backpack repopulate
+        if not AutoEquipName or AutoEquipName == "" then return end
+        -- wait for the Backpack and the named tool to actually appear
+        local bp = lplr:WaitForChild("Backpack", 10); if not bp then return end
+        bp:WaitForChild(AutoEquipName, 10)
+        if not G.autoEquipActive then return end
         _aeEquip(AutoEquipName)
     end)
 end
@@ -2614,13 +2637,27 @@ end
 
 local function _hcIsDead(plr)
     if not plr then return false end
+    -- check the live character first (some games mirror Dead there)
     local char = plr.Character
-    if not char then return false end
-    local fx = char:FindFirstChild("BodyEffects")
-    if not fx then return false end
-    local d = fx:FindFirstChild("Dead")
-    if not d then return false end
-    return d.Value == true
+    if char then
+        local fx = char:FindFirstChild("BodyEffects")
+        if fx then
+            local d = fx:FindFirstChild("Dead")
+            if d and d.Value == true then return true end
+        end
+    end
+    -- fall back to workspace.Players.Characters.<name>.BodyEffects.Dead
+    local wsp = workspace:FindFirstChild("Players")
+    local chars = wsp and wsp:FindFirstChild("Characters")
+    local mdl = chars and chars:FindFirstChild(plr.Name)
+    if mdl then
+        local fx = mdl:FindFirstChild("BodyEffects")
+        if fx then
+            local d = fx:FindFirstChild("Dead")
+            if d and d.Value == true then return true end
+        end
+    end
+    return false
 end
 
 local _hcStompConn   = nil
