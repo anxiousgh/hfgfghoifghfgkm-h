@@ -1121,7 +1121,7 @@ do
     -- ---- Anti-AFK tag ----
     HC:AddLabel("Anti-AFK")
     HC:AddToggle("HCAntiAfkTag", { Text = "Anti-AFK tag",
-        Default = false,
+        Default = true,
         Callback = function(v)
             if v then F.games.hoodCustoms.antiAfkTag.start()
             else      F.games.hoodCustoms.antiAfkTag.stop() end
