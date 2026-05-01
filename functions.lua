@@ -2540,14 +2540,37 @@ F.servers = {
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 -- HC-specific knocked check via workspace.Players.Characters.<name>.BodyEffects["K.O"].Value
+-- Belt-and-suspenders: if the K.O flag says knocked but the Humanoid is in a
+-- normal moving state, the player is clearly walking around and not actually
+-- knocked. We require BOTH (K.O = true) AND (Humanoid not running) to count.
+local _HC_RUNNING_STATES = {
+    [Enum.HumanoidStateType.Running]            = true,
+    [Enum.HumanoidStateType.RunningNoPhysics]   = true,
+    [Enum.HumanoidStateType.Jumping]            = true,
+    [Enum.HumanoidStateType.Landed]             = true,
+    [Enum.HumanoidStateType.Freefall]           = true,
+    [Enum.HumanoidStateType.Climbing]           = true,
+    [Enum.HumanoidStateType.Swimming]           = true,
+    [Enum.HumanoidStateType.GettingUp]          = true,
+}
+
 local function _hcIsKnocked(plr)
     if not plr then return false end
+    local pchar = plr.Character; if not pchar then return false end
+    local hum = pchar:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+
+    -- if they're actively moving, they're not knocked regardless of K.O
+    local ok, state = pcall(function() return hum:GetState() end)
+    if ok and _HC_RUNNING_STATES[state] then return false end
+
+    -- and the K.O flag has to actually be set
     local wsPlayers = workspace:FindFirstChild("Players")
     local chars = wsPlayers and wsPlayers:FindFirstChild("Characters")
     if not chars then return false end
-    local char = chars:FindFirstChild(plr.Name)
-    if not char then return false end
-    local fx = char:FindFirstChild("BodyEffects")
+    local mdl = chars:FindFirstChild(plr.Name)
+    if not mdl then return false end
+    local fx = mdl:FindFirstChild("BodyEffects")
     if not fx then return false end
     local ko = fx:FindFirstChild("K.O")
     return ko ~= nil and ko.Value == true
