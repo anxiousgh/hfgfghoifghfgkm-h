@@ -1109,7 +1109,7 @@ do
 
     -- ---- Godmode ----
     HC:AddLabel("Godmode")
-    HC:AddToggle("HCGodmode", { Text = "Godmode (legs)",
+    HC:AddToggle("HCGodmode", { Text = "Godmode (limbs)",
         Default = false,
         Callback = function(v)
             if v then F.games.hoodCustoms.godmode.start()
