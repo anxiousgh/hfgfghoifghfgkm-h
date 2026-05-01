@@ -2057,16 +2057,10 @@ local function hcFindRig(c)
 end
 
 local function hcReattach()
-    if G._hcSavedJoints then
-        for m, info in pairs(G._hcSavedJoints) do
-            if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
-        end
-    end
-    if G._hcCurLegParts then
-        for _, p in ipairs(G._hcCurLegParts) do
-            if p.Parent then pcall(function() p.LocalTransparencyModifier = 0 end) end
-        end
-    end
+    -- nothing to restore: we don't detach motors anymore, the desync
+    -- technique just stops writing CFrame and the animator takes over again.
+    G._hcSavedJoints = nil
+    G._hcCurLegParts = nil
 end
 
 local function hcStop()
@@ -2084,10 +2078,10 @@ local function hcApply(c)
     if G._hcGmRs then G._hcGmRs:Disconnect(); G._hcGmRs = nil end
     G._hcGmCurChar = c
 
-    local rig, motorNames, partNames
+    local rig, _, partNames
     local t0 = os.clock()
     repeat
-        rig, motorNames, partNames = hcFindRig(c)
+        rig, _, partNames = hcFindRig(c)
         if rig then break end
         task.wait(0.1)
     until os.clock() - t0 > 5 or not G._hcGmActive or c.Parent == nil
@@ -2100,25 +2094,36 @@ local function hcApply(c)
     end
     if #legParts == 0 then return end
 
-    local saved = {}
-    for _, n in ipairs(motorNames) do
-        local m = rig:FindFirstChild(n) or rig:WaitForChild(n, 2)
-        if m then saved[m] = { part0 = m.Part0, part1 = m.Part1 } end
-    end
-    for m, _ in pairs(saved) do pcall(function() m.Part0 = nil end) end
-    G._hcSavedJoints = saved; G._hcCurLegParts = legParts
+    G._hcCurLegParts = legParts
+
+    -- Desync technique (same pattern as `flip`): on Heartbeat we capture the
+    -- animator-driven CFrame and overwrite with HC_VOID, so the network tick
+    -- replicates HC_VOID to the server / other clients. On the next
+    -- RenderStepped, before the engine renders, we restore the saved CFrame
+    -- so your own view keeps seeing the legs in their normal animated pose.
+    -- Motors stay attached the whole time so the local animator keeps driving
+    -- the legs into position each frame; we just hijack what gets sent out.
+    local _real = {}
+    local _spoofing = false
 
     G._hcGmHb = RunService.Heartbeat:Connect(function()
         for _, p in ipairs(legParts) do
-            if p.Parent then pcall(function() p.CFrame = HC_VOID end) end
+            if p.Parent then
+                _real[p] = p.CFrame
+                pcall(function() p.CFrame = HC_VOID end)
+            end
         end
+        _spoofing = true
     end)
-    -- engine resets LocalTransparencyModifier each frame for character parts;
-    -- reapply every render so the local view stays clean (server still has the
-    -- legs at sky, only your view hides them so you don't see floating legs)
+
     G._hcGmRs = RunService.RenderStepped:Connect(function()
-        for _, p in ipairs(legParts) do
-            if p.Parent then p.LocalTransparencyModifier = 1 end
+        if _spoofing then
+            for _, p in ipairs(legParts) do
+                if p.Parent and _real[p] then
+                    pcall(function() p.CFrame = _real[p] end)
+                end
+            end
+            _spoofing = false
         end
     end)
 end
