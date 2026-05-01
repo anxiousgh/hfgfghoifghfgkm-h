@@ -339,6 +339,38 @@ end
 -- ============================================================
 --  AUTO-RESPAWN / RESPAWN
 -- ============================================================
+-- strip a CFrame down to position + horizontal yaw so the player always
+-- spawns upright (otherwise restoring a ragdolled CFrame leaves them lying
+-- down for several seconds while the engine reconciles the state)
+local function _uprightCF(cf)
+    if not cf then return nil end
+    local lv = cf.LookVector
+    local horiz = Vector3.new(lv.X, 0, lv.Z)
+    if horiz.Magnitude < 0.01 then horiz = Vector3.new(0, 0, -1) end
+    horiz = horiz.Unit
+    return CFrame.new(cf.Position, cf.Position + horiz)
+end
+
+-- force the new humanoid out of any ragdoll / sit / platform-stand state
+-- the moment it spawns, so we don't lay on the floor briefly
+local function _forceStanding(newChar)
+    if not newChar then return end
+    local hum = newChar:WaitForChild("Humanoid", 3)
+    if not hum then return end
+    pcall(function() hum.PlatformStand = false end)
+    pcall(function() hum.Sit            = false end)
+    pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+    -- second nudge after a frame in case the game's own scripts re-set the state
+    task.delay(0.1, function()
+        if not hum.Parent then return end
+        pcall(function() hum.PlatformStand = false end)
+        pcall(function() hum.Sit            = false end)
+        if hum:GetState() ~= Enum.HumanoidStateType.Running then
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end
+    end)
+end
+
 local function hookAutoReChar(char)
     local hrp=char:WaitForChild("HumanoidRootPart",5); local hum=char:WaitForChild("Humanoid",5)
     if not hrp or not hum then return end
@@ -351,7 +383,8 @@ local function hookAutoReChar(char)
         lplr.CharacterAdded:Once(function(newChar)
             if not G.autoReActive then return end
             local newHrp=newChar:WaitForChild("HumanoidRootPart",5)
-            if newHrp then task.wait(0.15); newHrp.CFrame=cf end
+            if newHrp then task.wait(0.15); newHrp.CFrame = _uprightCF(cf) end
+            _forceStanding(newChar)
         end)
     end)
     char.AncestryChanged:Connect(function()
@@ -374,8 +407,9 @@ local function cmdRe()
     lplr.CharacterAdded:Once(function(newChar)
         if G.savedCFrame then
             local newHrp=newChar:WaitForChild("HumanoidRootPart",5)
-            if newHrp then task.wait(0.1); newHrp.CFrame=G.savedCFrame; G.savedCFrame=nil end
+            if newHrp then task.wait(0.1); newHrp.CFrame = _uprightCF(G.savedCFrame); G.savedCFrame=nil end
         end
+        _forceStanding(newChar)
     end)
     local hum=char:FindFirstChildOfClass("Humanoid")
     task.spawn(function()
