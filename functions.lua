@@ -2825,37 +2825,28 @@ F.games.hoodCustoms.godmode = (function()
     -- the damage never lands. Locally we render fine because RenderStepped
     -- always restores before the camera draws.
     local hbConn, rsConn, charConn
-    local saved   = { cf = nil, vel = nil }
+    local saved    = { cf = nil }
     local spoofing = false
-    local angle    = 0
+    -- offset just needs to exceed the anti-cheat's per-tick movement budget
+    -- to flag every shot at our visible position as backtrack. Y-up is
+    -- simplest — no rotation/velocity changes that might leak into the
+    -- camera's smoothing or local physics during the spoof→restore gap.
+    local SPOOF_OFFSET = Vector3.new(0, 10000, 0)
 
     local function spoof()
         if not G.hcGmActive then return end
         local c = lplr.Character; if not c then return end
         local h = c:FindFirstChild("HumanoidRootPart"); if not h then return end
-        saved.cf  = h.CFrame
-        saved.vel = h.AssemblyLinearVelocity
-        spoofing  = true
-        angle     = (angle + 45) % 360
-        -- rotate on all axes each frame so velocity hits from every direction;
-        -- combined with the huge AssemblyLinearVelocity this exceeds the
-        -- anti-cheat's per-tick movement budget on every snapshot.
-        pcall(function()
-            h.CFrame = h.CFrame * CFrame.Angles(
-                math.rad(angle),
-                math.rad(angle * 2),
-                math.rad(angle * 0.5)
-            )
-            h.AssemblyLinearVelocity = Vector3.new(1, 1, 1) * 16384
-        end)
+        saved.cf = h.CFrame
+        spoofing = true
+        pcall(function() h.CFrame = saved.cf + SPOOF_OFFSET end)
     end
 
     local function restore()
         if not spoofing then return end
         local c = lplr.Character; if not c then return end
         local h = c:FindFirstChild("HumanoidRootPart"); if not h then return end
-        if saved.cf  then pcall(function() h.CFrame = saved.cf end) end
-        if saved.vel then pcall(function() h.AssemblyLinearVelocity = saved.vel end) end
+        if saved.cf then pcall(function() h.CFrame = saved.cf end) end
         spoofing = false
     end
 
@@ -2882,12 +2873,9 @@ F.games.hoodCustoms.godmode = (function()
             local c = lplr.Character
             if c and saved.cf then
                 local h = c:FindFirstChild("HumanoidRootPart")
-                if h then
-                    pcall(function() h.CFrame = saved.cf end)
-                    if saved.vel then pcall(function() h.AssemblyLinearVelocity = saved.vel end) end
-                end
+                if h then pcall(function() h.CFrame = saved.cf end) end
             end
-            saved.cf, saved.vel, spoofing = nil, nil, false
+            saved.cf, spoofing = nil, false
         end,
         "hcGmActive"
     )
