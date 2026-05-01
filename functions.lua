@@ -2763,13 +2763,17 @@ local HC_KNIFE_MAX          = 13
 local HC_KNIFE_REACH_SIZE   = 13
 local HC_KNIFE_VISUALIZE    = false
 local _hcKnifeConn = nil
-local _hcKnifeHL   = nil  -- single shared Highlight, parented to CoreGui
 
+-- Tool is literally named "[Knife]" (square brackets). Check Backpack first
+-- (unequipped), then Character (equipped) — matches the working snippet.
 local function _hcKnifeHitbox()
-    local char = lplr.Character; if not char then return nil end
-    local k = char:FindFirstChild("Knife");      if not k then return nil end
-    local h = k:FindFirstChild("Handle");        if not h then return nil end
-    return h:FindFirstChild("HITBOX_PART")
+    local function find(p)
+        local k = p and p:FindFirstChild("[Knife]")
+        if not k then return nil end
+        local h = k:FindFirstChild("Handle"); if not h then return nil end
+        return h:FindFirstChild("HITBOX_PART")
+    end
+    return find(lplr:FindFirstChildOfClass("Backpack")) or find(lplr.Character)
 end
 
 local function startHcKnifeReach()
@@ -2784,26 +2788,21 @@ local function startHcKnifeReach()
         if hb.Size ~= target then
             pcall(function() hb.Size = target end)
         end
+        if hb.Transparency ~= 0.9999 then
+            pcall(function() hb.Transparency = 0.9999 end)
+        end
 
-        -- Visualize: keep a single Highlight in CoreGui, retarget its Adornee
-        -- to the current hitbox part. Parenting to CoreGui (not the part
-        -- itself) avoids issues where some tool scripts wipe child instances
-        -- on equip/unequip cycles.
+        local hl = hb:FindFirstChild("_kr_hl")
         if HC_KNIFE_VISUALIZE then
-            if not _hcKnifeHL or not _hcKnifeHL.Parent then
-                _hcKnifeHL = Instance.new("Highlight")
-                _hcKnifeHL.Name = "_cclosure_kr_hl"
-                _hcKnifeHL.FillTransparency    = 1
-                _hcKnifeHL.OutlineTransparency = 0
-                _hcKnifeHL.OutlineColor        = Color3.fromRGB(255, 80, 80)
-                _hcKnifeHL.DepthMode           = Enum.HighlightDepthMode.Occluded
-                pcall(function() _hcKnifeHL.Parent = game:GetService("CoreGui") end)
-                if not _hcKnifeHL.Parent then _hcKnifeHL.Parent = lplr:WaitForChild("PlayerGui") end
+            if not hl then
+                hl = Instance.new("Highlight")
+                hl.Name             = "_kr_hl"
+                hl.FillTransparency = 1
+                hl.DepthMode        = Enum.HighlightDepthMode.Occluded
+                hl.Parent           = hb
             end
-            if _hcKnifeHL.Adornee ~= hb then _hcKnifeHL.Adornee = hb end
-            _hcKnifeHL.Enabled = true
         else
-            if _hcKnifeHL then _hcKnifeHL.Enabled = false end
+            if hl then hl:Destroy() end
         end
     end)
 end
@@ -2814,8 +2813,10 @@ local function stopHcKnifeReach()
     local hb = _hcKnifeHitbox()
     if hb then
         pcall(function() hb.Size = HC_KNIFE_DEFAULT_SIZE end)
+        pcall(function() hb.Transparency = 1 end)
+        local hl = hb:FindFirstChild("_kr_hl")
+        if hl then hl:Destroy() end
     end
-    if _hcKnifeHL then _hcKnifeHL.Enabled = false end
 end
 
 F.games.hoodCustoms.knifeReach = makeToggle(startHcKnifeReach, stopHcKnifeReach, "hcKnifeReachActive")
