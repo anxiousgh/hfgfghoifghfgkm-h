@@ -2211,11 +2211,38 @@ F.ragebot.tpShoot = function()
         vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
     end)
 
-    task.wait(0.15)
-    if lhrp and lhrp.Parent then
-        -- restore the original spot, also upright + standing
-        _uprightTp(lc, lhrp, saved.Position, saved.LookVector)
-    end
+    -- Detect rage-target stomp mode at call time. If on, instead of the
+    -- normal 0.15s restore, hand off to the auto-stomp loop's "wait until
+    -- BodyEffects.Dead" path so we hover on top of the target until the
+    -- stomp finishes the kill, then snap back to the original spot.
+    local rageOn = F.games and F.games.hoodCustoms
+        and F.games.hoodCustoms.autoStomp
+        and F.games.hoodCustoms.autoStomp.getRageTargets
+        and F.games.hoodCustoms.autoStomp.getRageTargets()
+
+    -- run the wait + restore in a separate coroutine so the keybind handler
+    -- isn't blocked while we wait
+    task.spawn(function()
+        if rageOn then
+            -- wait for lplr.Character.BodyEffects.Dead = true (10s safety cap)
+            local deadline = tick() + 10
+            while tick() < deadline do
+                local nc = lplr.Character
+                local fx = nc and nc:FindFirstChild("BodyEffects")
+                local d  = fx and fx:FindFirstChild("Dead")
+                if d and d.Value == true then break end
+                task.wait()
+            end
+        else
+            task.wait(0.15)
+        end
+
+        local nc = lplr.Character
+        local nhrp = nc and nc:FindFirstChild("HumanoidRootPart")
+        if nhrp then
+            _uprightTp(nc, nhrp, saved.Position, saved.LookVector)
+        end
+    end)
 end
 
 -- ============================================================
