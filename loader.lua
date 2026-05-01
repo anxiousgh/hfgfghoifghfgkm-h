@@ -795,19 +795,10 @@ do
 end
 
 -- ============================================================
---  GAMES TAB  (per-game features)
+--  GAMES TAB  (per-game features — empty for now)
 -- ============================================================
 do
-    local HC = Tabs.Games:AddLeftGroupbox("Hood Customs")
-
-    HC:AddToggle("HCGodmode", { Text = "Godmode",
-        Tooltip = "Detaches your leg motors and offsets them off-screen — anything that hits your legs (most damage in HC) does nothing server-side. Only works in Hood Customs.",
-        Default = false,
-        Callback = function(v)
-            if v then F.games.hoodCustoms.godmode.start()
-            else      F.games.hoodCustoms.godmode.stop() end
-        end,
-    })
+    Tabs.Games:AddLeftGroupbox("Games"):AddLabel("No game-specific features yet.", true)
 end
 
 -- ============================================================
