@@ -151,6 +151,7 @@ do
 
     Trig:AddDropdown("TrigHitPart", {
         Values = {
+            "All",  -- fires on any body part of any player
             -- shared
             "HumanoidRootPart", "Head",
             -- R15
