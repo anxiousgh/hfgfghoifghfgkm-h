@@ -2124,6 +2124,68 @@ F.autoReload.getThreshold = function() return AutoReloadThreshold end
 F.autoReload.setCooldown  = function(n) AutoReloadCooldown  = math.clamp(tonumber(n) or 1.5, 0.1, 10) end
 F.autoReload.getCooldown  = function() return AutoReloadCooldown end
 
+-- ============================================================
+--  SERVER HOPPER
+-- ============================================================
+local TeleportService = game:GetService("TeleportService")
+
+local function _serversFetch(placeId, cursor)
+    local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(placeId)
+    if cursor then url = url .. "&cursor=" .. cursor end
+    local ok, body = pcall(function() return game:HttpGet(url, true) end)
+    if not ok or not body then return nil end
+    local ok2, data = pcall(function() return HttpService:JSONDecode(body) end)
+    if not ok2 then return nil end
+    return data
+end
+
+F.servers = {
+    list = function(maxPages)
+        maxPages = maxPages or 2
+        local out = {}
+        local cursor = nil
+        for _ = 1, maxPages do
+            local data = _serversFetch(game.PlaceId, cursor)
+            if not data or not data.data then break end
+            for _, srv in ipairs(data.data) do
+                if srv.id ~= game.JobId and (srv.playing or 0) < (srv.maxPlayers or 0) then
+                    table.insert(out, {
+                        jobId      = srv.id,
+                        playing    = srv.playing or 0,
+                        maxPlayers = srv.maxPlayers or 0,
+                        ping       = srv.ping or 0,
+                        fps        = srv.fps or 0,
+                    })
+                end
+            end
+            cursor = data.nextPageCursor
+            if not cursor then break end
+        end
+        return out
+    end,
+
+    rejoin = function()
+        pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, lplr)
+        end)
+    end,
+
+    join = function(jobId)
+        if not jobId or jobId == "" then return false end
+        local ok = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, lplr)
+        end)
+        return ok
+    end,
+
+    joinRandom = function()
+        local servers = F.servers.list(1)
+        if #servers == 0 then return false end
+        local pick = servers[math.random(1, #servers)]
+        return F.servers.join(pick.jobId), pick
+    end,
+}
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
