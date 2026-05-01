@@ -2901,8 +2901,16 @@ F.games.hoodCustoms.godmode = (function()
         savedJoints  = saved
         currentLimbs = limbParts
 
-        -- replicate void CFrames (client owns own char parts)
+        -- replicate void CFrames (client owns own char parts).
+        -- ALSO re-null Part0 every frame: HC's Animator/Animate script
+        -- restores the joint each render, which would otherwise let the
+        -- void-CFrame'd limb drag the torso/HRP through the joint chain.
         hbConn = RunService.Heartbeat:Connect(function()
+            for m, _ in pairs(saved) do
+                if m.Parent and m.Part0 ~= nil then
+                    pcall(function() m.Part0 = nil end)
+                end
+            end
             for _, p in ipairs(limbParts) do
                 if p.Parent then pcall(function() p.CFrame = VOID end) end
             end
