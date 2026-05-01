@@ -312,35 +312,6 @@ do
 
     Auto:AddToggle("RageOrbit", { Text = "Orbit",
         Default = F.ragebot.settings.Orbit, Callback = F.ragebot.setOrbit })
-
-    -- =================== HITBOX EXTENDER ===================
-    local Hb = CombatRight:AddTab("Hitbox")
-
-    Hb:AddToggle("HitboxEnabled", { Text = "Hitbox extender",
-        Tooltip = "Locally inflates a chosen part on every other player so silent aim and triggerbot land more reliably. Cosmetic locally — server still has the original size.",
-        Default = false,
-        Callback = function(v) if v then F.hitboxExtender.start() else F.hitboxExtender.stop() end end,
-    })
-
-    Hb:AddSlider("HitboxSize", { Text = "Hitbox size",
-        Default = F.hitboxExtender.getSize(), Min = 1, Max = 50, Rounding = 0,
-        Callback = F.hitboxExtender.setSize })
-
-    Hb:AddDropdown("HitboxPart", {
-        Values = {
-            "HumanoidRootPart","Head","UpperTorso","LowerTorso","Torso",
-            "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand",
-            "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
-            "Left Arm","Right Arm","Left Leg","Right Leg",
-        },
-        Default = F.hitboxExtender.getTargetPart(),
-        Text = "Target part",
-        Callback = F.hitboxExtender.setTargetPart,
-    })
-
-    Hb:AddSlider("HitboxTransparency", { Text = "Transparency",
-        Default = 0.6, Min = 0, Max = 1, Rounding = 2,
-        Callback = F.hitboxExtender.setTransparency })
     Auto:AddSlider("RageOrbitDist",   { Text = "Orbit distance",
         Default = F.ragebot.settings.OrbitDistance, Min = 2, Max = 200, Rounding = 0,
         Callback = F.ragebot.setOrbitDistance })
@@ -415,6 +386,101 @@ do
             task.wait(0.25)
         end
     end)
+
+    -- =================== AUTO (reload + equip), right tabbox ===================
+    local AutoT = CombatRight:AddTab("Auto")
+
+    AutoT:AddToggle("AutoReload", { Text = "Auto reload",
+        Tooltip = "Watches the equipped tool / character for any ammo-like attribute or IntValue/NumberValue. When it hits the threshold, sends the reload key.",
+        Default = false,
+        Callback = function(v) if v then F.autoReload.start() else F.autoReload.stop() end end,
+    })
+    AutoT:AddSlider("AutoReloadThreshold", { Text = "Reload at",
+        Default = F.autoReload.getThreshold(), Min = 0, Max = 10, Rounding = 0,
+        Callback = F.autoReload.setThreshold })
+    AutoT:AddSlider("AutoReloadCooldown", { Text = "Cooldown",
+        Default = F.autoReload.getCooldown(), Min = 0.1, Max = 10, Rounding = 1,
+        Suffix = " s", Callback = F.autoReload.setCooldown })
+    AutoT:AddLabel("Reload key"):AddKeyPicker("AutoReloadKey", {
+        Default = "R", NoUI = true, Text = "Reload key",
+    })
+    Options.AutoReloadKey:OnChanged(function()
+        F.autoReload.setKey(Options.AutoReloadKey.Value)
+    end)
+
+    AutoT:AddDivider()
+    AutoT:AddLabel("Auto equip")
+
+    AutoT:AddDropdown("AutoEquipTool", {
+        Values = { "(refresh)" }, Default = "(refresh)",
+        Text = "Tool",
+        Callback = function(v) F.autoEquip.setName(v) end,
+    })
+
+    local function refreshToolList()
+        local list = F.autoEquip.list()
+        if #list == 0 then list = { "(no tools)" } end
+        Options.AutoEquipTool:SetValues(list)
+        Options.AutoEquipTool:SetValue(list[1])
+    end
+
+    AutoT:AddButton({ Text = "Refresh tool list", Func = refreshToolList })
+    :AddButton({ Text = "Equip now", Func = function()
+        local name = Options.AutoEquipTool.Value
+        if F.autoEquip.equip(name) then
+            Library:Notify("Equipped " .. name, 2)
+        else
+            Library:Notify("Couldn't equip " .. tostring(name), 2)
+        end
+    end })
+
+    AutoT:AddToggle("AutoEquipOnRespawn", { Text = "Auto equip on respawn",
+        Default = false,
+        Callback = function(v)
+            if v then F.autoEquip.start() else F.autoEquip.stop() end
+        end })
+
+    -- auto-refresh tool list when backpack changes / on respawn
+    local function hookBackpack(bp)
+        if not bp then return end
+        bp.ChildAdded:Connect(function() task.defer(refreshToolList) end)
+        bp.ChildRemoved:Connect(function() task.defer(refreshToolList) end)
+    end
+    hookBackpack(LocalPlayer:FindFirstChildOfClass("Backpack"))
+    LocalPlayer.ChildAdded:Connect(function(c)
+        if c:IsA("Backpack") then hookBackpack(c) end
+    end)
+    LocalPlayer.CharacterAdded:Connect(function() task.wait(0.5); pcall(refreshToolList) end)
+    task.defer(refreshToolList)
+
+    -- =================== HITBOX EXTENDER (left side, below the tabbox) ===================
+    local Hb = Tabs.Combat:AddLeftGroupbox("Hitbox")
+
+    Hb:AddToggle("HitboxEnabled", { Text = "Hitbox extender",
+        Tooltip = "Locally inflates a chosen part on every other player so silent aim and triggerbot land more reliably. Cosmetic locally — server still has the original size.",
+        Default = false,
+        Callback = function(v) if v then F.hitboxExtender.start() else F.hitboxExtender.stop() end end,
+    })
+
+    Hb:AddSlider("HitboxSize", { Text = "Hitbox size",
+        Default = F.hitboxExtender.getSize(), Min = 1, Max = 50, Rounding = 0,
+        Callback = F.hitboxExtender.setSize })
+
+    Hb:AddDropdown("HitboxPart", {
+        Values = {
+            "HumanoidRootPart","Head","UpperTorso","LowerTorso","Torso",
+            "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand",
+            "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
+            "Left Arm","Right Arm","Left Leg","Right Leg",
+        },
+        Default = F.hitboxExtender.getTargetPart(),
+        Text = "Target part",
+        Callback = F.hitboxExtender.setTargetPart,
+    })
+
+    Hb:AddSlider("HitboxTransparency", { Text = "Transparency",
+        Default = 0.6, Min = 0, Max = 1, Rounding = 2,
+        Callback = F.hitboxExtender.setTransparency })
 end
 
 -- ============================================================
@@ -862,79 +928,6 @@ do
         Default = "T", Mode = "Hold", Text = "Respawn",
     })
     bindFireKey("RespawnKey", F.respawn.fire)
-
-    -- =================== AUTO RELOAD ===================
-    local Auto = Tabs.Misc:AddRightGroupbox("Auto")
-
-    Auto:AddToggle("AutoReload", { Text = "Auto reload",
-        Tooltip = "Watches the equipped tool / character for any ammo-like attribute or IntValue/NumberValue. When it hits the threshold, sends the reload key.",
-        Default = false,
-        Callback = function(v) if v then F.autoReload.start() else F.autoReload.stop() end end,
-    })
-
-    Auto:AddSlider("AutoReloadThreshold", { Text = "Reload at",
-        Default = F.autoReload.getThreshold(), Min = 0, Max = 10, Rounding = 0,
-        Callback = F.autoReload.setThreshold })
-
-    Auto:AddSlider("AutoReloadCooldown", { Text = "Cooldown",
-        Default = F.autoReload.getCooldown(), Min = 0.1, Max = 10, Rounding = 1,
-        Suffix = " s", Callback = F.autoReload.setCooldown })
-
-    -- key the reload presses; uses a NoUI keybind so it doesn't appear in the
-    -- floating keybinds panel (it's not a hotkey you press, it's the key the
-    -- script *fires*)
-    Auto:AddLabel("Reload key"):AddKeyPicker("AutoReloadKey", {
-        Default = "R", NoUI = true, Text = "Reload key",
-    })
-    Options.AutoReloadKey:OnChanged(function()
-        F.autoReload.setKey(Options.AutoReloadKey.Value)
-    end)
-
-    -- =================== AUTO EQUIP ===================
-    Auto:AddDivider()
-    Auto:AddLabel("Auto equip")
-
-    Auto:AddDropdown("AutoEquipTool", {
-        Values = { "(refresh)" }, Default = "(refresh)",
-        Text = "Tool",
-        Callback = function(v) F.autoEquip.setName(v) end,
-    })
-
-    local function refreshToolList()
-        local list = F.autoEquip.list()
-        if #list == 0 then list = { "(no tools)" } end
-        Options.AutoEquipTool:SetValues(list)
-        Options.AutoEquipTool:SetValue(list[1])
-    end
-
-    Auto:AddButton({ Text = "Refresh tool list", Func = refreshToolList })
-    :AddButton({ Text = "Equip now", Func = function()
-        local name = Options.AutoEquipTool.Value
-        if F.autoEquip.equip(name) then
-            Library:Notify("Equipped " .. name, 2)
-        else
-            Library:Notify("Couldn't equip " .. tostring(name), 2)
-        end
-    end })
-
-    Auto:AddToggle("AutoEquipOnRespawn", { Text = "Auto equip on respawn",
-        Default = false,
-        Callback = function(v)
-            if v then F.autoEquip.start() else F.autoEquip.stop() end
-        end })
-
-    -- auto-refresh tool list on backpack changes (optional, cheap)
-    local function hookBackpack(bp)
-        if not bp then return end
-        bp.ChildAdded:Connect(function() task.defer(refreshToolList) end)
-        bp.ChildRemoved:Connect(function() task.defer(refreshToolList) end)
-    end
-    hookBackpack(LocalPlayer:FindFirstChildOfClass("Backpack"))
-    LocalPlayer.ChildAdded:Connect(function(c)
-        if c:IsA("Backpack") then hookBackpack(c) end
-    end)
-    LocalPlayer.CharacterAdded:Connect(function() task.wait(0.5); pcall(refreshToolList) end)
-    task.defer(refreshToolList)
 
     -- =================== SERVER HOPPER ===================
     local Srv = Tabs.Misc:AddLeftGroupbox("Server hop")
