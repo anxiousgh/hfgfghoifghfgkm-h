@@ -2934,11 +2934,13 @@ F.games.hoodCustoms.godmode = (function()
                 if not G.hcGmActive then return end
                 local char = lplr.Character
                 if not char then return end
-                local void = CFrame.new(0, -50000, 0)
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+                local target = hrp.CFrame
                 for i = 1, #legs do
                     local limb = char:FindFirstChild(legs[i])
                     if limb then
-                        pcall(function() limb.CFrame = void end)
+                        pcall(function() limb.CFrame = target end)
                     end
                 end
             end)
