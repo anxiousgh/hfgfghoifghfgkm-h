@@ -1179,9 +1179,8 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- find best player inside FOV using the configured target part.
-    -- If TargetPart is "All", we iterate every BasePart on the character
-    -- and pick the one closest to mouse.
+    -- find best player inside FOV.
+    -- TargetPart "All" → scan every BasePart and pick closest to mouse.
     local hitPlr, hitPart, bestD = nil, nil, math.huge
     for _, plr in ipairs(_cachedPlayers or plrs:GetPlayers()) do
         if plr == lplr then continue end
@@ -2479,7 +2478,6 @@ local function startAutoEquip()
     _aeCharConn = lplr.CharacterAdded:Connect(function()
         if not G.autoEquipActive then return end
         if not AutoEquipName or AutoEquipName == "" then return end
-        -- wait for the Backpack and the named tool to actually appear
         local bp = lplr:WaitForChild("Backpack", 10); if not bp then return end
         bp:WaitForChild(AutoEquipName, 10)
         if not G.autoEquipActive then return end
@@ -2635,31 +2633,6 @@ local function _hcIsKnocked(plr)
     return ko ~= nil and ko.Value == true
 end
 
-local function _hcIsDead(plr)
-    if not plr then return false end
-    -- check the live character first (some games mirror Dead there)
-    local char = plr.Character
-    if char then
-        local fx = char:FindFirstChild("BodyEffects")
-        if fx then
-            local d = fx:FindFirstChild("Dead")
-            if d and d.Value == true then return true end
-        end
-    end
-    -- fall back to workspace.Players.Characters.<name>.BodyEffects.Dead
-    local wsp = workspace:FindFirstChild("Players")
-    local chars = wsp and wsp:FindFirstChild("Characters")
-    local mdl = chars and chars:FindFirstChild(plr.Name)
-    if mdl then
-        local fx = mdl:FindFirstChild("BodyEffects")
-        if fx then
-            local d = fx:FindFirstChild("Dead")
-            if d and d.Value == true then return true end
-        end
-    end
-    return false
-end
-
 local _hcStompConn   = nil
 local HC_STOMP_RADIUS    = 5    -- horizontal studs
 local HC_STOMP_VERT_UP   = 7    -- max studs we can be above them
@@ -2698,10 +2671,8 @@ local function startHcAutoStomp()
         local me = ReplicatedStorage:FindFirstChild("MainEvent")
         if not me then return end
 
-        -- mode A: pursue ONE knocked ragebot target until they're dead.
-        -- When we start chasing, save the user's CFrame. When the target
-        -- dies, TP user back to that CFrame. If they get up before dying,
-        -- abort silently (no TP back) and look for another knocked target.
+        -- mode A: actively pursue knocked ragebot targets — TP onto them and
+        -- spam stomp until they respawn (i.e. K.O flips back to false)
         if HC_STOMP_RAGE_TARGETS then
             local list = F.ragebot.getTargetList and F.ragebot.getTargetList() or {}
             for _, plr in ipairs(list) do
@@ -2744,7 +2715,6 @@ F.games.hoodCustoms.autoStomp.getInterval = function() return HC_STOMP_INTERVAL 
 F.games.hoodCustoms.autoStomp.setRageTargets = function(b) HC_STOMP_RAGE_TARGETS = b == true end
 F.games.hoodCustoms.autoStomp.getRageTargets = function() return HC_STOMP_RAGE_TARGETS end
 F.games.hoodCustoms.isKnocked = _hcIsKnocked
-F.games.hoodCustoms.isDead    = _hcIsDead
 
 -- ============================================================
 --  GAMES: HOOD CUSTOMS - AUTO RELOAD
@@ -2933,6 +2903,11 @@ local function stopHcAntiAfkTag()
 end
 
 F.games.hoodCustoms.antiAfkTag = makeToggle(startHcAntiAfkTag, stopHcAntiAfkTag, "hcAntiAfkTagActive")
+
+-- always-on by default — clear any current AFK tag and lock the BillboardGui
+-- to disabled for the rest of the session. The toggle in the UI can still
+-- turn it off if needed; this just means the user doesn't have to touch it.
+task.spawn(startHcAntiAfkTag)
 
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
