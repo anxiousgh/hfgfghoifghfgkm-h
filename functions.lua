@@ -461,58 +461,21 @@ end
 -- ============================================================
 --  NOCLIP / FULLBRIGHT / FREECAM / ZOOM
 -- ============================================================
-G.noclipOriginals = {}
-G.noclipDisabledConns = {}  -- list of connections we Disabled, to Enable on stop
-
+-- Standard noclip: just override CanCollide=false every Heartbeat while
+-- active. We deliberately do NOT use getconnections():Disable() on the
+-- engine's CanCollide listeners — that left collision in a broken state
+-- on toggle off (engine internals stay desynced even after Enable()).
+-- Per-frame override is enough; on stop we just stop overriding and the
+-- engine takes back over.
 local function stopNoclip()
     G.noclipActive=false
     pcall(function() RunService:UnbindFromRenderStep("NoclipStep") end)
     if G.noclipHBConn then G.noclipHBConn:Disconnect(); G.noclipHBConn=nil end
     if G.noclipConn and type(G.noclipConn)~="boolean" then G.noclipConn:Disconnect() end
     G.noclipConn=nil
-    -- restore CanCollide to its saved original (correctly handles the false case)
-    local char=lplr.Character
-    if char then
-        for _,p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then
-                local orig = G.noclipOriginals[p]
-                if orig ~= nil then p.CanCollide = orig else p.CanCollide = true end
-            end
-        end
-    end
-    -- re-enable the game's CanCollide listeners we disabled at start
-    for _, c in ipairs(G.noclipDisabledConns) do
-        pcall(function() c:Enable() end)
-    end
-    G.noclipDisabledConns = {}
-    G.noclipOriginals={}
 end
 local function startNoclip()
-    G.noclipActive=true; G.noclipOriginals={}; G.noclipDisabledConns={}
-    local char=lplr.Character
-    if char then
-        for _,p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then G.noclipOriginals[p]=p.CanCollide end
-        end
-    end
-    local function applyNoclip(c)
-        if not c then return end
-        for _,p in ipairs(c:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide=false end
-        end
-        pcall(function()
-            for _,p in ipairs(c:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    for _,conn in ipairs(getconnections(p:GetPropertyChangedSignal("CanCollide"))) do
-                        if conn.LuaConnection then
-                            conn:Disable()
-                            table.insert(G.noclipDisabledConns, conn)
-                        end
-                    end
-                end
-            end
-        end)
-    end
+    G.noclipActive=true
     RunService:BindToRenderStep("NoclipStep", Enum.RenderPriority.First.Value, function()
         if not G.noclipActive then return end
         local c=lplr.Character; if not c then return end
@@ -527,16 +490,7 @@ local function startNoclip()
             if p:IsA("BasePart") then p.CanCollide=false end
         end
     end)
-    applyNoclip(char)
-    G.noclipConn=lplr.CharacterAdded:Connect(function(newChar)
-        task.wait(0.1)
-        if G.noclipActive then
-            for _,p in ipairs(newChar:GetDescendants()) do
-                if p:IsA("BasePart") then G.noclipOriginals[p]=p.CanCollide end
-            end
-            applyNoclip(newChar)
-        end
-    end)
+    G.noclipConn=lplr.CharacterAdded:Connect(function() end)
 end
 
 local function stopFullbright()
@@ -2857,85 +2811,101 @@ end)()
 -- function's own register pool — none of them count against the file-
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
-    -- legs (R15 + R6) and arms (R15 + R6)
-    local LIMB_PARTS = {
-        "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
-        "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand",
-        "Left Leg","Right Leg","Left Arm","Right Arm",
-    }
-    local VOID = CFrame.new(0, -50000, 0)
+    -- LEGS ONLY. Detach the hip Motor6Ds so writing CFrame on a leg
+    -- doesn't drag the whole rig (joint constraint forces). Hide the
+    -- legs locally with LocalTransparencyModifier=1 so you don't see
+    -- broken/dangling legs. The CFrame writes replicate (client owns
+    -- its own character parts) → server sees legs at the void, leg
+    -- shots and stomps miss. HRP / torso stay attached so walking and
+    -- the rest of the body work normally.
+    local R15_MOTORS = { "LeftHip", "RightHip" }
+    local R15_PARTS  = { "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot" }
+    local R6_MOTORS  = { "Left Hip", "Right Hip" }
+    local R6_PARTS   = { "Left Leg", "Right Leg" }
+    local VOID = CFrame.new(0, 9999, 0)
 
-    local conn, charAddedConn
-    local savedProps = {}    -- limb -> { col, mls } so we can restore on toggle off
-    local currentLimbs = {}
-    local currentChar  = nil
+    local hbConn, rsConn, charConn
+    local savedJoints, currentLegs, currentChar = nil, nil, nil
 
-    -- Configure limbs ONCE per character: CanCollide=false (no physics
-    -- pushback when overlapping HRP/torso) and Massless=true (Motor6D
-    -- joint constraints can't drag the rest of the rig). Motors stay
-    -- attached so the local render goes through the joint chain and
-    -- you keep seeing your limbs in their natural animated pose. The
-    -- Heartbeat CFrame writes are what replicates → server sees the
-    -- limbs at the void, others see no limbs, hits miss.
-    local function configure(char)
-        if not char then return end
-        currentChar = char
-        currentLimbs = {}
-        savedProps = {}
-        for i = 1, #LIMB_PARTS do
-            local p = char:FindFirstChild(LIMB_PARTS[i])
-            if p and p:IsA("BasePart") then
-                table.insert(currentLimbs, p)
-                savedProps[p] = { col = p.CanCollide, mls = p.Massless }
-                pcall(function()
-                    p.CanCollide = false
-                    p.Massless   = true
-                end)
-            end
-        end
+    local function findRig(c)
+        local lt = c:FindFirstChild("LowerTorso");  if lt then return lt, R15_MOTORS, R15_PARTS end
+        local t  = c:FindFirstChild("Torso");       if t  then return t,  R6_MOTORS,  R6_PARTS  end
+        return nil
     end
 
-    local function restore()
-        for p, info in pairs(savedProps) do
-            if p.Parent then
-                pcall(function()
-                    p.CanCollide = info.col
-                    p.Massless   = info.mls
-                end)
+    local function reattach()
+        if savedJoints then
+            for m, info in pairs(savedJoints) do
+                if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
             end
         end
-        savedProps   = {}
-        currentLimbs = {}
-        currentChar  = nil
+        if currentLegs then
+            for _, p in ipairs(currentLegs) do
+                if p.Parent then pcall(function() p.LocalTransparencyModifier = 0 end) end
+            end
+        end
+        savedJoints, currentLegs, currentChar = nil, nil, nil
+    end
+
+    local function apply(c)
+        if not G.hcGmActive or not c then return end
+        if hbConn then hbConn:Disconnect(); hbConn = nil end
+        if rsConn then rsConn:Disconnect(); rsConn = nil end
+        currentChar = c
+        local rig, motorNames, partNames
+        local t0 = os.clock()
+        repeat
+            rig, motorNames, partNames = findRig(c)
+            if rig then break end
+            task.wait(0.1)
+        until os.clock() - t0 > 5 or not G.hcGmActive or c.Parent == nil
+        if not rig or not G.hcGmActive then return end
+
+        local legParts = {}
+        for _, n in ipairs(partNames) do
+            local p = c:FindFirstChild(n) or c:WaitForChild(n, 2)
+            if p then table.insert(legParts, p) end
+        end
+        if #legParts == 0 then return end
+
+        -- detach hip motors so legs are physically free; CFrame can be
+        -- written without the joint dragging the torso/HRP
+        local saved = {}
+        for _, n in ipairs(motorNames) do
+            local m = rig:FindFirstChild(n) or rig:WaitForChild(n, 2)
+            if m then saved[m] = { part0 = m.Part0, part1 = m.Part1 } end
+        end
+        for m, _ in pairs(saved) do pcall(function() m.Part0 = nil end) end
+        savedJoints = saved
+        currentLegs = legParts
+
+        -- replicate void CFrames (client owns own char parts)
+        hbConn = RunService.Heartbeat:Connect(function()
+            for _, p in ipairs(legParts) do
+                if p.Parent then pcall(function() p.CFrame = VOID end) end
+            end
+        end)
+        -- engine resets LocalTransparencyModifier each render frame; reapply
+        rsConn = RunService.RenderStepped:Connect(function()
+            for _, p in ipairs(legParts) do
+                if p.Parent then p.LocalTransparencyModifier = 1 end
+            end
+        end)
     end
 
     return makeToggle(
         function()
             G.hcGmActive = true
-            if conn then conn:Disconnect() end
-            if charAddedConn then charAddedConn:Disconnect() end
-            configure(lplr.Character)
-            charAddedConn = lplr.CharacterAdded:Connect(function(c)
-                if not G.hcGmActive then return end
-                task.wait(0.3)
-                if G.hcGmActive then configure(c) end
-            end)
-            conn = RunService.Heartbeat:Connect(function()
-                if not G.hcGmActive then return end
-                if currentChar ~= lplr.Character then return end
-                for i = 1, #currentLimbs do
-                    local p = currentLimbs[i]
-                    if p.Parent then
-                        pcall(function() p.CFrame = VOID end)
-                    end
-                end
-            end)
+            if charConn then charConn:Disconnect() end
+            charConn = lplr.CharacterAdded:Connect(function(c) task.spawn(apply, c) end)
+            if lplr.Character then task.spawn(apply, lplr.Character) end
         end,
         function()
             G.hcGmActive = false
-            if conn then conn:Disconnect(); conn = nil end
-            if charAddedConn then charAddedConn:Disconnect(); charAddedConn = nil end
-            restore()
+            if hbConn   then hbConn:Disconnect();   hbConn   = nil end
+            if rsConn   then rsConn:Disconnect();   rsConn   = nil end
+            if charConn then charConn:Disconnect(); charConn = nil end
+            reattach()
         end,
         "hcGmActive"
     )
