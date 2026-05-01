@@ -166,7 +166,6 @@ do
         },
         Default = F.triggerbot.settings.TargetPart,
         Text = "Hit part",
-        Tooltip = "Body part the crosshair must be over to fire. Falls back to HumanoidRootPart if the part doesn't exist on the rig.",
         Callback = F.triggerbot.setHitPart,
     })
 
@@ -245,18 +244,15 @@ do
 
     Tgt:AddButton({ Text = "TP behind target", Func = F.ragebot.tpBehind })
     :AddButton({ Text = "TP shoot",
-        Tooltip = "TP behind target → fire one click → TP back",
         Func = F.ragebot.tpShoot })
 
     Tgt:AddToggle("RageAutoTargetDamager", {
         Text = "Auto target damager",
-        Tooltip = "When something parents a creator/DamageSource tag to your Humanoid, the attacker gets added to the multi-target list.",
         Default = false,
     })
 
     Tgt:AddToggle("RageTargetGui", {
         Text = "Show target HUD",
-        Tooltip = "Floating panel at the bottom of the screen with the locked target's avatar, name, health bar, held tool, and distance.",
         Default = false,
         Callback = function(v)
             if v then F.ragebot.targetGui.start() else F.ragebot.targetGui.stop() end
@@ -456,7 +452,6 @@ do
     local Hb = Tabs.Combat:AddLeftGroupbox("Hitbox")
 
     Hb:AddToggle("HitboxEnabled", { Text = "Hitbox extender",
-        Tooltip = "Locally inflates a chosen part on every other player so silent aim and triggerbot land more reliably. Cosmetic locally — server still has the original size.",
         Default = false,
         Callback = function(v) if v then F.hitboxExtender.start() else F.hitboxExtender.stop() end end,
     })
@@ -788,7 +783,6 @@ do
         Min = 1, Max = 200, Rounding = 0, Callback = F.spin.setSpeed })
 
     Extras:AddToggle("Flip", { Text = "Upside down",
-        Tooltip = "Flip your character upside-down",
         Default = false,
         Callback = function(v) if v then F.flip.start() else F.flip.stop() end end })
 
@@ -800,7 +794,6 @@ do
     Extras:AddDivider()
 
     Extras:AddButton({ Text = "Blink forward", Func = F.blink.fire,
-        Tooltip = "Teleport forward in camera direction" })
     Extras:AddSlider("BlinkDist", { Text = "Blink distance", Default = F.blink.getDistance(),
         Min = 1, Max = 200, Rounding = 0, Callback = F.blink.setDistance })
 end
@@ -911,12 +904,10 @@ do
     local Act = Tabs.Misc:AddLeftGroupbox("Actions")
 
     Act:AddButton({ Text = "Respawn", Func = F.respawn.fire,
-        Tooltip = "Respawn at current position" })
 
     Act:AddDivider()
 
     Act:AddButton({ Text = "Anti VC ban", DoubleClick = true,
-        Tooltip = "Cycles voice connections + replaces mic button to bypass VC ban detection. Run once per session.",
         Func = function()
             F.antiVcBan.fire()
             Library:Notify("Anti VC ban running — wait ~7s", 5)
@@ -926,7 +917,6 @@ do
     Act:AddDivider()
 
     Act:AddButton({ Text = "PANIC — disable everything", DoubleClick = true,
-        Tooltip = "Double-click to disable every active feature",
         Func = function()
             F.disableAll()
             for _, name in ipairs({
@@ -1043,7 +1033,6 @@ do
     HC:AddLabel("Ragebot")
     HC:AddToggle("RageSkipKnocked", {
         Text = "Skip knocked targets",
-        Tooltip = "Ragebot ignores any target whose BodyEffects.K.O is true — no shooting, no orbit while they're down.",
         Default = false,
         Callback = F.ragebot.setSkipKnocked,
     })
@@ -1053,7 +1042,6 @@ do
     -- ---- Auto stomp ----
     HC:AddLabel("Auto stomp")
     HC:AddToggle("HCAutoStomp", { Text = "Auto stomp",
-        Tooltip = "Spams ReplicatedStorage.MainEvent:FireServer(\"Stomp\") on Heartbeat, but only when another player is right under your feet — keeps the server quiet otherwise.",
         Default = false,
         Callback = function(v)
             if v then F.games.hoodCustoms.autoStomp.start()
@@ -1068,7 +1056,6 @@ do
         Callback = F.games.hoodCustoms.autoStomp.setRadius })
 
     HC:AddSlider("HCAutoStompInterval", { Text = "Min interval",
-        Tooltip = "Seconds between fires. 0 = every Heartbeat (~60/s).",
         Default = F.games.hoodCustoms.autoStomp.getInterval(),
         Min = 0, Max = 1, Rounding = 2,
         Suffix = " s",
@@ -1076,7 +1063,6 @@ do
 
     HC:AddToggle("HCAutoStompRage", {
         Text = "Auto stomp ragebot targets",
-        Tooltip = "While any ragebot target is knocked (BodyEffects.K.O = true), TP onto them every Heartbeat and fire stomp until they respawn. Overrides the 'walking over' check.",
         Default = false,
         Callback = F.games.hoodCustoms.autoStomp.setRageTargets,
     })
@@ -1084,7 +1070,6 @@ do
     HC:AddDivider()
 
     HC:AddToggle("HCAutoReload", { Text = "Auto reload",
-        Tooltip = "Watches Character.<Tool>.Script.Ammo. When it hits the threshold, sends the reload key.",
         Default = false,
         Callback = function(v)
             if v then F.games.hoodCustoms.autoReload.start()
@@ -1114,7 +1099,6 @@ do
     -- ---- Knife reach ----
     HC:AddLabel("Knife reach")
     HC:AddToggle("HCKnifeReach", { Text = "Enable knife reach",
-        Tooltip = "Resizes Knife.Handle.HITBOX_PART up to (size, size, size). Survives respawn.",
         Default = false,
         Callback = function(v)
             if v then F.games.hoodCustoms.knifeReach.start()
@@ -1122,14 +1106,12 @@ do
         end })
 
     HC:AddSlider("HCKnifeReachSize", { Text = "Hitbox size",
-        Tooltip = "Anything above 13 triggers HC's anti-cheat. Slider is clamped to 13.",
         Default = F.games.hoodCustoms.knifeReach.getSize(),
         Min = 1, Max = F.games.hoodCustoms.knifeReach.maxSize, Rounding = 1,
         Suffix = " studs",
         Callback = F.games.hoodCustoms.knifeReach.setSize })
 
     HC:AddToggle("HCKnifeReachVis", { Text = "Visualize hitbox",
-        Tooltip = "Adds a Highlight (FillTransparency=1, DepthMode=Occluded) to the hitbox part so you can see it through walls.",
         Default = false,
         Callback = F.games.hoodCustoms.knifeReach.setVisualize })
 
@@ -1138,7 +1120,6 @@ do
     -- ---- Anti-AFK tag ----
     HC:AddLabel("Anti-AFK")
     HC:AddToggle("HCAntiAfkTag", { Text = "Anti-AFK tag",
-        Tooltip = "Watches HumanoidRootPart.CharacterAFK (BillboardGui). If Enabled flips to true, fires MainEvent:FireServer(\"RequestAFKDisplay\", false) to clear it. Survives respawn.",
         Default = false,
         Callback = function(v)
             if v then F.games.hoodCustoms.antiAfkTag.start()
@@ -1182,13 +1163,11 @@ end)
 local Menu = Tabs.Config:AddLeftGroupbox("Menu")
 
 Menu:AddToggle("ShowKeybindFrame", { Text = "Show keybinds panel", Default = true,
-    Tooltip = "Show or hide the floating Keybinds list",
     Callback = function(v)
         if Library.KeybindFrame then Library.KeybindFrame.Visible = v end
     end })
 
 Menu:AddButton({ Text = "Unbind all keybinds", DoubleClick = true,
-    Tooltip = "Sets every KeyPicker (except the menu key) to None",
     Func = function()
         local n = 0
         for idx, opt in pairs(Options) do
@@ -1205,7 +1184,7 @@ Menu:AddDivider()
 Menu:AddButton({ Text = "Unload script", Func = function() Library:Unload() end })
 
 Menu:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
-    Default = "End", NoUI = true, Text = "Menu keybind",
+    Default = "Insert", NoUI = true, Text = "Menu keybind",
 })
 Library.ToggleKeybind = Options.MenuKeybind
 
