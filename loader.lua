@@ -262,6 +262,13 @@ do
             if v then F.ragebot.targetGui.start() else F.ragebot.targetGui.stop() end
         end })
 
+    Tgt:AddToggle("RageSkipKnocked", {
+        Text = "Skip knocked targets",
+        Tooltip = "Hood Customs: when on, ragebot ignores any target whose BodyEffects.K.O is true — no shooting, no orbit while they're down.",
+        Default = false,
+        Callback = F.ragebot.setSkipKnocked,
+    })
+
     Tgt:AddDivider()
 
     Tgt:AddToggle("RageSilentForce", { Text = "Silent force",
@@ -847,10 +854,29 @@ do
     List:AddLabel("Click a player to select them")
     List:AddDivider()
 
+    -- alphabetical order via LayoutOrder so the underlying UIListLayout sorts
+    -- buttons without us having to destroy + recreate them on every join
+    local function reorderPlayers()
+        local names = {}
+        for plr, _ in pairs(_playerButtons) do
+            if plr.Parent then table.insert(names, plr.Name) end
+        end
+        table.sort(names, function(a, b) return a:lower() < b:lower() end)
+        local rank = {}
+        for i, n in ipairs(names) do rank[n] = i end
+        for plr, btn in pairs(_playerButtons) do
+            local order = rank[plr.Name]
+            if btn and btn.Outer and order then
+                pcall(function() btn.Outer.LayoutOrder = order end)
+            end
+        end
+    end
+
     local function removePlayerButton(pl)
         local b = _playerButtons[pl]
         if b and b.Outer then pcall(function() b.Outer:Destroy() end) end
         _playerButtons[pl] = nil
+        reorderPlayers()
     end
 
     local function addPlayerButton(pl)
@@ -860,6 +886,7 @@ do
             selectPlayer(pl)
         end })
         _playerButtons[pl] = btn
+        reorderPlayers()
     end
 
     for _, pl in ipairs(Players:GetPlayers()) do addPlayerButton(pl) end
@@ -1015,6 +1042,13 @@ do
         Min = 0, Max = 1, Rounding = 2,
         Suffix = " s",
         Callback = F.games.hoodCustoms.autoStomp.setInterval })
+
+    HC:AddToggle("HCAutoStompRage", {
+        Text = "Auto stomp ragebot targets",
+        Tooltip = "While any ragebot target is knocked (BodyEffects.K.O = true), TP onto them every Heartbeat and fire stomp until they respawn. Overrides the 'walking over' check.",
+        Default = false,
+        Callback = F.games.hoodCustoms.autoStomp.setRageTargets,
+    })
 
     HC:AddDivider()
 
