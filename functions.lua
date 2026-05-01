@@ -2666,9 +2666,7 @@ local HC_STOMP_VERT_UP   = 7    -- max studs we can be above them
 local HC_STOMP_VERT_DOWN = 1    -- max studs they can be above us
 local HC_STOMP_INTERVAL  = 0    -- seconds between fires; 0 = every Heartbeat
 local HC_STOMP_RAGE_TARGETS = false
-local _hcStompLast    = 0
-local _hcChaseTarget  = nil
-local _hcChaseSavedCF = nil
+local _hcStompLast = 0
 
 local function _hcSomeoneBelowMe()
     local lc = lplr.Character
@@ -2705,56 +2703,22 @@ local function startHcAutoStomp()
         -- dies, TP user back to that CFrame. If they get up before dying,
         -- abort silently (no TP back) and look for another knocked target.
         if HC_STOMP_RAGE_TARGETS then
-            -- already chasing? check death first
-            local restored = false
-            if _hcChaseTarget then
-                if _hcIsDead(_hcChaseTarget) then
-                    if _hcChaseSavedCF then
+            local list = F.ragebot.getTargetList and F.ragebot.getTargetList() or {}
+            for _, plr in ipairs(list) do
+                if _hcIsKnocked(plr) then
+                    local char = plr.Character
+                    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
                         local lc   = lplr.Character
                         local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
                         if lhrp then
-                            _uprightTp(lc, lhrp, _hcChaseSavedCF.Position, _hcChaseSavedCF.LookVector)
+                            _uprightTp(lc, lhrp, hrp.Position + Vector3.new(0, 3, 0), nil)
                         end
-                    end
-                    _hcChaseTarget  = nil
-                    _hcChaseSavedCF = nil
-                    restored = true
-                end
-            end
-            if restored then return end
-            -- check recovery (got up before dying)
-            if _hcChaseTarget and not _hcIsKnocked(_hcChaseTarget) then
-                _hcChaseTarget  = nil
-                _hcChaseSavedCF = nil
-            end
-
-            -- find a fresh knocked target if we don't have one
-            if not _hcChaseTarget then
-                local list = F.ragebot.getTargetList and F.ragebot.getTargetList() or {}
-                for _, plr in ipairs(list) do
-                    if _hcIsKnocked(plr) then
-                        _hcChaseTarget = plr
-                        local lhrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
-                        if lhrp then _hcChaseSavedCF = lhrp.CFrame end
-                        break
+                        _hcStompLast = tick()
+                        pcall(function() me:FireServer("Stomp") end)
+                        return
                     end
                 end
-            end
-
-            -- TP onto + stomp the chased target this frame
-            if _hcChaseTarget then
-                local char = _hcChaseTarget.Character
-                local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local lc   = lplr.Character
-                    local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
-                    if lhrp then
-                        _uprightTp(lc, lhrp, hrp.Position + Vector3.new(0, 3, 0), nil)
-                    end
-                end
-                _hcStompLast = tick()
-                pcall(function() me:FireServer("Stomp") end)
-                return
             end
         end
 
@@ -2768,8 +2732,6 @@ end
 local function stopHcAutoStomp()
     G.hcAutoStompActive = false
     if _hcStompConn then _hcStompConn:Disconnect(); _hcStompConn = nil end
-    _hcChaseTarget  = nil
-    _hcChaseSavedCF = nil
 end
 
 F.games = F.games or {}
