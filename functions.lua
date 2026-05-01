@@ -2044,10 +2044,11 @@ F.antiVcBan = { fire = antiVcBanFire }
 --  damage to those (which is most damage in HC) is voided.
 --  Client owns its character parts so the CFrame replicates.
 -- ============================================================
-local HC_R15_MOTORS = {"LeftHip", "RightHip"}
+-- ordered proximal -> distal so the local chain reconstruction works top-down
+local HC_R15_MOTORS = {"LeftHip","LeftKnee","LeftAnkle","RightHip","RightKnee","RightAnkle"}
 local HC_R15_PARTS  = {"LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot"}
-local HC_R6_MOTORS  = {"Left Hip", "Right Hip"}
-local HC_R6_PARTS   = {"Left Leg", "Right Leg"}
+local HC_R6_MOTORS  = {"Left Hip","Right Hip"}
+local HC_R6_PARTS   = {"Left Leg","Right Leg"}
 local HC_VOID       = CFrame.new(0, 9999, 0)
 
 local function hcFindRig(c)
@@ -2057,8 +2058,11 @@ local function hcFindRig(c)
 end
 
 local function hcReattach()
-    -- nothing to restore: we don't detach motors anymore, the desync
-    -- technique just stops writing CFrame and the animator takes over again.
+    if G._hcSavedJoints then
+        for m, info in pairs(G._hcSavedJoints) do
+            if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
+        end
+    end
     G._hcSavedJoints = nil
     G._hcCurLegParts = nil
 end
@@ -2078,10 +2082,10 @@ local function hcApply(c)
     if G._hcGmRs then G._hcGmRs:Disconnect(); G._hcGmRs = nil end
     G._hcGmCurChar = c
 
-    local rig, _, partNames
+    local rig, motorNames, partNames
     local t0 = os.clock()
     repeat
-        rig, _, partNames = hcFindRig(c)
+        rig, motorNames, partNames = hcFindRig(c)
         if rig then break end
         task.wait(0.1)
     until os.clock() - t0 > 5 or not G._hcGmActive or c.Parent == nil
@@ -2094,36 +2098,53 @@ local function hcApply(c)
     end
     if #legParts == 0 then return end
 
+    -- Knee/ankle motors live on UpperLeg/LowerLeg, not on rig.
+    -- Walk the whole character to find them by name.
+    local function findMotor(name)
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("Motor6D") and d.Name == name then return d end
+        end
+    end
+
+    -- Save full motor state (C0/C1 needed to reconstruct local pose later).
+    -- partInfo[part] = { motor, parent (the motor's original Part0), c0, c1 }
+    local saved = {}
+    local partInfo = {}
+    for _, n in ipairs(motorNames) do
+        local m = findMotor(n)
+        if m and m.Part0 and m.Part1 then
+            saved[m] = { part0 = m.Part0, part1 = m.Part1, c0 = m.C0, c1 = m.C1 }
+            partInfo[m.Part1] = { motor = m, parent = m.Part0, c0 = m.C0, c1 = m.C1 }
+        end
+    end
+    -- Detach so writing Part1.CFrame doesn't drag the whole rig through the joint.
+    for m, _ in pairs(saved) do pcall(function() m.Part0 = nil end) end
+    G._hcSavedJoints = saved
     G._hcCurLegParts = legParts
 
-    -- Desync technique (same pattern as `flip`): on Heartbeat we capture the
-    -- animator-driven CFrame and overwrite with HC_VOID, so the network tick
-    -- replicates HC_VOID to the server / other clients. On the next
-    -- RenderStepped, before the engine renders, we restore the saved CFrame
-    -- so your own view keeps seeing the legs in their normal animated pose.
-    -- Motors stay attached the whole time so the local animator keeps driving
-    -- the legs into position each frame; we just hijack what gets sent out.
-    local _real = {}
-    local _spoofing = false
-
+    -- Server view: HC_VOID, written every Heartbeat (the tick that replicates).
     G._hcGmHb = RunService.Heartbeat:Connect(function()
         for _, p in ipairs(legParts) do
-            if p.Parent then
-                _real[p] = p.CFrame
-                pcall(function() p.CFrame = HC_VOID end)
-            end
+            if p.Parent then pcall(function() p.CFrame = HC_VOID end) end
         end
-        _spoofing = true
     end)
 
+    -- Local view: every RenderStepped (before the frame is drawn), reconstruct
+    -- each leg's CFrame from its parent + saved joint offsets + the Animator's
+    -- Transform value (which still updates even with Part0=nil). This is the
+    -- same chain the engine would use if the motor were attached:
+    --   Part1.CFrame = Part0.CFrame * C0 * Transform * C1:Inverse()
+    -- We don't recurse for child legs (LowerLeg, Foot) — instead each part's
+    -- info points at its true parent so the chain naturally rebuilds top-down
+    -- as long as we iterate parts in proximal -> distal order, which we do
+    -- because partNames is ordered that way.
     G._hcGmRs = RunService.RenderStepped:Connect(function()
-        if _spoofing then
-            for _, p in ipairs(legParts) do
-                if p.Parent and _real[p] then
-                    pcall(function() p.CFrame = _real[p] end)
-                end
+        for _, p in ipairs(legParts) do
+            local info = partInfo[p]
+            if info and p.Parent and info.parent and info.parent.Parent then
+                local target = info.parent.CFrame * info.c0 * info.motor.Transform * info.c1:Inverse()
+                pcall(function() p.CFrame = target end)
             end
-            _spoofing = false
         end
     end)
 end
