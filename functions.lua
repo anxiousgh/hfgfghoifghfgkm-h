@@ -2942,14 +2942,15 @@ local _hcGmConn = nil
 local function startHcGodmode()
     G.hcGmActive = true
     if _hcGmConn then _hcGmConn:Disconnect() end
-    local voidCF = CFrame.new(0, -50000, 0)
     _hcGmConn = RunService.Heartbeat:Connect(function()
         if not G.hcGmActive then return end
         local char = lplr.Character; if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+        local hrpCF = hrp.CFrame
         for _, name in ipairs(HC_GM_LEG_PARTS) do
             local limb = char:FindFirstChild(name)
             if limb and limb:IsA("BasePart") then
-                pcall(function() limb.CFrame = voidCF end)
+                pcall(function() limb.CFrame = hrpCF end)
             end
         end
     end)
