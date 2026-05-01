@@ -8,11 +8,12 @@
 -- See bottom of file for the full API table.
 
 --// services
-local HttpService      = game:GetService("HttpService")
-local TweenService     = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local RunService       = game:GetService("RunService")
-local plrs             = game:GetService("Players")
+local HttpService         = game:GetService("HttpService")
+local TweenService        = game:GetService("TweenService")
+local UserInputService    = game:GetService("UserInputService")
+local RunService          = game:GetService("RunService")
+local plrs                = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local lplr             = plrs.LocalPlayer
 local Camera           = workspace.CurrentCamera
 
@@ -316,7 +317,7 @@ local function startAntiAfk()
             t=0
             pcall(function() firesignal(lplr.Idled) end)
             pcall(function()
-                local vim=game:GetService("VirtualInputManager")
+                local vim=VirtualInputManager
                 vim:SendKeyEvent(true,Enum.KeyCode.W,false,game)
                 vim:SendKeyEvent(false,Enum.KeyCode.W,false,game)
             end)
@@ -1232,7 +1233,7 @@ RunService.Heartbeat:Connect(function()
     if not hitPlr then return end
     _trigLastShot = tick()
     pcall(function()
-        local vim = game:GetService("VirtualInputManager")
+        local vim = VirtualInputManager
         vim:SendMouseButtonEvent(0,0,0,true,game,0)
         vim:SendMouseButtonEvent(0,0,0,false,game,0)
     end)
@@ -1587,8 +1588,8 @@ RunService.Heartbeat:Connect(function()
         if not lc or not lc:FindFirstChildOfClass("Tool") then return end
     end
     _rbLastShot = tick()
-    game:GetService("VirtualInputManager"):SendMouseButtonEvent(0,0,0,true,game,0)
-    game:GetService("VirtualInputManager"):SendMouseButtonEvent(0,0,0,false,game,0)
+    VirtualInputManager:SendMouseButtonEvent(0,0,0,true,game,0)
+    VirtualInputManager:SendMouseButtonEvent(0,0,0,false,game,0)
 end)
 
 -- ============================================================
@@ -2248,7 +2249,7 @@ F.ragebot.tpShoot = function()
     _uprightTp(lc, lhrp, position, horiz)
 
     pcall(function()
-        local vim = game:GetService("VirtualInputManager")
+        local vim = VirtualInputManager
         vim:SendMouseButtonEvent(0, 0, 0, true,  game, 0)
         vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
     end)
@@ -2519,6 +2520,7 @@ local HitboxTargetPart = "HumanoidRootPart"
 local HitboxTransparency = 0.6  -- visual hint that the box is huge; 1=invisible
 
 local function _hbApply()
+    local target = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
     for _, plr in ipairs(plrs:GetPlayers()) do
         if plr == lplr then continue end
         local char = plr.Character; if not char then continue end
@@ -2530,10 +2532,9 @@ local function _hbApply()
                 CanCollide = part.CanCollide, Massless = part.Massless,
             }
         end
-        local s = HitboxSize
-        if part.Size ~= Vector3.new(s, s, s) then
+        if part.Size ~= target then
             pcall(function()
-                part.Size         = Vector3.new(s, s, s)
+                part.Size         = target
                 part.Transparency = HitboxTransparency
                 part.CanCollide   = false
                 part.Massless     = true
@@ -2556,22 +2557,45 @@ local function _hbRestore()
     _hbOriginal = setmetatable({}, { __mode = "k" })
 end
 
+-- event-driven extender: apply only when a player joins or respawns,
+-- not every Heartbeat. Way cheaper.
+local _hbCharConns = {}
+
+local function _hbHookPlayer(plr)
+    if plr == lplr then return end
+    if _hbCharConns[plr] then _hbCharConns[plr]:Disconnect() end
+    _hbCharConns[plr] = plr.CharacterAdded:Connect(function()
+        if not G.hitboxActive then return end
+        task.wait(0.5)
+        if G.hitboxActive then _hbApply() end
+    end)
+end
+
 local function startHitboxExtender()
     G.hitboxActive = true
-    _hbConn = RunService.Heartbeat:Connect(_hbApply)
+    _hbApply()  -- one-shot apply now
+    -- hook current + future players for respawns
+    for _, p in ipairs(plrs:GetPlayers()) do _hbHookPlayer(p) end
+    if _hbConn then _hbConn:Disconnect() end
+    _hbConn = plrs.PlayerAdded:Connect(function(p)
+        _hbHookPlayer(p)
+        if G.hitboxActive then task.wait(0.5); _hbApply() end
+    end)
 end
 local function stopHitboxExtender()
     G.hitboxActive = false
     if _hbConn then _hbConn:Disconnect(); _hbConn = nil end
+    for plr, c in pairs(_hbCharConns) do pcall(function() c:Disconnect() end) end
+    _hbCharConns = {}
     _hbRestore()
 end
 
 F.hitboxExtender = makeToggle(startHitboxExtender, stopHitboxExtender, "hitboxActive")
-F.hitboxExtender.setSize         = function(n) HitboxSize = math.clamp(tonumber(n) or 8, 1, 50) end
+F.hitboxExtender.setSize         = function(n) HitboxSize = math.clamp(tonumber(n) or 8, 1, 50); if G.hitboxActive then _hbApply() end end
 F.hitboxExtender.getSize         = function() return HitboxSize end
-F.hitboxExtender.setTargetPart   = function(s) HitboxTargetPart = tostring(s) end
+F.hitboxExtender.setTargetPart   = function(s) HitboxTargetPart = tostring(s); if G.hitboxActive then _hbRestore(); _hbApply() end end
 F.hitboxExtender.getTargetPart   = function() return HitboxTargetPart end
-F.hitboxExtender.setTransparency = function(n) HitboxTransparency = math.clamp(tonumber(n) or 0.6, 0, 1) end
+F.hitboxExtender.setTransparency = function(n) HitboxTransparency = math.clamp(tonumber(n) or 0.6, 0, 1); if G.hitboxActive then _hbApply() end end
 
 F.servers = {
     list = function(maxPages)
@@ -2628,6 +2652,13 @@ F.servers = {
 --  don't flood the server when there's nothing to stomp.
 -- ============================================================
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+-- cache MainEvent — re-resolve only when nil (avoids per-frame FindFirstChild in hot loops)
+local _mainEventCache
+local function getMainEvent()
+    if _mainEventCache and _mainEventCache.Parent then return _mainEventCache end
+    _mainEventCache = ReplicatedStorage:FindFirstChild("MainEvent")
+    return _mainEventCache
+end
 
 -- HC-specific knocked check via workspace.Players.Characters.<name>.BodyEffects["K.O"].Value
 local function _hcIsKnocked(plr)
@@ -2678,7 +2709,7 @@ local function startHcAutoStomp()
     _hcStompConn = RunService.Heartbeat:Connect(function()
         if not G.hcAutoStompActive then return end
         if HC_STOMP_INTERVAL > 0 and tick() - _hcStompLast < HC_STOMP_INTERVAL then return end
-        local me = ReplicatedStorage:FindFirstChild("MainEvent")
+        local me = getMainEvent()
         if not me then return end
 
         -- mode A: actively pursue knocked ragebot targets — TP onto them and
@@ -2748,7 +2779,7 @@ end
 
 local function _hcReloadFire()
     pcall(function()
-        local vim = game:GetService("VirtualInputManager")
+        local vim = VirtualInputManager
         vim:SendKeyEvent(true,  HC_RELOAD_KEY, false, game)
         task.wait(0.05)
         vim:SendKeyEvent(false, HC_RELOAD_KEY, false, game)
@@ -2870,7 +2901,7 @@ local _hcAfkPropConn = nil
 local _hcAfkCharConn = nil
 
 local function _hcAfkClearOnce()
-    local me = ReplicatedStorage:FindFirstChild("MainEvent")
+    local me = getMainEvent()
     if me then pcall(function() me:FireServer("RequestAFKDisplay", false) end) end
 end
 
