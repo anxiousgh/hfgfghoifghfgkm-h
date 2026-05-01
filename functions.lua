@@ -70,7 +70,7 @@ local TrigSettings = {
 }
 
 local RageSettings = {
-    TargetUserId=nil, TargetPlayer=nil,
+    TargetUserId=nil, TargetPlayer=nil, SkipKnocked=false,
     ShowLine=true, ShowOutline=true, LineOrigin="Bottom", FaceTarget=false,
     Orbit=false, OrbitDistance=15, OrbitSpeed=60, OrbitHeight=5,
     AutoShoot=false, AutoShootDist=50, AutoShootVis=true, AutoShootRequireTool=false,
@@ -1282,6 +1282,10 @@ local function rbGetTarget()
             local char=plr.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart")
             if not hrp then continue end
             local hum=char:FindFirstChildOfClass("Humanoid"); if not hum or hum.Health<=0 then continue end
+            -- skip knocked targets when the toggle is on (HC: BodyEffects K.O)
+            if RageSettings.SkipKnocked
+                and F.games and F.games.hoodCustoms and F.games.hoodCustoms.isKnocked
+                and F.games.hoodCustoms.isKnocked(plr) then continue end
             local dist
             if useMouse then
                 local sp,onScreen=cam:WorldToViewportPoint(hrp.Position)
@@ -1873,6 +1877,7 @@ F.ragebot = {
     setShowLine     = function(b) RageSettings.ShowLine = b == true end,
     setShowOutline  = function(b) RageSettings.ShowOutline = b == true end,
     setLineOrigin   = function(s) RageSettings.LineOrigin = tostring(s) end,
+    setSkipKnocked  = function(b) RageSettings.SkipKnocked = b == true end,
     setFaceTarget  = function(b) RageSettings.FaceTarget = b == true end,
     setOrbit       = function(b) RageSettings.Orbit = b == true end,
     setOrbitDistance = function(n) RageSettings.OrbitDistance = math.clamp(tonumber(n) or 15, 2, 200) end,
@@ -2534,11 +2539,26 @@ F.servers = {
 -- ============================================================
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+-- HC-specific knocked check via workspace.Players.Characters.<name>.BodyEffects["K.O"].Value
+local function _hcIsKnocked(plr)
+    if not plr then return false end
+    local wsPlayers = workspace:FindFirstChild("Players")
+    local chars = wsPlayers and wsPlayers:FindFirstChild("Characters")
+    if not chars then return false end
+    local char = chars:FindFirstChild(plr.Name)
+    if not char then return false end
+    local fx = char:FindFirstChild("BodyEffects")
+    if not fx then return false end
+    local ko = fx:FindFirstChild("K.O")
+    return ko ~= nil and ko.Value == true
+end
+
 local _hcStompConn   = nil
 local HC_STOMP_RADIUS    = 5    -- horizontal studs
 local HC_STOMP_VERT_UP   = 7    -- max studs we can be above them
 local HC_STOMP_VERT_DOWN = 1    -- max studs they can be above us
 local HC_STOMP_INTERVAL  = 0    -- seconds between fires; 0 = every Heartbeat
+local HC_STOMP_RAGE_TARGETS = false
 local _hcStompLast = 0
 
 local function _hcSomeoneBelowMe()
@@ -2568,9 +2588,33 @@ local function startHcAutoStomp()
     _hcStompConn = RunService.Heartbeat:Connect(function()
         if not G.hcAutoStompActive then return end
         if HC_STOMP_INTERVAL > 0 and tick() - _hcStompLast < HC_STOMP_INTERVAL then return end
-        if not _hcSomeoneBelowMe() then return end
         local me = ReplicatedStorage:FindFirstChild("MainEvent")
         if not me then return end
+
+        -- mode A: actively pursue knocked ragebot targets — TP onto them and
+        -- spam stomp until they respawn (i.e. K.O flips back to false)
+        if HC_STOMP_RAGE_TARGETS then
+            local list = F.ragebot.getTargetList and F.ragebot.getTargetList() or {}
+            for _, plr in ipairs(list) do
+                if _hcIsKnocked(plr) then
+                    local char = plr.Character
+                    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        local lc   = lplr.Character
+                        local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
+                        if lhrp then
+                            _uprightTp(lc, lhrp, hrp.Position + Vector3.new(0, 3, 0), nil)
+                        end
+                        _hcStompLast = tick()
+                        pcall(function() me:FireServer("Stomp") end)
+                        return
+                    end
+                end
+            end
+        end
+
+        -- mode B: passive — only stomp while we're physically standing on someone
+        if not _hcSomeoneBelowMe() then return end
         _hcStompLast = tick()
         pcall(function() me:FireServer("Stomp") end)
     end)
@@ -2588,6 +2632,9 @@ F.games.hoodCustoms.autoStomp.setRadius   = function(n) HC_STOMP_RADIUS   = math
 F.games.hoodCustoms.autoStomp.getRadius   = function() return HC_STOMP_RADIUS end
 F.games.hoodCustoms.autoStomp.setInterval = function(n) HC_STOMP_INTERVAL = math.clamp(tonumber(n) or 0, 0, 5) end
 F.games.hoodCustoms.autoStomp.getInterval = function() return HC_STOMP_INTERVAL end
+F.games.hoodCustoms.autoStomp.setRageTargets = function(b) HC_STOMP_RAGE_TARGETS = b == true end
+F.games.hoodCustoms.autoStomp.getRageTargets = function() return HC_STOMP_RAGE_TARGETS end
+F.games.hoodCustoms.isKnocked = _hcIsKnocked
 
 -- ============================================================
 --  GAMES: HOOD CUSTOMS - AUTO RELOAD
