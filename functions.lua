@@ -1395,38 +1395,48 @@ RunService.RenderStepped:Connect(function(dt)
     rbCachedTarget = hrp
 
     -- target line origin: Bottom / Center / Top / Mouse
-    -- Always draw, even when the target is off-screen or behind the camera —
-    -- we project onto the viewport edge so the line still points at them.
+    -- Always draw — even when target is off-screen or behind the camera
+    -- we project onto the screen edge so the line still points at them.
     if RB_targetLine then
-        if RageSettings.ShowLine and hrp then
-            local cam = workspace.CurrentCamera
-            local sp = cam:WorldToViewportPoint(hrp.Position)
+        local function isFinite(n) return type(n) == "number" and n == n and n ~= math.huge and n ~= -math.huge end
+
+        local cam = hrp and workspace.CurrentCamera
+        local pos = hrp and hrp.Position
+        local validPos = pos and isFinite(pos.X) and isFinite(pos.Y) and isFinite(pos.Z)
+
+        if RageSettings.ShowLine and hrp and validPos and cam then
+            local sp = cam:WorldToViewportPoint(pos)
             local vs = cam.ViewportSize
             local toX, toY = sp.X, sp.Y
-            -- if the target is behind the camera (sp.Z < 0), invert and rescale
-            -- so the projected point reflects across screen center
+
+            -- if behind camera, mirror across screen center and push outward
+            -- (capped to a sane multiplier so we never produce huge numbers)
             if sp.Z < 0 then
-                toX = vs.X - toX
-                toY = vs.Y - toY
-                -- push the point well off-screen in the inverted direction
                 local cx, cy = vs.X * 0.5, vs.Y * 0.5
-                toX = cx + (toX - cx) * 100
-                toY = cy + (toY - cy) * 100
+                toX = cx + (cx - toX) * 4
+                toY = cy + (cy - toY) * 4
             end
-            local origin = RageSettings.LineOrigin
-            local from
-            if origin == "Top" then
-                from = Vector2.new(vs.X * 0.5, 0)
-            elseif origin == "Center" then
-                from = Vector2.new(vs.X * 0.5, vs.Y * 0.5)
-            elseif origin == "Mouse" then
-                from = UserInputService:GetMouseLocation()
-            else  -- "Bottom" (default)
-                from = Vector2.new(vs.X * 0.5, vs.Y)
+
+            -- if anything went non-finite during projection, hide instead of
+            -- snapping to (0,0) where Drawing renders NaN
+            if not (isFinite(toX) and isFinite(toY)) then
+                RB_targetLine.Visible = false
+            else
+                local origin = RageSettings.LineOrigin
+                local from
+                if origin == "Top" then
+                    from = Vector2.new(vs.X * 0.5, 0)
+                elseif origin == "Center" then
+                    from = Vector2.new(vs.X * 0.5, vs.Y * 0.5)
+                elseif origin == "Mouse" then
+                    from = UserInputService:GetMouseLocation()
+                else
+                    from = Vector2.new(vs.X * 0.5, vs.Y)
+                end
+                RB_targetLine.From = from
+                RB_targetLine.To   = Vector2.new(toX, toY)
+                RB_targetLine.Visible = true
             end
-            RB_targetLine.From = from
-            RB_targetLine.To   = Vector2.new(toX, toY)
-            RB_targetLine.Visible = true
         else
             RB_targetLine.Visible = false
         end
