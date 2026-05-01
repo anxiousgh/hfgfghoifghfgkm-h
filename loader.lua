@@ -1128,6 +1128,18 @@ do
         end,
     })
 
+    HC:AddDivider()
+
+    -- ---- Godmode ----
+    HC:AddLabel("Godmode")
+    HC:AddToggle("HCGodmode", { Text = "Godmode (legs)",
+        Default = false,
+        Callback = function(v)
+            if v then F.games.hoodCustoms.godmode.start()
+            else      F.games.hoodCustoms.godmode.stop() end
+        end,
+    })
+
     end -- close: if not inHoodCustoms() then ... else ...
 end
 
