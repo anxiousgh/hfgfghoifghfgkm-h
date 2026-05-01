@@ -2506,97 +2506,6 @@ F.autoEquip.equip  = function(name) AutoEquipName = name; return _aeEquip(name) 
 F.autoEquip.setName = function(name) AutoEquipName = name end
 F.autoEquip.getName = function() return AutoEquipName end
 
--- ============================================================
---  HITBOX EXTENDER
---  Locally inflates the size of a chosen part on every other player.
---  Raycasts (and Mouse.Hit) honor the new size client-side, so silent
---  aim / triggerbot land far more reliably. Cosmetic locally — server
---  still has the original size, this can't hurt other players directly.
--- ============================================================
-local _hbOriginal     = setmetatable({}, { __mode = "k" })  -- weak keys
-local _hbConn         = nil
-local HitboxSize      = 8
-local HitboxTargetPart = "HumanoidRootPart"
-local HitboxTransparency = 0.6  -- visual hint that the box is huge; 1=invisible
-
-local function _hbApply()
-    local target = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
-    for _, plr in ipairs(plrs:GetPlayers()) do
-        if plr == lplr then continue end
-        local char = plr.Character; if not char then continue end
-        local part = char:FindFirstChild(HitboxTargetPart); if not part then continue end
-        if not part:IsA("BasePart") then continue end
-        if not _hbOriginal[part] then
-            _hbOriginal[part] = {
-                Size = part.Size, Transparency = part.Transparency,
-                CanCollide = part.CanCollide, Massless = part.Massless,
-            }
-        end
-        if part.Size ~= target then
-            pcall(function()
-                part.Size         = target
-                part.Transparency = HitboxTransparency
-                part.CanCollide   = false
-                part.Massless     = true
-            end)
-        end
-    end
-end
-
-local function _hbRestore()
-    for part, info in pairs(_hbOriginal) do
-        if part.Parent then
-            pcall(function()
-                part.Size         = info.Size
-                part.Transparency = info.Transparency
-                part.CanCollide   = info.CanCollide
-                part.Massless     = info.Massless
-            end)
-        end
-    end
-    _hbOriginal = setmetatable({}, { __mode = "k" })
-end
-
--- event-driven extender: apply only when a player joins or respawns,
--- not every Heartbeat. Way cheaper.
-local _hbCharConns = {}
-
-local function _hbHookPlayer(plr)
-    if plr == lplr then return end
-    if _hbCharConns[plr] then _hbCharConns[plr]:Disconnect() end
-    _hbCharConns[plr] = plr.CharacterAdded:Connect(function()
-        if not G.hitboxActive then return end
-        task.wait(0.5)
-        if G.hitboxActive then _hbApply() end
-    end)
-end
-
-local function startHitboxExtender()
-    G.hitboxActive = true
-    _hbApply()  -- one-shot apply now
-    -- hook current + future players for respawns
-    for _, p in ipairs(plrs:GetPlayers()) do _hbHookPlayer(p) end
-    if _hbConn then _hbConn:Disconnect() end
-    _hbConn = plrs.PlayerAdded:Connect(function(p)
-        _hbHookPlayer(p)
-        if G.hitboxActive then task.wait(0.5); _hbApply() end
-    end)
-end
-local function stopHitboxExtender()
-    G.hitboxActive = false
-    if _hbConn then _hbConn:Disconnect(); _hbConn = nil end
-    for plr, c in pairs(_hbCharConns) do pcall(function() c:Disconnect() end) end
-    _hbCharConns = {}
-    _hbRestore()
-end
-
-F.hitboxExtender = makeToggle(startHitboxExtender, stopHitboxExtender, "hitboxActive")
-F.hitboxExtender.setSize         = function(n) HitboxSize = math.clamp(tonumber(n) or 8, 1, 50); if G.hitboxActive then _hbApply() end end
-F.hitboxExtender.getSize         = function() return HitboxSize end
-F.hitboxExtender.setTargetPart   = function(s) HitboxTargetPart = tostring(s); if G.hitboxActive then _hbRestore(); _hbApply() end end
-F.hitboxExtender.getTargetPart   = function() return HitboxTargetPart end
-F.hitboxExtender.setTransparency = function(n) HitboxTransparency = math.clamp(tonumber(n) or 0.6, 0, 1); if G.hitboxActive then _hbApply() end end
-
 F.servers = {
     list = function(maxPages)
         maxPages = maxPages or 2
@@ -2652,13 +2561,15 @@ F.servers = {
 --  don't flood the server when there's nothing to stomp.
 -- ============================================================
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
--- cache MainEvent — re-resolve only when nil (avoids per-frame FindFirstChild in hot loops)
-local _mainEventCache
-local function getMainEvent()
-    if _mainEventCache and _mainEventCache.Parent then return _mainEventCache end
-    _mainEventCache = ReplicatedStorage:FindFirstChild("MainEvent")
-    return _mainEventCache
-end
+-- cached MainEvent getter (closure-local cache lives in IIFE, no extra top-level locals)
+local getMainEvent = (function()
+    local cache
+    return function()
+        if cache and cache.Parent then return cache end
+        cache = ReplicatedStorage:FindFirstChild("MainEvent")
+        return cache
+    end
+end)()
 
 -- HC-specific knocked check via workspace.Players.Characters.<name>.BodyEffects["K.O"].Value
 local function _hcIsKnocked(plr)
@@ -2987,7 +2898,7 @@ end)()
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
-    stopClickTp(); stopAutoRe(); stopHcAutoReload(); stopHcKnifeReach(); stopHcAntiAfkTag(); stopAutoEquip(); stopHitboxExtender()
+    stopClickTp(); stopAutoRe(); stopHcAutoReload(); stopHcKnifeReach(); stopHcAntiAfkTag(); stopAutoEquip()
     stopHcAutoStomp(); F.games.hoodCustoms.godmode.stop(); stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
