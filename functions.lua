@@ -2846,53 +2846,54 @@ end)()
 -- function's own register pool — none of them count against the file-
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
-    -- limbs: legs (R15 + R6) and arms (R15 + R6)
+    -- legs (R15 + R6) and arms (R15 + R6)
     local LIMB_PARTS = {
         "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
         "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand",
         "Left Leg","Right Leg","Left Arm","Right Arm",
     }
-    -- motors that root each limb chain to the torso (R15 + R6)
-    local ROOT_MOTOR_NAMES = {
-        "LeftHip","RightHip","LeftShoulder","RightShoulder",
-        "Left Hip","Right Hip","Left Shoulder","Right Shoulder",
-    }
     local VOID = CFrame.new(0, -50000, 0)
 
     local conn, charAddedConn
-    local savedMotors = {}    -- motor -> {part0, part1}
-    local currentLimbs = {}   -- list of leg/arm BaseParts
-    local currentChar = nil
+    local savedProps = {}    -- limb -> { col, mls } so we can restore on toggle off
+    local currentLimbs = {}
+    local currentChar  = nil
 
-    local function snapshotAndDetach(char)
+    -- Configure limbs ONCE per character: CanCollide=false (no physics
+    -- pushback when overlapping HRP/torso) and Massless=true (Motor6D
+    -- joint constraints can't drag the rest of the rig). Motors stay
+    -- attached so the local render goes through the joint chain and
+    -- you keep seeing your limbs in their natural animated pose. The
+    -- Heartbeat CFrame writes are what replicates → server sees the
+    -- limbs at the void, others see no limbs, hits miss.
+    local function configure(char)
         if not char then return end
         currentChar = char
         currentLimbs = {}
-        savedMotors  = {}
-        -- collect limbs
+        savedProps = {}
         for i = 1, #LIMB_PARTS do
             local p = char:FindFirstChild(LIMB_PARTS[i])
-            if p and p:IsA("BasePart") then table.insert(currentLimbs, p) end
-        end
-        -- find + detach root motors anywhere in the rig
-        for _, d in ipairs(char:GetDescendants()) do
-            if d:IsA("Motor6D") then
-                for j = 1, #ROOT_MOTOR_NAMES do
-                    if d.Name == ROOT_MOTOR_NAMES[j] then
-                        savedMotors[d] = { part0 = d.Part0, part1 = d.Part1 }
-                        pcall(function() d.Part0 = nil end)
-                        break
-                    end
-                end
+            if p and p:IsA("BasePart") then
+                table.insert(currentLimbs, p)
+                savedProps[p] = { col = p.CanCollide, mls = p.Massless }
+                pcall(function()
+                    p.CanCollide = false
+                    p.Massless   = true
+                end)
             end
         end
     end
 
-    local function reattach()
-        for m, info in pairs(savedMotors) do
-            if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
+    local function restore()
+        for p, info in pairs(savedProps) do
+            if p.Parent then
+                pcall(function()
+                    p.CanCollide = info.col
+                    p.Massless   = info.mls
+                end)
+            end
         end
-        savedMotors  = {}
+        savedProps   = {}
         currentLimbs = {}
         currentChar  = nil
     end
@@ -2902,11 +2903,11 @@ F.games.hoodCustoms.godmode = (function()
             G.hcGmActive = true
             if conn then conn:Disconnect() end
             if charAddedConn then charAddedConn:Disconnect() end
-            snapshotAndDetach(lplr.Character)
+            configure(lplr.Character)
             charAddedConn = lplr.CharacterAdded:Connect(function(c)
                 if not G.hcGmActive then return end
                 task.wait(0.3)
-                if G.hcGmActive then snapshotAndDetach(c) end
+                if G.hcGmActive then configure(c) end
             end)
             conn = RunService.Heartbeat:Connect(function()
                 if not G.hcGmActive then return end
@@ -2923,7 +2924,7 @@ F.games.hoodCustoms.godmode = (function()
             G.hcGmActive = false
             if conn then conn:Disconnect(); conn = nil end
             if charAddedConn then charAddedConn:Disconnect(); charAddedConn = nil end
-            reattach()
+            restore()
         end,
         "hcGmActive"
     )
