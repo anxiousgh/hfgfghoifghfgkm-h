@@ -2818,18 +2818,40 @@ F.games.hoodCustoms.godmode = (function()
     -- its own character parts) → server sees legs at the void, leg
     -- shots and stomps miss. HRP / torso stay attached so walking and
     -- the rest of the body work normally.
-    local R15_MOTORS = { "LeftHip", "RightHip" }
-    local R15_PARTS  = { "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot" }
-    local R6_MOTORS  = { "Left Hip", "Right Hip" }
-    local R6_PARTS   = { "Left Leg", "Right Leg" }
+    -- R15: hip motors live in LowerTorso, shoulder motors live in UpperTorso
+    -- R6: hip + shoulder motors all live in Torso
+    local R15_HIP_MOTORS  = { "LeftHip", "RightHip" }
+    local R15_SHO_MOTORS  = { "LeftShoulder", "RightShoulder" }
+    local R15_LEG_PARTS   = { "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot" }
+    local R15_ARM_PARTS   = { "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand" }
+    local R6_MOTORS = { "Left Hip", "Right Hip", "Left Shoulder", "Right Shoulder" }
+    local R6_PARTS  = { "Left Leg", "Right Leg", "Left Arm", "Right Arm" }
     local VOID = CFrame.new(0, 9999, 0)
 
     local hbConn, rsConn, charConn
-    local savedJoints, currentLegs, currentChar = nil, nil, nil
+    local savedJoints, currentLimbs, currentChar = nil, nil, nil
 
+    -- Returns: hipHost, shoulderHost, motorNames(list), partNames(list).
+    -- For R6, hipHost == shoulderHost == Torso. For R15 hips are in LowerTorso
+    -- and shoulders in UpperTorso, so they need different parents.
     local function findRig(c)
-        local lt = c:FindFirstChild("LowerTorso");  if lt then return lt, R15_MOTORS, R15_PARTS end
-        local t  = c:FindFirstChild("Torso");       if t  then return t,  R6_MOTORS,  R6_PARTS  end
+        local lt = c:FindFirstChild("LowerTorso")
+        local ut = c:FindFirstChild("UpperTorso")
+        if lt and ut then
+            local motors = {}
+            for _, n in ipairs(R15_HIP_MOTORS) do table.insert(motors, { host = lt, name = n }) end
+            for _, n in ipairs(R15_SHO_MOTORS) do table.insert(motors, { host = ut, name = n }) end
+            local parts = {}
+            for _, n in ipairs(R15_LEG_PARTS) do table.insert(parts, n) end
+            for _, n in ipairs(R15_ARM_PARTS) do table.insert(parts, n) end
+            return motors, parts
+        end
+        local t = c:FindFirstChild("Torso")
+        if t then
+            local motors = {}
+            for _, n in ipairs(R6_MOTORS) do table.insert(motors, { host = t, name = n }) end
+            return motors, R6_PARTS
+        end
         return nil
     end
 
@@ -2839,12 +2861,12 @@ F.games.hoodCustoms.godmode = (function()
                 if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
             end
         end
-        if currentLegs then
-            for _, p in ipairs(currentLegs) do
+        if currentLimbs then
+            for _, p in ipairs(currentLimbs) do
                 if p.Parent then pcall(function() p.LocalTransparencyModifier = 0 end) end
             end
         end
-        savedJoints, currentLegs, currentChar = nil, nil, nil
+        savedJoints, currentLimbs, currentChar = nil, nil, nil
     end
 
     local function apply(c)
@@ -2852,42 +2874,42 @@ F.games.hoodCustoms.godmode = (function()
         if hbConn then hbConn:Disconnect(); hbConn = nil end
         if rsConn then rsConn:Disconnect(); rsConn = nil end
         currentChar = c
-        local rig, motorNames, partNames
+        local motors, partNames
         local t0 = os.clock()
         repeat
-            rig, motorNames, partNames = findRig(c)
-            if rig then break end
+            motors, partNames = findRig(c)
+            if motors then break end
             task.wait(0.1)
         until os.clock() - t0 > 5 or not G.hcGmActive or c.Parent == nil
-        if not rig or not G.hcGmActive then return end
+        if not motors or not G.hcGmActive then return end
 
-        local legParts = {}
+        local limbParts = {}
         for _, n in ipairs(partNames) do
             local p = c:FindFirstChild(n) or c:WaitForChild(n, 2)
-            if p then table.insert(legParts, p) end
+            if p then table.insert(limbParts, p) end
         end
-        if #legParts == 0 then return end
+        if #limbParts == 0 then return end
 
-        -- detach hip motors so legs are physically free; CFrame can be
-        -- written without the joint dragging the torso/HRP
+        -- detach hip + shoulder motors so limbs are physically free;
+        -- CFrame can be written without the joint dragging the torso/HRP
         local saved = {}
-        for _, n in ipairs(motorNames) do
-            local m = rig:FindFirstChild(n) or rig:WaitForChild(n, 2)
+        for _, info in ipairs(motors) do
+            local m = info.host:FindFirstChild(info.name) or info.host:WaitForChild(info.name, 2)
             if m then saved[m] = { part0 = m.Part0, part1 = m.Part1 } end
         end
         for m, _ in pairs(saved) do pcall(function() m.Part0 = nil end) end
-        savedJoints = saved
-        currentLegs = legParts
+        savedJoints  = saved
+        currentLimbs = limbParts
 
         -- replicate void CFrames (client owns own char parts)
         hbConn = RunService.Heartbeat:Connect(function()
-            for _, p in ipairs(legParts) do
+            for _, p in ipairs(limbParts) do
                 if p.Parent then pcall(function() p.CFrame = VOID end) end
             end
         end)
         -- engine resets LocalTransparencyModifier each render frame; reapply
         rsConn = RunService.RenderStepped:Connect(function()
-            for _, p in ipairs(legParts) do
+            for _, p in ipairs(limbParts) do
                 if p.Parent then p.LocalTransparencyModifier = 1 end
             end
         end)
