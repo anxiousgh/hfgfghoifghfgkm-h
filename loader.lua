@@ -3,7 +3,7 @@
 --  executor: Potassium
 -- ============================================================
 
-local _functionsSrc = game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/functions.lua")
+local _functionsSrc = game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/functions.lua?_=" .. tick())
 local _fnFn, _fnErr = loadstring(_functionsSrc)
 if not _fnFn then
     error("[cclosure.vip] functions.lua failed to compile: " .. tostring(_fnErr), 0)
