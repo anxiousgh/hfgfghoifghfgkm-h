@@ -924,11 +924,16 @@ do
         end })
 
     -- auto-refresh tool list on backpack changes (optional, cheap)
-    if lplr:FindFirstChild("Backpack") then
-        lplr.Backpack.ChildAdded:Connect(function() task.defer(refreshToolList) end)
-        lplr.Backpack.ChildRemoved:Connect(function() task.defer(refreshToolList) end)
+    local function hookBackpack(bp)
+        if not bp then return end
+        bp.ChildAdded:Connect(function() task.defer(refreshToolList) end)
+        bp.ChildRemoved:Connect(function() task.defer(refreshToolList) end)
     end
-    lplr.CharacterAdded:Connect(function() task.wait(0.5); pcall(refreshToolList) end)
+    hookBackpack(LocalPlayer:FindFirstChildOfClass("Backpack"))
+    LocalPlayer.ChildAdded:Connect(function(c)
+        if c:IsA("Backpack") then hookBackpack(c) end
+    end)
+    LocalPlayer.CharacterAdded:Connect(function() task.wait(0.5); pcall(refreshToolList) end)
     task.defer(refreshToolList)
 
     -- =================== SERVER HOPPER ===================
