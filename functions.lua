@@ -2811,57 +2811,84 @@ end)()
 -- function's own register pool — none of them count against the file-
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
-    -- HC godmode = HRP CFrame/velocity DESYNC that abuses the anti-cheat's
-    -- backtrack detector. Pattern (used throughout vampireware too):
-    --   Heartbeat:     save real CFrame+velocity, write SPOOFED values
-    --                  (these replicate to the server)
-    --   RenderStepped: restore the real CFrame+velocity BEFORE we render,
-    --                  so locally everything looks normal
-    -- Frame ordering: RenderStepped → Stepped (physics) → Heartbeat → repl.
-    -- The server only ever sees the spoofed snapshots, so to other clients
-    -- our HRP appears to teleport at impossible velocities between ticks.
-    -- When a shooter clicks on our visible position, the server-side hit
-    -- check rejects it as backtrack abuse — they see "backtrack" error and
-    -- the damage never lands. Locally we render fine because RenderStepped
-    -- always restores before the camera draws.
-    local hbConn, rsConn, charConn
-    local saved    = { cf = nil }
-    local spoofing = false
-    -- offset just needs to exceed the anti-cheat's per-tick movement budget
-    -- to flag every shot at our visible position as backtrack. Y-up is
-    -- simplest — no rotation/velocity changes that might leak into the
-    -- camera's smoothing or local physics during the spoof→restore gap.
-    local SPOOF_OFFSET = Vector3.new(0, 10000, 0)
+    -- HC godmode = LIMB CFrame desync. Confirmed: it's legs + arms only.
+    -- Mechanism abuses the anti-cheat's backtrack detector — when a shooter
+    -- clicks on our visible limb position, the server compares against its
+    -- own snapshot (limb at void), the discrepancy exceeds the per-tick
+    -- movement budget, the shot is rejected and the shooter sees a
+    -- "backtrack" error.
+    --
+    -- Pattern (frame order: RenderStepped → Stepped → Physics → Heartbeat):
+    --   Heartbeat:     save each limb's natural CFrame, write VOID. The
+    --                  spoofed CFrame is what replicates to the server.
+    --   RenderStepped: restore the saved natural CFrame BEFORE physics +
+    --                  render run this frame. Locally the animator drives
+    --                  joints normally, no rig drag.
+    --
+    -- Motors stay attached so animations / walking work locally. The void
+    -- write happens AFTER physics each frame so joint impulses never see
+    -- the limb at the void position — no flinging.
+    local R15_LIMBS = { "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
+                        "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand" }
+    local R6_LIMBS  = { "Left Leg","Right Leg","Left Arm","Right Arm" }
+    local VOID = CFrame.new(0, 9999, 0)
 
-    local function spoof()
-        if not G.hcGmActive then return end
-        local c = lplr.Character; if not c then return end
-        local h = c:FindFirstChild("HumanoidRootPart"); if not h then return end
-        saved.cf = h.CFrame
-        spoofing = true
-        pcall(function() h.CFrame = saved.cf + SPOOF_OFFSET end)
+    local hbConn, rsConn, charConn
+    local currentLimbs = {}
+    local saved        = {}     -- limb -> CFrame snapshot from this frame
+    local spoofing     = false
+
+    local function findLimbs(c)
+        if not c then return {} end
+        local names = c:FindFirstChild("LowerTorso") and R15_LIMBS or R6_LIMBS
+        local list  = {}
+        for _, n in ipairs(names) do
+            local p = c:FindFirstChild(n)
+            if p and p:IsA("BasePart") then table.insert(list, p) end
+        end
+        return list
     end
 
-    local function restore()
-        if not spoofing then return end
+    local function spoofLimbs()
+        if not G.hcGmActive then return end
         local c = lplr.Character; if not c then return end
-        local h = c:FindFirstChild("HumanoidRootPart"); if not h then return end
-        if saved.cf then pcall(function() h.CFrame = saved.cf end) end
+        if currentLimbs[1] == nil or currentLimbs[1].Parent ~= c then
+            currentLimbs = findLimbs(c)
+        end
+        for i = 1, #currentLimbs do
+            local p = currentLimbs[i]
+            if p.Parent then
+                saved[p] = p.CFrame
+                pcall(function() p.CFrame = VOID end)
+            end
+        end
+        spoofing = true
+    end
+
+    local function restoreLimbs()
+        if not spoofing then return end
+        for p, cf in pairs(saved) do
+            if p.Parent then pcall(function() p.CFrame = cf end) end
+        end
         spoofing = false
     end
 
     local function bind()
         if hbConn then hbConn:Disconnect() end
         if rsConn then rsConn:Disconnect() end
-        hbConn = RunService.Heartbeat:Connect(spoof)
-        rsConn = RunService.RenderStepped:Connect(restore)
+        currentLimbs = findLimbs(lplr.Character)
+        hbConn = RunService.Heartbeat:Connect(spoofLimbs)
+        rsConn = RunService.RenderStepped:Connect(restoreLimbs)
     end
 
     return makeToggle(
         function()
             G.hcGmActive = true
             if charConn then charConn:Disconnect() end
-            charConn = lplr.CharacterAdded:Connect(function() task.wait(0.3); if G.hcGmActive then bind() end end)
+            charConn = lplr.CharacterAdded:Connect(function()
+                task.wait(0.3)
+                if G.hcGmActive then bind() end
+            end)
             bind()
         end,
         function()
@@ -2869,13 +2896,11 @@ F.games.hoodCustoms.godmode = (function()
             if hbConn   then hbConn:Disconnect();   hbConn   = nil end
             if rsConn   then rsConn:Disconnect();   rsConn   = nil end
             if charConn then charConn:Disconnect(); charConn = nil end
-            -- final restore in case we toggled off mid-frame between spoof and restore
-            local c = lplr.Character
-            if c and saved.cf then
-                local h = c:FindFirstChild("HumanoidRootPart")
-                if h then pcall(function() h.CFrame = saved.cf end) end
+            -- final restore in case toggled off mid-frame between spoof and restore
+            for p, cf in pairs(saved) do
+                if p.Parent then pcall(function() p.CFrame = cf end) end
             end
-            saved.cf, spoofing = nil, false
+            saved, currentLimbs, spoofing = {}, {}, false
         end,
         "hcGmActive"
     )
