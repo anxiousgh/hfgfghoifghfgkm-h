@@ -453,34 +453,6 @@ do
     end)
     LocalPlayer.CharacterAdded:Connect(function() task.wait(0.5); pcall(refreshToolList) end)
     task.defer(refreshToolList)
-
-    -- =================== HITBOX EXTENDER (left side, below the tabbox) ===================
-    local Hb = Tabs.Combat:AddLeftGroupbox("Hitbox")
-
-    Hb:AddToggle("HitboxEnabled", { Text = "Hitbox extender",
-        Default = false,
-        Callback = function(v) if v then F.hitboxExtender.start() else F.hitboxExtender.stop() end end,
-    })
-
-    Hb:AddSlider("HitboxSize", { Text = "Hitbox size",
-        Default = F.hitboxExtender.getSize(), Min = 1, Max = 50, Rounding = 0,
-        Callback = F.hitboxExtender.setSize })
-
-    Hb:AddDropdown("HitboxPart", {
-        Values = {
-            "HumanoidRootPart","Head","UpperTorso","LowerTorso","Torso",
-            "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand",
-            "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
-            "Left Arm","Right Arm","Left Leg","Right Leg",
-        },
-        Default = F.hitboxExtender.getTargetPart(),
-        Text = "Target part",
-        Callback = F.hitboxExtender.setTargetPart,
-    })
-
-    Hb:AddSlider("HitboxTransparency", { Text = "Transparency",
-        Default = 0.6, Min = 0, Max = 1, Rounding = 2,
-        Callback = F.hitboxExtender.setTransparency })
 end
 
 -- ============================================================
