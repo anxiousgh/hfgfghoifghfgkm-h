@@ -227,9 +227,20 @@ do
     local Tgt = CombatRight:AddTab("Ragebot")
 
     local targetLabel = Tgt:AddLabel("No target locked")
+    local listLabel   = Tgt:AddLabel("Targets: (none)", true)  -- DoesWrap
+
     local function refreshTargetLabel()
         local t = F.ragebot.getTarget()
         targetLabel:SetText(t and ("Locked: " .. t.Name) or "No target locked")
+
+        local list = F.ragebot.getTargetList()
+        if #list == 0 then
+            listLabel:SetText("Targets: (none)")
+        else
+            local names = {}
+            for _, pl in ipairs(list) do table.insert(names, pl.Name) end
+            listLabel:SetText(("Targets (%d): %s"):format(#list, table.concat(names, ", ")))
+        end
     end
 
     Tgt:AddButton({ Text = "TP behind target", Func = F.ragebot.tpBehind })
@@ -336,12 +347,19 @@ do
     end)
     bindFireKey("RageTpKey", F.ragebot.tpBehind)
 
-    -- keep label fresh on auto-switches
+    -- keep labels fresh on auto-switches and list changes
     task.spawn(function()
-        local last
+        local lastTarget
+        local lastListSig = ""
         while not Library.Unloaded do
             local t = F.ragebot.getTarget()
-            if t ~= last then last = t; refreshTargetLabel() end
+            local list = F.ragebot.getTargetList()
+            local sig = ""
+            for _, pl in ipairs(list) do sig = sig .. pl.Name .. "|" end
+            if t ~= lastTarget or sig ~= lastListSig then
+                lastTarget, lastListSig = t, sig
+                refreshTargetLabel()
+            end
             task.wait(0.25)
         end
     end)
