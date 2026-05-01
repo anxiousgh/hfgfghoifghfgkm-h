@@ -2811,131 +2811,83 @@ end)()
 -- function's own register pool — none of them count against the file-
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
-    -- LEGS ONLY. Detach the hip Motor6Ds so writing CFrame on a leg
-    -- doesn't drag the whole rig (joint constraint forces). Hide the
-    -- legs locally with LocalTransparencyModifier=1 so you don't see
-    -- broken/dangling legs. The CFrame writes replicate (client owns
-    -- its own character parts) → server sees legs at the void, leg
-    -- shots and stomps miss. HRP / torso stay attached so walking and
-    -- the rest of the body work normally.
-    -- R15: hip motors live in LowerTorso, shoulder motors live in UpperTorso
-    -- R6: hip + shoulder motors all live in Torso
-    local R15_HIP_MOTORS  = { "LeftHip", "RightHip" }
-    local R15_SHO_MOTORS  = { "LeftShoulder", "RightShoulder" }
-    local R15_LEG_PARTS   = { "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot" }
-    local R15_ARM_PARTS   = { "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand" }
-    local R6_MOTORS = { "Left Hip", "Right Hip", "Left Shoulder", "Right Shoulder" }
-    local R6_PARTS  = { "Left Leg", "Right Leg", "Left Arm", "Right Arm" }
-    local VOID = CFrame.new(0, 9999, 0)
-
+    -- HC godmode = HRP CFrame/velocity DESYNC that abuses the anti-cheat's
+    -- backtrack detector. Pattern (used throughout vampireware too):
+    --   Heartbeat:     save real CFrame+velocity, write SPOOFED values
+    --                  (these replicate to the server)
+    --   RenderStepped: restore the real CFrame+velocity BEFORE we render,
+    --                  so locally everything looks normal
+    -- Frame ordering: RenderStepped → Stepped (physics) → Heartbeat → repl.
+    -- The server only ever sees the spoofed snapshots, so to other clients
+    -- our HRP appears to teleport at impossible velocities between ticks.
+    -- When a shooter clicks on our visible position, the server-side hit
+    -- check rejects it as backtrack abuse — they see "backtrack" error and
+    -- the damage never lands. Locally we render fine because RenderStepped
+    -- always restores before the camera draws.
     local hbConn, rsConn, charConn
-    local savedJoints, currentLimbs, currentChar = nil, nil, nil
+    local saved   = { cf = nil, vel = nil }
+    local spoofing = false
+    local angle    = 0
 
-    -- Returns: hipHost, shoulderHost, motorNames(list), partNames(list).
-    -- For R6, hipHost == shoulderHost == Torso. For R15 hips are in LowerTorso
-    -- and shoulders in UpperTorso, so they need different parents.
-    local function findRig(c)
-        local lt = c:FindFirstChild("LowerTorso")
-        local ut = c:FindFirstChild("UpperTorso")
-        if lt and ut then
-            local motors = {}
-            for _, n in ipairs(R15_HIP_MOTORS) do table.insert(motors, { host = lt, name = n }) end
-            for _, n in ipairs(R15_SHO_MOTORS) do table.insert(motors, { host = ut, name = n }) end
-            local parts = {}
-            for _, n in ipairs(R15_LEG_PARTS) do table.insert(parts, n) end
-            for _, n in ipairs(R15_ARM_PARTS) do table.insert(parts, n) end
-            return motors, parts
-        end
-        local t = c:FindFirstChild("Torso")
-        if t then
-            local motors = {}
-            for _, n in ipairs(R6_MOTORS) do table.insert(motors, { host = t, name = n }) end
-            return motors, R6_PARTS
-        end
-        return nil
+    local function spoof()
+        if not G.hcGmActive then return end
+        local c = lplr.Character; if not c then return end
+        local h = c:FindFirstChild("HumanoidRootPart"); if not h then return end
+        saved.cf  = h.CFrame
+        saved.vel = h.AssemblyLinearVelocity
+        spoofing  = true
+        angle     = (angle + 45) % 360
+        -- rotate on all axes each frame so velocity hits from every direction;
+        -- combined with the huge AssemblyLinearVelocity this exceeds the
+        -- anti-cheat's per-tick movement budget on every snapshot.
+        pcall(function()
+            h.CFrame = h.CFrame * CFrame.Angles(
+                math.rad(angle),
+                math.rad(angle * 2),
+                math.rad(angle * 0.5)
+            )
+            h.AssemblyLinearVelocity = Vector3.new(1, 1, 1) * 16384
+        end)
     end
 
-    local function reattach()
-        if savedJoints then
-            for m, info in pairs(savedJoints) do
-                if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
-            end
-        end
-        if currentLimbs then
-            for _, p in ipairs(currentLimbs) do
-                if p.Parent then pcall(function() p.LocalTransparencyModifier = 0 end) end
-            end
-        end
-        savedJoints, currentLimbs, currentChar = nil, nil, nil
+    local function restore()
+        if not spoofing then return end
+        local c = lplr.Character; if not c then return end
+        local h = c:FindFirstChild("HumanoidRootPart"); if not h then return end
+        if saved.cf  then pcall(function() h.CFrame = saved.cf end) end
+        if saved.vel then pcall(function() h.AssemblyLinearVelocity = saved.vel end) end
+        spoofing = false
     end
 
-    local function apply(c)
-        if not G.hcGmActive or not c then return end
-        if hbConn then hbConn:Disconnect(); hbConn = nil end
-        if rsConn then rsConn:Disconnect(); rsConn = nil end
-        currentChar = c
-        local motors, partNames
-        local t0 = os.clock()
-        repeat
-            motors, partNames = findRig(c)
-            if motors then break end
-            task.wait(0.1)
-        until os.clock() - t0 > 5 or not G.hcGmActive or c.Parent == nil
-        if not motors or not G.hcGmActive then return end
-
-        local limbParts = {}
-        for _, n in ipairs(partNames) do
-            local p = c:FindFirstChild(n) or c:WaitForChild(n, 2)
-            if p then table.insert(limbParts, p) end
-        end
-        if #limbParts == 0 then return end
-
-        -- detach hip + shoulder motors so limbs are physically free;
-        -- CFrame can be written without the joint dragging the torso/HRP
-        local saved = {}
-        for _, info in ipairs(motors) do
-            local m = info.host:FindFirstChild(info.name) or info.host:WaitForChild(info.name, 2)
-            if m then saved[m] = { part0 = m.Part0, part1 = m.Part1 } end
-        end
-        for m, _ in pairs(saved) do pcall(function() m.Part0 = nil end) end
-        savedJoints  = saved
-        currentLimbs = limbParts
-
-        -- replicate void CFrames (client owns own char parts).
-        -- ALSO re-null Part0 every frame: HC's Animator/Animate script
-        -- restores the joint each render, which would otherwise let the
-        -- void-CFrame'd limb drag the torso/HRP through the joint chain.
-        hbConn = RunService.Heartbeat:Connect(function()
-            for m, _ in pairs(saved) do
-                if m.Parent and m.Part0 ~= nil then
-                    pcall(function() m.Part0 = nil end)
-                end
-            end
-            for _, p in ipairs(limbParts) do
-                if p.Parent then pcall(function() p.CFrame = VOID end) end
-            end
-        end)
-        -- engine resets LocalTransparencyModifier each render frame; reapply
-        rsConn = RunService.RenderStepped:Connect(function()
-            for _, p in ipairs(limbParts) do
-                if p.Parent then p.LocalTransparencyModifier = 1 end
-            end
-        end)
+    local function bind()
+        if hbConn then hbConn:Disconnect() end
+        if rsConn then rsConn:Disconnect() end
+        hbConn = RunService.Heartbeat:Connect(spoof)
+        rsConn = RunService.RenderStepped:Connect(restore)
     end
 
     return makeToggle(
         function()
             G.hcGmActive = true
             if charConn then charConn:Disconnect() end
-            charConn = lplr.CharacterAdded:Connect(function(c) task.spawn(apply, c) end)
-            if lplr.Character then task.spawn(apply, lplr.Character) end
+            charConn = lplr.CharacterAdded:Connect(function() task.wait(0.3); if G.hcGmActive then bind() end end)
+            bind()
         end,
         function()
             G.hcGmActive = false
             if hbConn   then hbConn:Disconnect();   hbConn   = nil end
             if rsConn   then rsConn:Disconnect();   rsConn   = nil end
             if charConn then charConn:Disconnect(); charConn = nil end
-            reattach()
+            -- final restore in case we toggled off mid-frame between spoof and restore
+            local c = lplr.Character
+            if c and saved.cf then
+                local h = c:FindFirstChild("HumanoidRootPart")
+                if h then
+                    pcall(function() h.CFrame = saved.cf end)
+                    if saved.vel then pcall(function() h.AssemblyLinearVelocity = saved.vel end) end
+                end
+            end
+            saved.cf, saved.vel, spoofing = nil, nil, false
         end,
         "hcGmActive"
     )
