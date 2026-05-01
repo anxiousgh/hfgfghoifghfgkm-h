@@ -841,53 +841,71 @@ do
     -- =================== SERVER HOPPER ===================
     local Srv = Tabs.Misc:AddLeftGroupbox("Server hop")
 
+    local _selectedServer = nil
+    local _serverSelLabel = Srv:AddLabel("Selected: none")
+    local function refreshSelLabel()
+        if _selectedServer then
+            _serverSelLabel:SetText(("Selected: #%d  %d/%d  %dms"):format(
+                _selectedServer.index or 0,
+                _selectedServer.playing,
+                _selectedServer.maxPlayers,
+                math.floor(_selectedServer.ping or 0)))
+        else
+            _serverSelLabel:SetText("Selected: none")
+        end
+    end
+
+    Srv:AddDivider()
+
     Srv:AddButton({ Text = "Rejoin current server", Func = F.servers.rejoin })
 
-    local _serverCache = {}  -- index -> server entry
-    local _serverDisplays = { "(no servers — click refresh)" }
+    Srv:AddButton({ Text = "Join selected", Func = function()
+        if not _selectedServer then Library:Notify("No server selected", 2); return end
+        Library:Notify("Teleporting...", 3)
+        F.servers.join(_selectedServer.jobId)
+    end })
 
-    Srv:AddDropdown("ServerPick", {
-        Values = _serverDisplays, Default = 1, Text = "Server",
-        Tooltip = "Public servers in this place (excludes the one you're in and full ones)",
-    })
+    -- right side: live server list, button per server (Players-tab pattern)
+    local List = Tabs.Misc:AddRightGroupbox("Servers")
+    List:AddLabel("Click Refresh, then click a server to select")
+    List:AddDivider()
 
-    local function refreshList()
+    local _serverButtons = {}
+
+    local function clearServerButtons()
+        for _, b in ipairs(_serverButtons) do
+            if b and b.Outer then pcall(function() b.Outer:Destroy() end) end
+        end
+        _serverButtons = {}
+    end
+
+    local function refreshServerList()
         Library:Notify("Fetching servers...", 2)
         task.spawn(function()
             local list = F.servers.list(2)
-            _serverCache = list
-            _serverDisplays = {}
+            clearServerButtons()
+            _selectedServer = nil
+            refreshSelLabel()
             if #list == 0 then
-                _serverDisplays = { "(no servers found)" }
-            else
-                for i, s in ipairs(list) do
-                    table.insert(_serverDisplays,
-                        ("#%d  %d/%d players  %dms"):format(i, s.playing, s.maxPlayers, math.floor(s.ping)))
-                end
+                Library:Notify("No servers found", 2)
+                return
             end
-            Options.ServerPick:SetValues(_serverDisplays)
-            Options.ServerPick:SetValue(_serverDisplays[1])
+            for i, s in ipairs(list) do
+                s.index = i
+                local btn = List:AddButton({
+                    Text = ("#%d  %d/%d  %dms"):format(i, s.playing, s.maxPlayers, math.floor(s.ping)),
+                    Func = function()
+                        _selectedServer = s
+                        refreshSelLabel()
+                    end,
+                })
+                table.insert(_serverButtons, btn)
+            end
             Library:Notify(("Found %d servers"):format(#list), 2)
         end)
     end
 
-    Srv:AddButton({ Text = "Refresh list", Func = refreshList })
-    :AddButton({ Text = "Join selected", Func = function()
-        local sel = Options.ServerPick.Value
-        if not sel then Library:Notify("No server selected", 2); return end
-        for i, disp in ipairs(_serverDisplays) do
-            if disp == sel then
-                local s = _serverCache[i]
-                if s and s.jobId then
-                    Library:Notify("Teleporting...", 3)
-                    F.servers.join(s.jobId)
-                else
-                    Library:Notify("Invalid selection — refresh", 2)
-                end
-                return
-            end
-        end
-    end })
+    Srv:AddButton({ Text = "Refresh list", Func = refreshServerList })
 end
 
 -- ============================================================
