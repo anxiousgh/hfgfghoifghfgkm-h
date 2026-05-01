@@ -2238,21 +2238,28 @@ F.ragebot.tpShoot = function()
     -- isn't blocked while we wait
     task.spawn(function()
         if rageOn then
-            -- two ways out of the wait, both check the TARGET:
-            --   K.O = false → TP back instantly (they got up / never knocked)
-            --   Dead = true → wait 0.5s then TP back
-            -- 10s safety cap.
-            local hc        = F.games and F.games.hoodCustoms
-            local isKnocked = (hc and hc.isKnocked) or function() return false end
-            local isDead    = (hc and hc.isDead)    or function() return false end
-            local deadline  = tick() + 10
-            local sawDead   = false
+            -- wait for the TARGET's BodyEffects.Dead to become true.
+            -- check both plr.Character.BodyEffects.Dead and the workspace
+            -- mirror at workspace.Players.Characters.<name>.BodyEffects.Dead
+            -- (whichever the game uses) — 10s safety cap.
+            local deadline = tick() + 10
+            local function targetDead()
+                local function isTrue(node)
+                    local fx = node and node:FindFirstChild("BodyEffects")
+                    local d  = fx and fx:FindFirstChild("Dead")
+                    return d ~= nil and d.Value == true
+                end
+                if isTrue(target.Character) then return true end
+                local wsp = workspace:FindFirstChild("Players")
+                local chars = wsp and wsp:FindFirstChild("Characters")
+                local mdl = chars and chars:FindFirstChild(target.Name)
+                if isTrue(mdl) then return true end
+                return false
+            end
             while tick() < deadline do
-                if isDead(target) then sawDead = true; break end
-                if not isKnocked(target) then break end
+                if targetDead() then break end
                 task.wait()
             end
-            if sawDead then task.wait(0.5) end
         else
             task.wait(0.15)
         end
@@ -2605,22 +2612,20 @@ local function _hcIsKnocked(plr)
     return ko ~= nil and ko.Value == true
 end
 
--- HC-specific dead check. Looks at BodyEffects.Dead on plr.Character first
--- (some games mirror it there) and falls back to the workspace mirror at
--- workspace.Players.Characters.<name>.BodyEffects.Dead.
+local function _hcReadDead(node)
+    local fx = node and node:FindFirstChild("BodyEffects")
+    local d  = fx and fx:FindFirstChild("Dead")
+    if d == nil then return false end
+    return d.Value == true
+end
+
 local function _hcIsDead(plr)
     if not plr then return false end
-    local function readDead(node)
-        local fx = node and node:FindFirstChild("BodyEffects")
-        local d  = fx and fx:FindFirstChild("Dead")
-        if d == nil then return false end
-        return d.Value == true
-    end
-    if readDead(plr.Character) then return true end
+    if _hcReadDead(plr.Character) then return true end
     local wsp = workspace:FindFirstChild("Players")
     local chars = wsp and wsp:FindFirstChild("Characters")
     local mdl = chars and chars:FindFirstChild(plr.Name)
-    return readDead(mdl)
+    return _hcReadDead(mdl)
 end
 
 local _hcStompConn   = nil
@@ -2629,9 +2634,7 @@ local HC_STOMP_VERT_UP   = 7    -- max studs we can be above them
 local HC_STOMP_VERT_DOWN = 1    -- max studs they can be above us
 local HC_STOMP_INTERVAL  = 0    -- seconds between fires; 0 = every Heartbeat
 local HC_STOMP_RAGE_TARGETS = false
-local _hcStompLast    = 0
-local _hcChaseTarget  = nil  -- the knocked ragebot target we're chasing
-local _hcChaseSavedCF = nil  -- where to TP back when they die
+local _hcStompLast = 0
 
 local function _hcSomeoneBelowMe()
     local lc = lplr.Character
@@ -2663,59 +2666,25 @@ local function startHcAutoStomp()
         local me = ReplicatedStorage:FindFirstChild("MainEvent")
         if not me then return end
 
-        -- mode A: pursue a knocked ragebot target.
-        -- Tracks ONE target until they die (BodyEffects.Dead = true) → TP
-        -- the user back to where they were when we started chasing. If they
-        -- get up before dying (K.O flips false), abort silently.
+        -- mode A: actively pursue knocked ragebot targets — TP onto them and
+        -- spam stomp until they respawn (i.e. K.O flips back to false)
         if HC_STOMP_RAGE_TARGETS then
-            -- already chasing someone? check if they died or got up
-            if _hcChaseTarget then
-                if _hcIsDead(_hcChaseTarget) then
-                    if _hcChaseSavedCF then
-                        local lc = lplr.Character
+            local list = F.ragebot.getTargetList and F.ragebot.getTargetList() or {}
+            for _, plr in ipairs(list) do
+                if _hcIsKnocked(plr) then
+                    local char = plr.Character
+                    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        local lc   = lplr.Character
                         local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
                         if lhrp then
-                            _uprightTp(lc, lhrp, _hcChaseSavedCF.Position, _hcChaseSavedCF.LookVector)
+                            _uprightTp(lc, lhrp, hrp.Position + Vector3.new(0, 3, 0), nil)
                         end
-                    end
-                    _hcChaseTarget  = nil
-                    _hcChaseSavedCF = nil
-                    return
-                end
-                if not _hcIsKnocked(_hcChaseTarget) then
-                    -- got up before dying — abort, no TP back
-                    _hcChaseTarget  = nil
-                    _hcChaseSavedCF = nil
-                end
-            end
-
-            -- if we're not chasing anyone, look for a knocked target
-            if not _hcChaseTarget then
-                local list = F.ragebot.getTargetList and F.ragebot.getTargetList() or {}
-                for _, plr in ipairs(list) do
-                    if _hcIsKnocked(plr) then
-                        _hcChaseTarget = plr
-                        local lhrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
-                        if lhrp then _hcChaseSavedCF = lhrp.CFrame end
-                        break
+                        _hcStompLast = tick()
+                        pcall(function() me:FireServer("Stomp") end)
+                        return
                     end
                 end
-            end
-
-            -- TP onto the chased target and stomp
-            if _hcChaseTarget then
-                local char = _hcChaseTarget.Character
-                local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local lc = lplr.Character
-                    local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
-                    if lhrp then
-                        _uprightTp(lc, lhrp, hrp.Position + Vector3.new(0, 3, 0), nil)
-                    end
-                end
-                _hcStompLast = tick()
-                pcall(function() me:FireServer("Stomp") end)
-                return
             end
         end
 
@@ -2729,8 +2698,6 @@ end
 local function stopHcAutoStomp()
     G.hcAutoStompActive = false
     if _hcStompConn then _hcStompConn:Disconnect(); _hcStompConn = nil end
-    _hcChaseTarget  = nil
-    _hcChaseSavedCF = nil
 end
 
 F.games = F.games or {}
