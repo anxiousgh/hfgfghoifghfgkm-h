@@ -462,6 +462,7 @@ end
 --  NOCLIP / FULLBRIGHT / FREECAM / ZOOM
 -- ============================================================
 G.noclipOriginals = {}
+G.noclipDisabledConns = {}  -- list of connections we Disabled, to Enable on stop
 
 local function stopNoclip()
     G.noclipActive=false
@@ -469,18 +470,25 @@ local function stopNoclip()
     if G.noclipHBConn then G.noclipHBConn:Disconnect(); G.noclipHBConn=nil end
     if G.noclipConn and type(G.noclipConn)~="boolean" then G.noclipConn:Disconnect() end
     G.noclipConn=nil
+    -- restore CanCollide to its saved original (correctly handles the false case)
     local char=lplr.Character
     if char then
         for _,p in ipairs(char:GetDescendants()) do
             if p:IsA("BasePart") then
-                p.CanCollide = G.noclipOriginals[p]~=nil and G.noclipOriginals[p] or true
+                local orig = G.noclipOriginals[p]
+                if orig ~= nil then p.CanCollide = orig else p.CanCollide = true end
             end
         end
     end
+    -- re-enable the game's CanCollide listeners we disabled at start
+    for _, c in ipairs(G.noclipDisabledConns) do
+        pcall(function() c:Enable() end)
+    end
+    G.noclipDisabledConns = {}
     G.noclipOriginals={}
 end
 local function startNoclip()
-    G.noclipActive=true; G.noclipOriginals={}
+    G.noclipActive=true; G.noclipOriginals={}; G.noclipDisabledConns={}
     local char=lplr.Character
     if char then
         for _,p in ipairs(char:GetDescendants()) do
@@ -496,7 +504,10 @@ local function startNoclip()
             for _,p in ipairs(c:GetDescendants()) do
                 if p:IsA("BasePart") then
                     for _,conn in ipairs(getconnections(p:GetPropertyChangedSignal("CanCollide"))) do
-                        if conn.LuaConnection then conn:Disable() end
+                        if conn.LuaConnection then
+                            conn:Disable()
+                            table.insert(G.noclipDisabledConns, conn)
+                        end
                     end
                 end
             end
