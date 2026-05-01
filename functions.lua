@@ -1287,10 +1287,6 @@ local function rbGetTarget()
             local char=plr.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart")
             if not hrp then continue end
             local hum=char:FindFirstChildOfClass("Humanoid"); if not hum or hum.Health<=0 then continue end
-            -- skip knocked targets when the toggle is on (HC: BodyEffects K.O)
-            if RageSettings.SkipKnocked
-                and F.games and F.games.hoodCustoms and F.games.hoodCustoms.isKnocked
-                and F.games.hoodCustoms.isKnocked(plr) then continue end
             local dist
             if useMouse then
                 local sp,onScreen=cam:WorldToViewportPoint(hrp.Position)
@@ -1381,28 +1377,41 @@ RunService.RenderStepped:Connect(function(dt)
     rbCachedTarget = hrp
 
     -- target line origin: Bottom / Center / Top / Mouse
+    -- Always draw, even when the target is off-screen or behind the camera —
+    -- we project onto the viewport edge so the line still points at them.
     if RB_targetLine then
         if RageSettings.ShowLine and hrp then
             local cam = workspace.CurrentCamera
-            local sp, on = cam:WorldToViewportPoint(hrp.Position)
-            if on then
-                local vs = cam.ViewportSize
-                local origin = RageSettings.LineOrigin
-                local from
-                if origin == "Top" then
-                    from = Vector2.new(vs.X * 0.5, 0)
-                elseif origin == "Center" then
-                    from = Vector2.new(vs.X * 0.5, vs.Y * 0.5)
-                elseif origin == "Mouse" then
-                    from = UserInputService:GetMouseLocation()
-                else  -- "Bottom" (default)
-                    from = Vector2.new(vs.X * 0.5, vs.Y)
-                end
-                RB_targetLine.From = from
-                RB_targetLine.To   = Vector2.new(sp.X, sp.Y)
-                RB_targetLine.Visible = true
-            else RB_targetLine.Visible = false end
-        else RB_targetLine.Visible = false end
+            local sp = cam:WorldToViewportPoint(hrp.Position)
+            local vs = cam.ViewportSize
+            local toX, toY = sp.X, sp.Y
+            -- if the target is behind the camera (sp.Z < 0), invert and rescale
+            -- so the projected point reflects across screen center
+            if sp.Z < 0 then
+                toX = vs.X - toX
+                toY = vs.Y - toY
+                -- push the point well off-screen in the inverted direction
+                local cx, cy = vs.X * 0.5, vs.Y * 0.5
+                toX = cx + (toX - cx) * 100
+                toY = cy + (toY - cy) * 100
+            end
+            local origin = RageSettings.LineOrigin
+            local from
+            if origin == "Top" then
+                from = Vector2.new(vs.X * 0.5, 0)
+            elseif origin == "Center" then
+                from = Vector2.new(vs.X * 0.5, vs.Y * 0.5)
+            elseif origin == "Mouse" then
+                from = UserInputService:GetMouseLocation()
+            else  -- "Bottom" (default)
+                from = Vector2.new(vs.X * 0.5, vs.Y)
+            end
+            RB_targetLine.From = from
+            RB_targetLine.To   = Vector2.new(toX, toY)
+            RB_targetLine.Visible = true
+        else
+            RB_targetLine.Visible = false
+        end
     end
 
     -- target outline: highlight on the locked character
@@ -1532,6 +1541,11 @@ RunService.Heartbeat:Connect(function()
     if (now - _rbEquipTime) < RageSettings.EquipDelay then return end
     if (now - _rbLastShot) < (RageSettings.AutoShootCooldown / 1000) then return end
     local plr = rbGetTarget(); if not plr then return end
+    -- skip knocked targets if the toggle is on (HC: BodyEffects K.O) — only auto-shoot,
+    -- silent aim still tracks them so you can keep targeting them visually
+    if RageSettings.SkipKnocked
+        and F.games and F.games.hoodCustoms and F.games.hoodCustoms.isKnocked
+        and F.games.hoodCustoms.isKnocked(plr) then return end
     local char = plr.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
     local lchar = lplr.Character
@@ -2224,13 +2238,26 @@ F.ragebot.tpShoot = function()
     -- isn't blocked while we wait
     task.spawn(function()
         if rageOn then
-            -- wait for lplr.Character.BodyEffects.Dead = true (10s safety cap)
+            -- wait for the TARGET's BodyEffects.Dead to become true.
+            -- check both plr.Character.BodyEffects.Dead and the workspace
+            -- mirror at workspace.Players.Characters.<name>.BodyEffects.Dead
+            -- (whichever the game uses) — 10s safety cap.
             local deadline = tick() + 10
+            local function targetDead()
+                local function isTrue(node)
+                    local fx = node and node:FindFirstChild("BodyEffects")
+                    local d  = fx and fx:FindFirstChild("Dead")
+                    return d ~= nil and d.Value == true
+                end
+                if isTrue(target.Character) then return true end
+                local wsp = workspace:FindFirstChild("Players")
+                local chars = wsp and wsp:FindFirstChild("Characters")
+                local mdl = chars and chars:FindFirstChild(target.Name)
+                if isTrue(mdl) then return true end
+                return false
+            end
             while tick() < deadline do
-                local nc = lplr.Character
-                local fx = nc and nc:FindFirstChild("BodyEffects")
-                local d  = fx and fx:FindFirstChild("Dead")
-                if d and d.Value == true then break end
+                if targetDead() then break end
                 task.wait()
             end
         else
@@ -2736,6 +2763,7 @@ local HC_KNIFE_MAX          = 13
 local HC_KNIFE_REACH_SIZE   = 13
 local HC_KNIFE_VISUALIZE    = false
 local _hcKnifeConn = nil
+local _hcKnifeHL   = nil  -- single shared Highlight, parented to CoreGui
 
 local function _hcKnifeHitbox()
     local char = lplr.Character; if not char then return nil end
@@ -2757,18 +2785,25 @@ local function startHcKnifeReach()
             pcall(function() hb.Size = target end)
         end
 
-        local hl = hb:FindFirstChild("_cclosure_kr_hl")
+        -- Visualize: keep a single Highlight in CoreGui, retarget its Adornee
+        -- to the current hitbox part. Parenting to CoreGui (not the part
+        -- itself) avoids issues where some tool scripts wipe child instances
+        -- on equip/unequip cycles.
         if HC_KNIFE_VISUALIZE then
-            if not hl then
-                hl = Instance.new("Highlight")
-                hl.Name = "_cclosure_kr_hl"
-                hl.FillTransparency    = 1
-                hl.OutlineTransparency = 0
-                hl.DepthMode           = Enum.HighlightDepthMode.Occluded
-                hl.Parent = hb
+            if not _hcKnifeHL or not _hcKnifeHL.Parent then
+                _hcKnifeHL = Instance.new("Highlight")
+                _hcKnifeHL.Name = "_cclosure_kr_hl"
+                _hcKnifeHL.FillTransparency    = 1
+                _hcKnifeHL.OutlineTransparency = 0
+                _hcKnifeHL.OutlineColor        = Color3.fromRGB(255, 80, 80)
+                _hcKnifeHL.DepthMode           = Enum.HighlightDepthMode.Occluded
+                pcall(function() _hcKnifeHL.Parent = game:GetService("CoreGui") end)
+                if not _hcKnifeHL.Parent then _hcKnifeHL.Parent = lplr:WaitForChild("PlayerGui") end
             end
+            if _hcKnifeHL.Adornee ~= hb then _hcKnifeHL.Adornee = hb end
+            _hcKnifeHL.Enabled = true
         else
-            if hl then hl:Destroy() end
+            if _hcKnifeHL then _hcKnifeHL.Enabled = false end
         end
     end)
 end
@@ -2779,9 +2814,8 @@ local function stopHcKnifeReach()
     local hb = _hcKnifeHitbox()
     if hb then
         pcall(function() hb.Size = HC_KNIFE_DEFAULT_SIZE end)
-        local hl = hb:FindFirstChild("_cclosure_kr_hl")
-        if hl then hl:Destroy() end
     end
+    if _hcKnifeHL then _hcKnifeHL.Enabled = false end
 end
 
 F.games.hoodCustoms.knifeReach = makeToggle(startHcKnifeReach, stopHcKnifeReach, "hcKnifeReachActive")
