@@ -837,6 +837,57 @@ do
     Options.AutoReloadKey:OnChanged(function()
         F.autoReload.setKey(Options.AutoReloadKey.Value)
     end)
+
+    -- =================== SERVER HOPPER ===================
+    local Srv = Tabs.Misc:AddLeftGroupbox("Server hop")
+
+    Srv:AddButton({ Text = "Rejoin current server", Func = F.servers.rejoin })
+
+    local _serverCache = {}  -- index -> server entry
+    local _serverDisplays = { "(no servers — click refresh)" }
+
+    Srv:AddDropdown("ServerPick", {
+        Values = _serverDisplays, Default = 1, Text = "Server",
+        Tooltip = "Public servers in this place (excludes the one you're in and full ones)",
+    })
+
+    local function refreshList()
+        Library:Notify("Fetching servers...", 2)
+        task.spawn(function()
+            local list = F.servers.list(2)
+            _serverCache = list
+            _serverDisplays = {}
+            if #list == 0 then
+                _serverDisplays = { "(no servers found)" }
+            else
+                for i, s in ipairs(list) do
+                    table.insert(_serverDisplays,
+                        ("#%d  %d/%d players  %dms"):format(i, s.playing, s.maxPlayers, math.floor(s.ping)))
+                end
+            end
+            Options.ServerPick:SetValues(_serverDisplays)
+            Options.ServerPick:SetValue(_serverDisplays[1])
+            Library:Notify(("Found %d servers"):format(#list), 2)
+        end)
+    end
+
+    Srv:AddButton({ Text = "Refresh list", Func = refreshList })
+    :AddButton({ Text = "Join selected", Func = function()
+        local sel = Options.ServerPick.Value
+        if not sel then Library:Notify("No server selected", 2); return end
+        for i, disp in ipairs(_serverDisplays) do
+            if disp == sel then
+                local s = _serverCache[i]
+                if s and s.jobId then
+                    Library:Notify("Teleporting...", 3)
+                    F.servers.join(s.jobId)
+                else
+                    Library:Notify("Invalid selection — refresh", 2)
+                end
+                return
+            end
+        end
+    end })
 end
 
 -- ============================================================
