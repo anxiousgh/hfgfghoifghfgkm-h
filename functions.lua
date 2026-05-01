@@ -2044,8 +2044,10 @@ F.antiVcBan = { fire = antiVcBanFire }
 --  damage to those (which is most damage in HC) is voided.
 --  Client owns its character parts so the CFrame replicates.
 -- ============================================================
--- ordered proximal -> distal so the local chain reconstruction works top-down
-local HC_R15_MOTORS = {"LeftHip","LeftKnee","LeftAnkle","RightHip","RightKnee","RightAnkle"}
+-- only the hip motor needs to be detached: cutting Part0 there frees the
+-- entire leg chain (knee/ankle keep their internal joints, but they no longer
+-- inherit position from the torso so we can park them at HC_VOID safely)
+local HC_R15_MOTORS = {"LeftHip","RightHip"}
 local HC_R15_PARTS  = {"LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot"}
 local HC_R6_MOTORS  = {"Left Hip","Right Hip"}
 local HC_R6_PARTS   = {"Left Leg","Right Leg"}
@@ -2061,6 +2063,11 @@ local function hcReattach()
     if G._hcSavedJoints then
         for m, info in pairs(G._hcSavedJoints) do
             if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
+        end
+    end
+    if G._hcCurLegParts then
+        for _, p in ipairs(G._hcCurLegParts) do
+            if p.Parent then pcall(function() p.LocalTransparencyModifier = 0 end) end
         end
     end
     G._hcSavedJoints = nil
@@ -2098,53 +2105,30 @@ local function hcApply(c)
     end
     if #legParts == 0 then return end
 
-    -- Knee/ankle motors live on UpperLeg/LowerLeg, not on rig.
-    -- Walk the whole character to find them by name.
-    local function findMotor(name)
-        for _, d in ipairs(c:GetDescendants()) do
-            if d:IsA("Motor6D") and d.Name == name then return d end
-        end
-    end
-
-    -- Save full motor state (C0/C1 needed to reconstruct local pose later).
-    -- partInfo[part] = { motor, parent (the motor's original Part0), c0, c1 }
+    -- save + detach the hip motors (whichever rig has them)
     local saved = {}
-    local partInfo = {}
     for _, n in ipairs(motorNames) do
-        local m = findMotor(n)
-        if m and m.Part0 and m.Part1 then
-            saved[m] = { part0 = m.Part0, part1 = m.Part1, c0 = m.C0, c1 = m.C1 }
-            partInfo[m.Part1] = { motor = m, parent = m.Part0, c0 = m.C0, c1 = m.C1 }
-        end
+        local m = rig:FindFirstChild(n) or rig:WaitForChild(n, 2)
+        if m then saved[m] = { part0 = m.Part0, part1 = m.Part1 } end
     end
-    -- Detach so writing Part1.CFrame doesn't drag the whole rig through the joint.
     for m, _ in pairs(saved) do pcall(function() m.Part0 = nil end) end
     G._hcSavedJoints = saved
     G._hcCurLegParts = legParts
 
-    -- Server view: HC_VOID, written every Heartbeat (the tick that replicates).
+    -- server view: legs at HC_VOID, written every Heartbeat to replicate
     G._hcGmHb = RunService.Heartbeat:Connect(function()
         for _, p in ipairs(legParts) do
             if p.Parent then pcall(function() p.CFrame = HC_VOID end) end
         end
     end)
 
-    -- Local view: every RenderStepped (before the frame is drawn), reconstruct
-    -- each leg's CFrame from its parent + saved joint offsets + the Animator's
-    -- Transform value (which still updates even with Part0=nil). This is the
-    -- same chain the engine would use if the motor were attached:
-    --   Part1.CFrame = Part0.CFrame * C0 * Transform * C1:Inverse()
-    -- We don't recurse for child legs (LowerLeg, Foot) — instead each part's
-    -- info points at its true parent so the chain naturally rebuilds top-down
-    -- as long as we iterate parts in proximal -> distal order, which we do
-    -- because partNames is ordered that way.
+    -- local view: hide the legs so you don't see them stuck at sky.
+    -- (LocalTransparencyModifier is reset by the engine each frame for character
+    -- parts, so we have to reapply on RenderStepped.) This is local-only — it
+    -- doesn't replicate, so other players still see the legs at HC_VOID.
     G._hcGmRs = RunService.RenderStepped:Connect(function()
         for _, p in ipairs(legParts) do
-            local info = partInfo[p]
-            if info and p.Parent and info.parent and info.parent.Parent then
-                local target = info.parent.CFrame * info.c0 * info.motor.Transform * info.c1:Inverse()
-                pcall(function() p.CFrame = target end)
-            end
+            if p.Parent then p.LocalTransparencyModifier = 1 end
         end
     end)
 end
