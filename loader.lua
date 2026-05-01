@@ -294,39 +294,18 @@ do
         Default = F.ragebot.settings.CamSmoothing, Min = 0.01, Max = 0.99, Rounding = 2,
         Callback = F.ragebot.setCamSmoothing })
 
-    -- auto / orbit
-    local Auto = CombatRight:AddTab("Auto / Orbit")
+    -- orbit-only tab
+    local Orbit = CombatRight:AddTab("Orbit")
 
-    Auto:AddToggle("RageAutoShoot",        { Text = "Auto shoot",
-        Default = F.ragebot.settings.AutoShoot, Callback = F.ragebot.setAutoShoot })
-    Auto:AddToggle("RageAutoShootVis",     { Text = "Require visible",
-        Default = F.ragebot.settings.AutoShootVis, Callback = F.ragebot.setAutoShootVis })
-    Auto:AddToggle("RageAutoShootReqTool", { Text = "Require tool",
-        Default = F.ragebot.settings.AutoShootRequireTool, Callback = F.ragebot.setAutoShootRequireTool })
-    Auto:AddToggle("RageFFCheck",          { Text = "Forcefield check",
-        Default = F.ragebot.settings.FFCheck, Callback = F.ragebot.setFFCheck })
-
-    Auto:AddSlider("RageAutoShootDist", { Text = "Max distance",
-        Default = F.ragebot.settings.AutoShootDist, Min = 1, Max = 500, Rounding = 0,
-        Callback = F.ragebot.setAutoShootDist })
-    Auto:AddSlider("RageCooldown", { Text = "Cooldown",
-        Default = F.ragebot.settings.AutoShootCooldown, Min = 0, Max = 2000, Rounding = 0,
-        Suffix = " ms", Callback = F.ragebot.setAutoShootCooldown })
-    Auto:AddSlider("RageEquipDelay", { Text = "Equip delay",
-        Default = F.ragebot.settings.EquipDelay, Min = 0, Max = 5, Rounding = 2,
-        Suffix = " s", Callback = F.ragebot.setEquipDelay })
-
-    Auto:AddDivider()
-
-    Auto:AddToggle("RageOrbit", { Text = "Orbit",
+    Orbit:AddToggle("RageOrbit", { Text = "Orbit",
         Default = F.ragebot.settings.Orbit, Callback = F.ragebot.setOrbit })
-    Auto:AddSlider("RageOrbitDist",   { Text = "Orbit distance",
+    Orbit:AddSlider("RageOrbitDist",   { Text = "Orbit distance",
         Default = F.ragebot.settings.OrbitDistance, Min = 2, Max = 200, Rounding = 0,
         Callback = F.ragebot.setOrbitDistance })
-    Auto:AddSlider("RageOrbitSpeed",  { Text = "Orbit speed",
+    Orbit:AddSlider("RageOrbitSpeed",  { Text = "Orbit speed",
         Default = F.ragebot.settings.OrbitSpeed, Min = 1, Max = 9999, Rounding = 0,
         Callback = F.ragebot.setOrbitSpeed })
-    Auto:AddSlider("RageOrbitHeight", { Text = "Orbit height",
+    Orbit:AddSlider("RageOrbitHeight", { Text = "Orbit height",
         Default = F.ragebot.settings.OrbitHeight, Min = -50, Max = 50, Rounding = 0,
         Callback = F.ragebot.setOrbitHeight })
 
@@ -395,9 +374,30 @@ do
         end
     end)
 
-    -- =================== AUTO (equip), right tabbox ===================
+    -- =================== AUTO (auto-shoot + auto-equip), right tabbox ===================
     local AutoT = CombatRight:AddTab("Auto")
 
+    AutoT:AddLabel("Auto shoot")
+    AutoT:AddToggle("RageAutoShoot",        { Text = "Auto shoot",
+        Default = F.ragebot.settings.AutoShoot, Callback = F.ragebot.setAutoShoot })
+    AutoT:AddToggle("RageAutoShootVis",     { Text = "Require visible",
+        Default = F.ragebot.settings.AutoShootVis, Callback = F.ragebot.setAutoShootVis })
+    AutoT:AddToggle("RageAutoShootReqTool", { Text = "Require tool",
+        Default = F.ragebot.settings.AutoShootRequireTool, Callback = F.ragebot.setAutoShootRequireTool })
+    AutoT:AddToggle("RageFFCheck",          { Text = "Forcefield check",
+        Default = F.ragebot.settings.FFCheck, Callback = F.ragebot.setFFCheck })
+
+    AutoT:AddSlider("RageAutoShootDist", { Text = "Max distance",
+        Default = F.ragebot.settings.AutoShootDist, Min = 1, Max = 500, Rounding = 0,
+        Callback = F.ragebot.setAutoShootDist })
+    AutoT:AddSlider("RageCooldown", { Text = "Cooldown",
+        Default = F.ragebot.settings.AutoShootCooldown, Min = 0, Max = 2000, Rounding = 0,
+        Suffix = " ms", Callback = F.ragebot.setAutoShootCooldown })
+    AutoT:AddSlider("RageEquipDelay", { Text = "Equip delay",
+        Default = F.ragebot.settings.EquipDelay, Min = 0, Max = 5, Rounding = 2,
+        Suffix = " s", Callback = F.ragebot.setEquipDelay })
+
+    AutoT:AddDivider()
     AutoT:AddLabel("Auto equip")
 
     AutoT:AddDropdown("AutoEquipTool", {
@@ -406,11 +406,21 @@ do
         Callback = function(v) F.autoEquip.setName(v) end,
     })
 
+    -- Preserve current selection on refresh — equipping moves a tool from the
+    -- backpack into the character, so the list rebuilds and the user's pick
+    -- would otherwise jump to whatever ends up alphabetically first.
     local function refreshToolList()
         local list = F.autoEquip.list()
         if #list == 0 then list = { "(no tools)" } end
+        local current = Options.AutoEquipTool and Options.AutoEquipTool.Value
         Options.AutoEquipTool:SetValues(list)
-        Options.AutoEquipTool:SetValue(list[1])
+        local keep = false
+        for _, n in ipairs(list) do if n == current then keep = true; break end end
+        if keep then
+            Options.AutoEquipTool:SetValue(current)
+        else
+            Options.AutoEquipTool:SetValue(list[1])
+        end
     end
 
     AutoT:AddButton({ Text = "Refresh tool list", Func = refreshToolList })
@@ -1098,6 +1108,43 @@ do
     Options.HCAutoReloadKey:OnChanged(function()
         F.games.hoodCustoms.autoReload.setKey(Options.HCAutoReloadKey.Value)
     end)
+
+    HC:AddDivider()
+
+    -- ---- Knife reach ----
+    HC:AddLabel("Knife reach")
+    HC:AddToggle("HCKnifeReach", { Text = "Enable knife reach",
+        Tooltip = "Resizes Knife.Handle.HITBOX_PART up to (size, size, size). Survives respawn.",
+        Default = false,
+        Callback = function(v)
+            if v then F.games.hoodCustoms.knifeReach.start()
+            else      F.games.hoodCustoms.knifeReach.stop() end
+        end })
+
+    HC:AddSlider("HCKnifeReachSize", { Text = "Hitbox size",
+        Tooltip = "Anything above 13 triggers HC's anti-cheat. Slider is clamped to 13.",
+        Default = F.games.hoodCustoms.knifeReach.getSize(),
+        Min = 1, Max = F.games.hoodCustoms.knifeReach.maxSize, Rounding = 1,
+        Suffix = " studs",
+        Callback = F.games.hoodCustoms.knifeReach.setSize })
+
+    HC:AddToggle("HCKnifeReachVis", { Text = "Visualize hitbox",
+        Tooltip = "Adds a Highlight (FillTransparency=1, DepthMode=Occluded) to the hitbox part so you can see it through walls.",
+        Default = false,
+        Callback = F.games.hoodCustoms.knifeReach.setVisualize })
+
+    HC:AddDivider()
+
+    -- ---- Anti-AFK tag ----
+    HC:AddLabel("Anti-AFK")
+    HC:AddToggle("HCAntiAfkTag", { Text = "Anti-AFK tag",
+        Tooltip = "Watches HumanoidRootPart.CharacterAFK (BillboardGui). If Enabled flips to true, fires MainEvent:FireServer(\"RequestAFKDisplay\", false) to clear it. Survives respawn.",
+        Default = false,
+        Callback = function(v)
+            if v then F.games.hoodCustoms.antiAfkTag.start()
+            else      F.games.hoodCustoms.antiAfkTag.stop() end
+        end,
+    })
 
     end -- close: if not inHoodCustoms() then ... else ...
 end
