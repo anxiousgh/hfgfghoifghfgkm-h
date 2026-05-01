@@ -2454,57 +2454,61 @@ F.ragebot.targetGui = makeToggle(startRbTargetGui, stopRbTargetGui, "rbTargetGui
 --  Picks a tool by name and equips it. Optionally auto-equips it
 --  on respawn so you never spawn empty-handed.
 -- ============================================================
-local AutoEquipName  = nil
-local _aeCharConn    = nil
+F.autoEquip = (function()
+    local name
+    local charConn
 
-local function _aeListTools()
-    local out, seen = {}, {}
-    local function consider(t)
-        if t:IsA("Tool") and not seen[t.Name] then seen[t.Name] = true; table.insert(out, t.Name) end
+    local function listTools()
+        local out, seen = {}, {}
+        local function consider(t)
+            if t:IsA("Tool") and not seen[t.Name] then seen[t.Name] = true; table.insert(out, t.Name) end
+        end
+        if lplr:FindFirstChild("Backpack") then
+            for _, t in ipairs(lplr.Backpack:GetChildren()) do consider(t) end
+        end
+        if lplr.Character then
+            for _, t in ipairs(lplr.Character:GetChildren()) do consider(t) end
+        end
+        table.sort(out)
+        return out
     end
-    if lplr:FindFirstChild("Backpack") then
-        for _, t in ipairs(lplr.Backpack:GetChildren()) do consider(t) end
+
+    local function equip(n)
+        if not n or n == "" then return false end
+        local char = lplr.Character; if not char then return false end
+        local hum = char:FindFirstChildOfClass("Humanoid"); if not hum then return false end
+        local tool = (lplr:FindFirstChild("Backpack") and lplr.Backpack:FindFirstChild(n))
+                  or char:FindFirstChild(n)
+        if not tool or not tool:IsA("Tool") then return false end
+        pcall(function() hum:EquipTool(tool) end)
+        return true
     end
-    if lplr.Character then
-        for _, t in ipairs(lplr.Character:GetChildren()) do consider(t) end
+
+    local function start()
+        G.autoEquipActive = true
+        if charConn then charConn:Disconnect() end
+        charConn = lplr.CharacterAdded:Connect(function()
+            if not G.autoEquipActive then return end
+            if not name or name == "" then return end
+            local bp = lplr:WaitForChild("Backpack", 10); if not bp then return end
+            bp:WaitForChild(name, 10)
+            if not G.autoEquipActive then return end
+            equip(name)
+        end)
     end
-    table.sort(out)
-    return out
-end
 
-local function _aeEquip(name)
-    if not name or name == "" then return false end
-    local char = lplr.Character; if not char then return false end
-    local hum = char:FindFirstChildOfClass("Humanoid"); if not hum then return false end
-    local tool = (lplr:FindFirstChild("Backpack") and lplr.Backpack:FindFirstChild(name))
-              or char:FindFirstChild(name)
-    if not tool or not tool:IsA("Tool") then return false end
-    pcall(function() hum:EquipTool(tool) end)
-    return true
-end
+    local function stop()
+        G.autoEquipActive = false
+        if charConn then charConn:Disconnect(); charConn = nil end
+    end
 
-local function startAutoEquip()
-    G.autoEquipActive = true
-    if _aeCharConn then _aeCharConn:Disconnect() end
-    _aeCharConn = lplr.CharacterAdded:Connect(function()
-        if not G.autoEquipActive then return end
-        if not AutoEquipName or AutoEquipName == "" then return end
-        local bp = lplr:WaitForChild("Backpack", 10); if not bp then return end
-        bp:WaitForChild(AutoEquipName, 10)
-        if not G.autoEquipActive then return end
-        _aeEquip(AutoEquipName)
-    end)
-end
-local function stopAutoEquip()
-    G.autoEquipActive = false
-    if _aeCharConn then _aeCharConn:Disconnect(); _aeCharConn = nil end
-end
-
-F.autoEquip = makeToggle(startAutoEquip, stopAutoEquip, "autoEquipActive")
-F.autoEquip.list   = _aeListTools
-F.autoEquip.equip  = function(name) AutoEquipName = name; return _aeEquip(name) end
-F.autoEquip.setName = function(name) AutoEquipName = name end
-F.autoEquip.getName = function() return AutoEquipName end
+    local t = makeToggle(start, stop, "autoEquipActive")
+    t.list    = listTools
+    t.equip   = function(n) name = n; return equip(n) end
+    t.setName = function(n) name = n end
+    t.getName = function() return name end
+    return t
+end)()
 
 F.servers = {
     list = function(maxPages)
@@ -2585,145 +2589,138 @@ local function _hcIsKnocked(plr)
     return ko ~= nil and ko.Value == true
 end
 
-local _hcStompConn   = nil
-local HC_STOMP_RADIUS    = 5    -- horizontal studs
-local HC_STOMP_VERT_UP   = 7    -- max studs we can be above them
-local HC_STOMP_VERT_DOWN = 1    -- max studs they can be above us
-local HC_STOMP_INTERVAL  = 0    -- seconds between fires; 0 = every Heartbeat
-local HC_STOMP_RAGE_TARGETS = false
-local _hcStompLast = 0
+F.games = F.games or {}
+F.games.hoodCustoms = F.games.hoodCustoms or {}
+F.games.hoodCustoms.isKnocked = _hcIsKnocked
 
-local function _hcSomeoneBelowMe()
-    local lc = lplr.Character
-    local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
-    if not lhrp then return false end
-    for _, p in ipairs(plrs:GetPlayers()) do
-        if p == lplr then continue end
-        local char = p.Character; if not char then continue end
-        local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then continue end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then continue end
-        local d = lhrp.Position - hrp.Position
-        local horizD = Vector2.new(d.X, d.Z).Magnitude
-        if horizD <= HC_STOMP_RADIUS
-            and d.Y <= HC_STOMP_VERT_UP
-            and d.Y >= -HC_STOMP_VERT_DOWN then
-            return true
+F.games.hoodCustoms.autoStomp = (function()
+    local conn
+    local last = 0
+    local radius, vertUp, vertDown = 5, 7, 1
+    local interval = 0
+    local rageTargets = false
+
+    local function someoneBelow()
+        local lc = lplr.Character
+        local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
+        if not lhrp then return false end
+        for _, p in ipairs(plrs:GetPlayers()) do
+            if p == lplr then continue end
+            local char = p.Character; if not char then continue end
+            local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then continue end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum or hum.Health <= 0 then continue end
+            local d = lhrp.Position - hrp.Position
+            local horizD = Vector2.new(d.X, d.Z).Magnitude
+            if horizD <= radius and d.Y <= vertUp and d.Y >= -vertDown then return true end
         end
+        return false
     end
-    return false
-end
 
-local function startHcAutoStomp()
-    G.hcAutoStompActive = true
-    if _hcStompConn then _hcStompConn:Disconnect() end
-    _hcStompConn = RunService.Heartbeat:Connect(function()
-        if not G.hcAutoStompActive then return end
-        if HC_STOMP_INTERVAL > 0 and tick() - _hcStompLast < HC_STOMP_INTERVAL then return end
-        local me = getMainEvent()
-        if not me then return end
-
-        -- mode A: actively pursue knocked ragebot targets — TP onto them and
-        -- spam stomp until they respawn (i.e. K.O flips back to false)
-        if HC_STOMP_RAGE_TARGETS then
-            local list = F.ragebot.getTargetList and F.ragebot.getTargetList() or {}
-            for _, plr in ipairs(list) do
-                if _hcIsKnocked(plr) then
-                    local char = plr.Character
-                    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-                    if hrp then
-                        local lc   = lplr.Character
-                        local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
-                        if lhrp then
-                            _uprightTp(lc, lhrp, hrp.Position + Vector3.new(0, 3, 0), nil)
+    local function start()
+        G.hcAutoStompActive = true
+        if conn then conn:Disconnect() end
+        conn = RunService.Heartbeat:Connect(function()
+            if not G.hcAutoStompActive then return end
+            if interval > 0 and tick() - last < interval then return end
+            local me = getMainEvent()
+            if not me then return end
+            if rageTargets then
+                local list = F.ragebot.getTargetList and F.ragebot.getTargetList() or {}
+                for _, plr in ipairs(list) do
+                    if _hcIsKnocked(plr) then
+                        local char = plr.Character
+                        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            local lc   = lplr.Character
+                            local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
+                            if lhrp then _uprightTp(lc, lhrp, hrp.Position + Vector3.new(0, 3, 0), nil) end
+                            last = tick()
+                            pcall(function() me:FireServer("Stomp") end)
+                            return
                         end
-                        _hcStompLast = tick()
-                        pcall(function() me:FireServer("Stomp") end)
-                        return
                     end
                 end
             end
-        end
+            if not someoneBelow() then return end
+            last = tick()
+            pcall(function() me:FireServer("Stomp") end)
+        end)
+    end
 
-        -- mode B: passive — only stomp while we're physically standing on someone
-        if not _hcSomeoneBelowMe() then return end
-        _hcStompLast = tick()
-        pcall(function() me:FireServer("Stomp") end)
-    end)
-end
+    local function stop()
+        G.hcAutoStompActive = false
+        if conn then conn:Disconnect(); conn = nil end
+    end
 
-local function stopHcAutoStomp()
-    G.hcAutoStompActive = false
-    if _hcStompConn then _hcStompConn:Disconnect(); _hcStompConn = nil end
-end
-
-F.games = F.games or {}
-F.games.hoodCustoms = F.games.hoodCustoms or {}
-F.games.hoodCustoms.autoStomp = makeToggle(startHcAutoStomp, stopHcAutoStomp, "hcAutoStompActive")
-F.games.hoodCustoms.autoStomp.setRadius   = function(n) HC_STOMP_RADIUS   = math.clamp(tonumber(n) or 5, 1, 30) end
-F.games.hoodCustoms.autoStomp.getRadius   = function() return HC_STOMP_RADIUS end
-F.games.hoodCustoms.autoStomp.setInterval = function(n) HC_STOMP_INTERVAL = math.clamp(tonumber(n) or 0, 0, 5) end
-F.games.hoodCustoms.autoStomp.getInterval = function() return HC_STOMP_INTERVAL end
-F.games.hoodCustoms.autoStomp.setRageTargets = function(b) HC_STOMP_RAGE_TARGETS = b == true end
-F.games.hoodCustoms.autoStomp.getRageTargets = function() return HC_STOMP_RAGE_TARGETS end
-F.games.hoodCustoms.isKnocked = _hcIsKnocked
+    local t = makeToggle(start, stop, "hcAutoStompActive")
+    t.setRadius      = function(n) radius   = math.clamp(tonumber(n) or 5, 1, 30) end
+    t.getRadius      = function() return radius end
+    t.setInterval    = function(n) interval = math.clamp(tonumber(n) or 0, 0, 5) end
+    t.getInterval    = function() return interval end
+    t.setRageTargets = function(b) rageTargets = b == true end
+    t.getRageTargets = function() return rageTargets end
+    return t
+end)()
 
 -- ============================================================
 --  GAMES: HOOD CUSTOMS - AUTO RELOAD
 --  Reads exactly:  lplr.Character.<Tool>.Script.Ammo
 --  When that IntValue is <= threshold, sends the configured reload key.
 -- ============================================================
-local HC_RELOAD_KEY       = Enum.KeyCode.R
-local HC_RELOAD_THRESHOLD = 0
-local HC_RELOAD_COOLDOWN  = 1.5
-local _hcReloadLast = 0
-local _hcReloadConn = nil
+F.games.hoodCustoms.autoReload = (function()
+    local key = Enum.KeyCode.R
+    local threshold = 0
+    local cooldown = 1.5
+    local last = 0
+    local conn
 
-local function _hcGetAmmoValue()
-    local char = lplr.Character;                                      if not char then return nil end
-    local tool = char:FindFirstChildOfClass("Tool");                  if not tool then return nil end
-    local script = tool:FindFirstChild("Script");                     if not script then return nil end
-    local ammo = script:FindFirstChild("Ammo")
-    if ammo and (ammo:IsA("IntValue") or ammo:IsA("NumberValue")) then return ammo end
-    return nil
-end
+    local function getAmmo()
+        local char = lplr.Character;                                      if not char then return nil end
+        local tool = char:FindFirstChildOfClass("Tool");                  if not tool then return nil end
+        local script = tool:FindFirstChild("Script");                     if not script then return nil end
+        local ammo = script:FindFirstChild("Ammo")
+        if ammo and (ammo:IsA("IntValue") or ammo:IsA("NumberValue")) then return ammo end
+        return nil
+    end
 
-local function _hcReloadFire()
-    pcall(function()
-        local vim = VirtualInputManager
-        vim:SendKeyEvent(true,  HC_RELOAD_KEY, false, game)
-        task.wait(0.05)
-        vim:SendKeyEvent(false, HC_RELOAD_KEY, false, game)
-    end)
-end
+    local function fireKey()
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(true,  key, false, game)
+            task.wait(0.05)
+            VirtualInputManager:SendKeyEvent(false, key, false, game)
+        end)
+    end
 
-local function startHcAutoReload()
-    G.hcAutoReloadActive = true
-    if _hcReloadConn then _hcReloadConn:Disconnect() end
-    _hcReloadConn = RunService.Heartbeat:Connect(function()
-        if not G.hcAutoReloadActive then return end
-        if tick() - _hcReloadLast < HC_RELOAD_COOLDOWN then return end
-        local ammo = _hcGetAmmoValue();              if not ammo then return end
-        if ammo.Value > HC_RELOAD_THRESHOLD then return end
-        _hcReloadLast = tick()
-        _hcReloadFire()
-    end)
-end
+    local function start()
+        G.hcAutoReloadActive = true
+        if conn then conn:Disconnect() end
+        conn = RunService.Heartbeat:Connect(function()
+            if not G.hcAutoReloadActive then return end
+            if tick() - last < cooldown then return end
+            local ammo = getAmmo();              if not ammo then return end
+            if ammo.Value > threshold then return end
+            last = tick()
+            fireKey()
+        end)
+    end
 
-local function stopHcAutoReload()
-    G.hcAutoReloadActive = false
-    if _hcReloadConn then _hcReloadConn:Disconnect(); _hcReloadConn = nil end
-end
+    local function stop()
+        G.hcAutoReloadActive = false
+        if conn then conn:Disconnect(); conn = nil end
+    end
 
-F.games.hoodCustoms.autoReload = makeToggle(startHcAutoReload, stopHcAutoReload, "hcAutoReloadActive")
-F.games.hoodCustoms.autoReload.setKey = function(k)
-    if typeof(k) == "EnumItem" then HC_RELOAD_KEY = k
-    elseif type(k) == "string" then HC_RELOAD_KEY = Enum.KeyCode[k] or HC_RELOAD_KEY end
-end
-F.games.hoodCustoms.autoReload.setThreshold = function(n) HC_RELOAD_THRESHOLD = tonumber(n) or 0 end
-F.games.hoodCustoms.autoReload.getThreshold = function() return HC_RELOAD_THRESHOLD end
-F.games.hoodCustoms.autoReload.setCooldown  = function(n) HC_RELOAD_COOLDOWN  = math.clamp(tonumber(n) or 1.5, 0.1, 10) end
-F.games.hoodCustoms.autoReload.getCooldown  = function() return HC_RELOAD_COOLDOWN end
+    local t = makeToggle(start, stop, "hcAutoReloadActive")
+    t.setKey = function(k)
+        if typeof(k) == "EnumItem" then key = k
+        elseif type(k) == "string" then key = Enum.KeyCode[k] or key end
+    end
+    t.setThreshold = function(n) threshold = tonumber(n) or 0 end
+    t.getThreshold = function() return threshold end
+    t.setCooldown  = function(n) cooldown = math.clamp(tonumber(n) or 1.5, 0.1, 10) end
+    t.getCooldown  = function() return cooldown end
+    return t
+end)()
 
 -- ============================================================
 --  GAMES: HOOD CUSTOMS - KNIFE REACH
@@ -2731,75 +2728,66 @@ F.games.hoodCustoms.autoReload.getCooldown  = function() return HC_RELOAD_COOLDO
 --  Anything above that triggers HC's anti-cheat. Survives respawn via a
 --  Heartbeat loop that re-applies whenever the knife reappears.
 -- ============================================================
-local HC_KNIFE_DEFAULT_SIZE = Vector3.new(2.5, 1, 1)
-local HC_KNIFE_MAX          = 13
-local HC_KNIFE_REACH_SIZE   = 13
-local HC_KNIFE_VISUALIZE    = false
-local _hcKnifeConn = nil
+F.games.hoodCustoms.knifeReach = (function()
+    local DEFAULT = Vector3.new(2.5, 1, 1)
+    local MAX     = 13
+    local size, visualize = 13, false
+    local conn
 
--- Tool is literally named "[Knife]" (square brackets). Check Backpack first
--- (unequipped), then Character (equipped) — matches the working snippet.
-local function _hcKnifeHitbox()
-    local function find(p)
-        local k = p and p:FindFirstChild("[Knife]")
-        if not k then return nil end
-        local h = k:FindFirstChild("Handle"); if not h then return nil end
-        return h:FindFirstChild("HITBOX_PART")
+    local function getHb()
+        local function find(p)
+            local k = p and p:FindFirstChild("[Knife]")
+            if not k then return nil end
+            local h = k:FindFirstChild("Handle"); if not h then return nil end
+            return h:FindFirstChild("HITBOX_PART")
+        end
+        return find(lplr:FindFirstChildOfClass("Backpack")) or find(lplr.Character)
     end
-    return find(lplr:FindFirstChildOfClass("Backpack")) or find(lplr.Character)
-end
 
-local function startHcKnifeReach()
-    G.hcKnifeReachActive = true
-    if _hcKnifeConn then _hcKnifeConn:Disconnect() end
-    _hcKnifeConn = RunService.Heartbeat:Connect(function()
-        if not G.hcKnifeReachActive then return end
-        local hb = _hcKnifeHitbox(); if not hb then return end
-
-        local s = HC_KNIFE_REACH_SIZE
-        local target = Vector3.new(s, s, s)
-        if hb.Size ~= target then
-            pcall(function() hb.Size = target end)
-        end
-        if hb.Transparency ~= 0.9999 then
-            pcall(function() hb.Transparency = 0.9999 end)
-        end
-
-        local hl = hb:FindFirstChild("_kr_hl")
-        if HC_KNIFE_VISUALIZE then
-            if not hl then
-                hl = Instance.new("Highlight")
-                hl.Name             = "_kr_hl"
-                hl.FillTransparency = 1
-                hl.DepthMode        = Enum.HighlightDepthMode.Occluded
-                hl.Parent           = hb
+    local function start()
+        G.hcKnifeReachActive = true
+        if conn then conn:Disconnect() end
+        conn = RunService.Heartbeat:Connect(function()
+            if not G.hcKnifeReachActive then return end
+            local hb = getHb(); if not hb then return end
+            local target = Vector3.new(size, size, size)
+            if hb.Size ~= target then pcall(function() hb.Size = target end) end
+            if hb.Transparency ~= 0.9999 then pcall(function() hb.Transparency = 0.9999 end) end
+            local hl = hb:FindFirstChild("_kr_hl")
+            if visualize then
+                if not hl then
+                    hl = Instance.new("Highlight")
+                    hl.Name             = "_kr_hl"
+                    hl.FillTransparency = 1
+                    hl.DepthMode        = Enum.HighlightDepthMode.Occluded
+                    hl.Parent           = hb
+                end
+            else
+                if hl then hl:Destroy() end
             end
-        else
+        end)
+    end
+
+    local function stop()
+        G.hcKnifeReachActive = false
+        if conn then conn:Disconnect(); conn = nil end
+        local hb = getHb()
+        if hb then
+            pcall(function() hb.Size = DEFAULT end)
+            pcall(function() hb.Transparency = 1 end)
+            local hl = hb:FindFirstChild("_kr_hl")
             if hl then hl:Destroy() end
         end
-    end)
-end
-
-local function stopHcKnifeReach()
-    G.hcKnifeReachActive = false
-    if _hcKnifeConn then _hcKnifeConn:Disconnect(); _hcKnifeConn = nil end
-    local hb = _hcKnifeHitbox()
-    if hb then
-        pcall(function() hb.Size = HC_KNIFE_DEFAULT_SIZE end)
-        pcall(function() hb.Transparency = 1 end)
-        local hl = hb:FindFirstChild("_kr_hl")
-        if hl then hl:Destroy() end
     end
-end
 
-F.games.hoodCustoms.knifeReach = makeToggle(startHcKnifeReach, stopHcKnifeReach, "hcKnifeReachActive")
-F.games.hoodCustoms.knifeReach.setSize = function(n)
-    HC_KNIFE_REACH_SIZE = math.clamp(tonumber(n) or HC_KNIFE_MAX, 1, HC_KNIFE_MAX)
-end
-F.games.hoodCustoms.knifeReach.getSize = function() return HC_KNIFE_REACH_SIZE end
-F.games.hoodCustoms.knifeReach.maxSize = HC_KNIFE_MAX
-F.games.hoodCustoms.knifeReach.setVisualize = function(b) HC_KNIFE_VISUALIZE = b == true end
-F.games.hoodCustoms.knifeReach.getVisualize = function() return HC_KNIFE_VISUALIZE end
+    local t = makeToggle(start, stop, "hcKnifeReachActive")
+    t.setSize       = function(n) size = math.clamp(tonumber(n) or MAX, 1, MAX) end
+    t.getSize       = function() return size end
+    t.maxSize       = MAX
+    t.setVisualize  = function(b) visualize = b == true end
+    t.getVisualize  = function() return visualize end
+    return t
+end)()
 
 -- ============================================================
 --  GAMES: HOOD CUSTOMS - ANTI-AFK TAG
@@ -2808,58 +2796,51 @@ F.games.hoodCustoms.knifeReach.getVisualize = function() return HC_KNIFE_VISUALI
 --  MainEvent:FireServer("RequestAFKDisplay", false) to clear it.
 --  Survives respawn (re-hooks via CharacterAdded).
 -- ============================================================
-local _hcAfkPropConn = nil
-local _hcAfkCharConn = nil
+F.games.hoodCustoms.antiAfkTag = (function()
+    local propConn, charConn
 
-local function _hcAfkClearOnce()
-    local me = getMainEvent()
-    if me then pcall(function() me:FireServer("RequestAFKDisplay", false) end) end
-end
-
-local function _hcAfkHook(char)
-    if not char then return end
-    local hrp = char:WaitForChild("HumanoidRootPart", 5); if not hrp then return end
-    local gui = hrp:WaitForChild("CharacterAFK", 5); if not gui then return end
-    if _hcAfkPropConn then _hcAfkPropConn:Disconnect() end
-
-    -- Hide locally immediately so the tag never visually appears, even for one
-    -- frame. The property-changed signal fires synchronously on assignment, so
-    -- when the game tries to set Enabled=true we override it to false in the
-    -- same call stack — the engine never gets a chance to render it.
-    if gui.Enabled then
-        pcall(function() gui.Enabled = false end)
-        _hcAfkClearOnce()
+    local function clearOnce()
+        local me = getMainEvent()
+        if me then pcall(function() me:FireServer("RequestAFKDisplay", false) end) end
     end
-    _hcAfkPropConn = gui:GetPropertyChangedSignal("Enabled"):Connect(function()
-        if not G.hcAntiAfkTagActive then return end
+
+    local function hook(char)
+        if not char then return end
+        local hrp = char:WaitForChild("HumanoidRootPart", 5); if not hrp then return end
+        local gui = hrp:WaitForChild("CharacterAFK", 5); if not gui then return end
+        if propConn then propConn:Disconnect() end
         if gui.Enabled then
             pcall(function() gui.Enabled = false end)
-            _hcAfkClearOnce()
+            clearOnce()
         end
-    end)
-end
+        propConn = gui:GetPropertyChangedSignal("Enabled"):Connect(function()
+            if not G.hcAntiAfkTagActive then return end
+            if gui.Enabled then
+                pcall(function() gui.Enabled = false end)
+                clearOnce()
+            end
+        end)
+    end
 
-local function startHcAntiAfkTag()
-    G.hcAntiAfkTagActive = true
-    if _hcAfkCharConn then _hcAfkCharConn:Disconnect() end
-    _hcAfkCharConn = lplr.CharacterAdded:Connect(function(c)
-        if G.hcAntiAfkTagActive then task.spawn(_hcAfkHook, c) end
-    end)
-    if lplr.Character then task.spawn(_hcAfkHook, lplr.Character) end
-end
+    local function start()
+        G.hcAntiAfkTagActive = true
+        if charConn then charConn:Disconnect() end
+        charConn = lplr.CharacterAdded:Connect(function(c)
+            if G.hcAntiAfkTagActive then task.spawn(hook, c) end
+        end)
+        if lplr.Character then task.spawn(hook, lplr.Character) end
+    end
 
-local function stopHcAntiAfkTag()
-    G.hcAntiAfkTagActive = false
-    if _hcAfkPropConn then _hcAfkPropConn:Disconnect(); _hcAfkPropConn = nil end
-    if _hcAfkCharConn then _hcAfkCharConn:Disconnect(); _hcAfkCharConn = nil end
-end
+    local function stop()
+        G.hcAntiAfkTagActive = false
+        if propConn then propConn:Disconnect(); propConn = nil end
+        if charConn then charConn:Disconnect(); charConn = nil end
+    end
 
-F.games.hoodCustoms.antiAfkTag = makeToggle(startHcAntiAfkTag, stopHcAntiAfkTag, "hcAntiAfkTagActive")
-
--- always-on by default — clear any current AFK tag and lock the BillboardGui
--- to disabled for the rest of the session. The toggle in the UI can still
--- turn it off if needed; this just means the user doesn't have to touch it.
-task.spawn(startHcAntiAfkTag)
+    -- always-on by default
+    task.spawn(start)
+    return makeToggle(start, stop, "hcAntiAfkTagActive")
+end)()
 
 -- HC godmode: built inside an IIFE so all its locals live in the inner
 -- function's own register pool — none of them count against the file-
@@ -2898,8 +2879,11 @@ end)()
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
-    stopClickTp(); stopAutoRe(); stopHcAutoReload(); stopHcKnifeReach(); stopHcAntiAfkTag(); stopAutoEquip()
-    stopHcAutoStomp(); F.games.hoodCustoms.godmode.stop(); stopNoclip(); stopFullbright(); stopFreecam()
+    stopClickTp(); stopAutoRe(); F.autoEquip.stop()
+    F.games.hoodCustoms.antiAfkTag.stop(); F.games.hoodCustoms.autoStomp.stop()
+    F.games.hoodCustoms.autoReload.stop(); F.games.hoodCustoms.godmode.stop()
+    F.games.hoodCustoms.knifeReach.stop()
+    stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
     TrigSettings.Enabled=false
