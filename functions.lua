@@ -2846,61 +2846,75 @@ end)()
 -- function's own register pool — none of them count against the file-
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
-    local conn
-    local legs = {"LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot","Left Leg","Right Leg"}
-    local saved = setmetatable({}, { __mode = "k" })  -- weak: part -> {col, mls}
+    -- limbs: legs (R15 + R6) and arms (R15 + R6)
+    local LIMB_PARTS = {
+        "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
+        "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand",
+        "Left Leg","Right Leg","Left Arm","Right Arm",
+    }
+    -- motors that root each limb chain to the torso (R15 + R6)
+    local ROOT_MOTOR_NAMES = {
+        "LeftHip","RightHip","LeftShoulder","RightShoulder",
+        "Left Hip","Right Hip","Left Shoulder","Right Shoulder",
+    }
+    local VOID = CFrame.new(0, -50000, 0)
 
-    local function configureLegs(char)
+    local conn, charAddedConn
+    local savedMotors = {}    -- motor -> {part0, part1}
+    local currentLimbs = {}   -- list of leg/arm BaseParts
+    local currentChar = nil
+
+    local function snapshotAndDetach(char)
         if not char then return end
-        for i = 1, #legs do
-            local limb = char:FindFirstChild(legs[i])
-            if limb and limb:IsA("BasePart") and not saved[limb] then
-                saved[limb] = { col = limb.CanCollide, mls = limb.Massless }
-                pcall(function()
-                    limb.CanCollide = false
-                    limb.Massless   = true
-                end)
+        currentChar = char
+        currentLimbs = {}
+        savedMotors  = {}
+        -- collect limbs
+        for i = 1, #LIMB_PARTS do
+            local p = char:FindFirstChild(LIMB_PARTS[i])
+            if p and p:IsA("BasePart") then table.insert(currentLimbs, p) end
+        end
+        -- find + detach root motors anywhere in the rig
+        for _, d in ipairs(char:GetDescendants()) do
+            if d:IsA("Motor6D") then
+                for j = 1, #ROOT_MOTOR_NAMES do
+                    if d.Name == ROOT_MOTOR_NAMES[j] then
+                        savedMotors[d] = { part0 = d.Part0, part1 = d.Part1 }
+                        pcall(function() d.Part0 = nil end)
+                        break
+                    end
+                end
             end
         end
     end
 
-    local function restoreLegs()
-        for limb, info in pairs(saved) do
-            if limb.Parent then
-                pcall(function()
-                    limb.CanCollide = info.col
-                    limb.Massless   = info.mls
-                end)
-            end
+    local function reattach()
+        for m, info in pairs(savedMotors) do
+            if m.Parent then pcall(function() m.Part0 = info.part0; m.Part1 = info.part1 end) end
         end
-        saved = setmetatable({}, { __mode = "k" })
+        savedMotors  = {}
+        currentLimbs = {}
+        currentChar  = nil
     end
 
     return makeToggle(
         function()
             G.hcGmActive = true
             if conn then conn:Disconnect() end
-            configureLegs(lplr.Character)
-            -- re-configure on respawn so the legs stay massless / non-colliding
-            local charAdded = lplr.CharacterAdded:Connect(function(c)
+            if charAddedConn then charAddedConn:Disconnect() end
+            snapshotAndDetach(lplr.Character)
+            charAddedConn = lplr.CharacterAdded:Connect(function(c)
                 if not G.hcGmActive then return end
                 task.wait(0.3)
-                if G.hcGmActive then configureLegs(c) end
+                if G.hcGmActive then snapshotAndDetach(c) end
             end)
             conn = RunService.Heartbeat:Connect(function()
-                if not G.hcGmActive then
-                    if charAdded then charAdded:Disconnect(); charAdded = nil end
-                    return
-                end
-                local char = lplr.Character
-                if not char then return end
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if not hrp then return end
-                local target = hrp.CFrame
-                for i = 1, #legs do
-                    local limb = char:FindFirstChild(legs[i])
-                    if limb then
-                        pcall(function() limb.CFrame = target end)
+                if not G.hcGmActive then return end
+                if currentChar ~= lplr.Character then return end
+                for i = 1, #currentLimbs do
+                    local p = currentLimbs[i]
+                    if p.Parent then
+                        pcall(function() p.CFrame = VOID end)
                     end
                 end
             end)
@@ -2908,7 +2922,8 @@ F.games.hoodCustoms.godmode = (function()
         function()
             G.hcGmActive = false
             if conn then conn:Disconnect(); conn = nil end
-            restoreLegs()
+            if charAddedConn then charAddedConn:Disconnect(); charAddedConn = nil end
+            reattach()
         end,
         "hcGmActive"
     )
