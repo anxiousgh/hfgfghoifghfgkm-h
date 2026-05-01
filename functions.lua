@@ -2716,10 +2716,123 @@ F.games.hoodCustoms.autoReload.getThreshold = function() return HC_RELOAD_THRESH
 F.games.hoodCustoms.autoReload.setCooldown  = function(n) HC_RELOAD_COOLDOWN  = math.clamp(tonumber(n) or 1.5, 0.1, 10) end
 F.games.hoodCustoms.autoReload.getCooldown  = function() return HC_RELOAD_COOLDOWN end
 
+-- ============================================================
+--  GAMES: HOOD CUSTOMS - KNIFE REACH
+--  Resizes lplr.Character.Knife.Handle.HITBOX_PART up to MAX (13,13,13).
+--  Anything above that triggers HC's anti-cheat. Survives respawn via a
+--  Heartbeat loop that re-applies whenever the knife reappears.
+-- ============================================================
+local HC_KNIFE_DEFAULT_SIZE = Vector3.new(2.5, 1, 1)
+local HC_KNIFE_MAX          = 13
+local HC_KNIFE_REACH_SIZE   = 13
+local HC_KNIFE_VISUALIZE    = false
+local _hcKnifeConn = nil
+
+local function _hcKnifeHitbox()
+    local char = lplr.Character; if not char then return nil end
+    local k = char:FindFirstChild("Knife");      if not k then return nil end
+    local h = k:FindFirstChild("Handle");        if not h then return nil end
+    return h:FindFirstChild("HITBOX_PART")
+end
+
+local function startHcKnifeReach()
+    G.hcKnifeReachActive = true
+    if _hcKnifeConn then _hcKnifeConn:Disconnect() end
+    _hcKnifeConn = RunService.Heartbeat:Connect(function()
+        if not G.hcKnifeReachActive then return end
+        local hb = _hcKnifeHitbox(); if not hb then return end
+
+        local s = HC_KNIFE_REACH_SIZE
+        local target = Vector3.new(s, s, s)
+        if hb.Size ~= target then
+            pcall(function() hb.Size = target end)
+        end
+
+        local hl = hb:FindFirstChild("_cclosure_kr_hl")
+        if HC_KNIFE_VISUALIZE then
+            if not hl then
+                hl = Instance.new("Highlight")
+                hl.Name = "_cclosure_kr_hl"
+                hl.FillTransparency    = 1
+                hl.OutlineTransparency = 0
+                hl.DepthMode           = Enum.HighlightDepthMode.Occluded
+                hl.Parent = hb
+            end
+        else
+            if hl then hl:Destroy() end
+        end
+    end)
+end
+
+local function stopHcKnifeReach()
+    G.hcKnifeReachActive = false
+    if _hcKnifeConn then _hcKnifeConn:Disconnect(); _hcKnifeConn = nil end
+    local hb = _hcKnifeHitbox()
+    if hb then
+        pcall(function() hb.Size = HC_KNIFE_DEFAULT_SIZE end)
+        local hl = hb:FindFirstChild("_cclosure_kr_hl")
+        if hl then hl:Destroy() end
+    end
+end
+
+F.games.hoodCustoms.knifeReach = makeToggle(startHcKnifeReach, stopHcKnifeReach, "hcKnifeReachActive")
+F.games.hoodCustoms.knifeReach.setSize = function(n)
+    HC_KNIFE_REACH_SIZE = math.clamp(tonumber(n) or HC_KNIFE_MAX, 1, HC_KNIFE_MAX)
+end
+F.games.hoodCustoms.knifeReach.getSize = function() return HC_KNIFE_REACH_SIZE end
+F.games.hoodCustoms.knifeReach.maxSize = HC_KNIFE_MAX
+F.games.hoodCustoms.knifeReach.setVisualize = function(b) HC_KNIFE_VISUALIZE = b == true end
+F.games.hoodCustoms.knifeReach.getVisualize = function() return HC_KNIFE_VISUALIZE end
+
+-- ============================================================
+--  GAMES: HOOD CUSTOMS - ANTI-AFK TAG
+--  Watches HumanoidRootPart.CharacterAFK (BillboardGui).Enabled.
+--  When it goes true the game has flagged you as AFK; we fire
+--  MainEvent:FireServer("RequestAFKDisplay", false) to clear it.
+--  Survives respawn (re-hooks via CharacterAdded).
+-- ============================================================
+local _hcAfkPropConn = nil
+local _hcAfkCharConn = nil
+
+local function _hcAfkClearOnce()
+    local me = ReplicatedStorage:FindFirstChild("MainEvent")
+    if me then pcall(function() me:FireServer("RequestAFKDisplay", false) end) end
+end
+
+local function _hcAfkHook(char)
+    if not char then return end
+    local hrp = char:WaitForChild("HumanoidRootPart", 5); if not hrp then return end
+    local gui = hrp:WaitForChild("CharacterAFK", 5); if not gui then return end
+    if _hcAfkPropConn then _hcAfkPropConn:Disconnect() end
+    -- if it's already flagged when we hook in, clear immediately
+    if gui.Enabled then _hcAfkClearOnce() end
+    _hcAfkPropConn = gui:GetPropertyChangedSignal("Enabled"):Connect(function()
+        if not G.hcAntiAfkTagActive then return end
+        if gui.Enabled then _hcAfkClearOnce() end
+    end)
+end
+
+local function startHcAntiAfkTag()
+    G.hcAntiAfkTagActive = true
+    if _hcAfkCharConn then _hcAfkCharConn:Disconnect() end
+    _hcAfkCharConn = lplr.CharacterAdded:Connect(function(c)
+        if G.hcAntiAfkTagActive then task.spawn(_hcAfkHook, c) end
+    end)
+    if lplr.Character then task.spawn(_hcAfkHook, lplr.Character) end
+end
+
+local function stopHcAntiAfkTag()
+    G.hcAntiAfkTagActive = false
+    if _hcAfkPropConn then _hcAfkPropConn:Disconnect(); _hcAfkPropConn = nil end
+    if _hcAfkCharConn then _hcAfkCharConn:Disconnect(); _hcAfkCharConn = nil end
+end
+
+F.games.hoodCustoms.antiAfkTag = makeToggle(startHcAntiAfkTag, stopHcAntiAfkTag, "hcAntiAfkTagActive")
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
-    stopClickTp(); stopAutoRe(); stopHcAutoReload(); stopAutoEquip(); stopHitboxExtender()
+    stopClickTp(); stopAutoRe(); stopHcAutoReload(); stopHcKnifeReach(); stopHcAntiAfkTag(); stopAutoEquip(); stopHitboxExtender()
     stopHcAutoStomp(); stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
