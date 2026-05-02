@@ -3384,38 +3384,48 @@ F.games.hoodCustoms.forceHit = (function()
 end)()
 
 -- ============================================================
---  MOVEMENT: DESYNC  (void desync + voidspam)
---  Pattern: every Heartbeat, save HRP CFrame and write a random void
---  position (50k-100k stud range, all axes randomized). Replicates to
---  the server -> server thinks our HRP is in the void, can't be hit.
---  Every RenderStepped, restore the saved CFrame BEFORE the camera
---  draws -> locally we render at our real position.
+--  MOVEMENT: DESYNC  (multiple spoof methods)
+--
+--  Shared frame pattern:
+--    Heartbeat (after physics):  save real HRP state, write a SPOOFED
+--                                state. This replicates to the server.
+--    BindToRenderStep / First:   restore real HRP state BEFORE the
+--                                camera reads it. Locally we render
+--                                normally; server gets the spoofed state.
 --
 --  Modes:
---    "void"     - constant spoof. We're in the void server-side at all
---                 times. Locally moves normally.
---    "voidspam" - same, but when our outbound MainEvent:FireServer("Shoot")
---                 fires, we briefly hold the spoof OFF for ~SHOT_SYNC_MS
---                 so the shot gets processed at our real position. Then
---                 we go back to void.
+--    "void"        random point in [VOID_MIN, VOID_MAX] stud cube each
+--                  Heartbeat. Server can't hit you, you can't shoot
+--                  out either (unless voidspam).
+--    "voidspam"    same as void, but our outbound Shoot remote fires
+--                  unblock the spoof for ~SHOT_SYNC_MS so the shot
+--                  processes at the real position. Lets you shoot
+--                  while staying server-uninhittable the rest of time.
+--    "upsideDown"  flip HRP 180 deg on X-axis (preserves position).
+--                  Server thinks we're stuck/glitched. Some games
+--                  relax origin-mismatch detection in this state, so
+--                  long-range TPs (Goto, etc.) work without kicks.
+--    "spin"        rotate HRP wildly each Heartbeat (random Euler).
+--                  Position preserved, just the rotation churns.
+--                  Confuses server-side aim prediction without a void
+--                  jump.
+--    "velocity"    keep CFrame, write Vector3.one * 16384 to
+--                  AssemblyLinearVelocity. Server thinks we're moving
+--                  at impossible speed -> backtrack rejection on
+--                  shooters trying to lead us.
 -- ============================================================
 F.desync = (function()
-    -- Smaller default range than 5e4 / 1e5 - those huge jumps confused
-    -- physics enough that the local Humanoid would get stuck in the
-    -- "falling" state and stop responding to movement input. 5k stud is
-    -- still well outside any map / hit-validation cone.
-    local VOID_MIN = 5000
-    local VOID_MAX = 20000
+    local VOID_MIN     = 5000
+    local VOID_MAX     = 20000
     local SHOT_SYNC_MS = 100
 
     local active   = false
-    local mode     = "void"
-    local realCF   = nil
-    local realLV   = nil    -- linear velocity, restored too so Humanoid keeps walking
-    local realAV   = nil    -- angular velocity
+    local mode     = "void"   -- "void"|"voidspam"|"upsideDown"|"spin"|"velocity"|"off"
+    local realCF, realLV, realAV
     local syncEnd  = 0
     local hbConn
     local RESTORE_BIND = "_F_DESYNC_RESTORE"
+    local _spinAngle = 0
 
     local function randVoidPos()
         local function axis()
@@ -3423,6 +3433,35 @@ F.desync = (function()
             return (math.random() < 0.5) and -mag or mag
         end
         return Vector3.new(axis(), axis(), axis())
+    end
+
+    -- compute the spoofed HRP state for the current mode. Caller is
+    -- responsible for capturing realCF/realLV/realAV before this runs.
+    local function applySpoof(hrp)
+        if mode == "void" or mode == "voidspam" then
+            hrp.CFrame = CFrame.new(randVoidPos())
+        elseif mode == "upsideDown" then
+            -- preserve XYZ position, flip on X axis (head-down). The
+            -- horizontal facing of the original CFrame is preserved by
+            -- multiplying after the flip.
+            local pos = hrp.Position
+            local lv  = hrp.CFrame.LookVector
+            local horiz = Vector3.new(lv.X, 0, lv.Z)
+            if horiz.Magnitude < 0.01 then horiz = Vector3.new(0, 0, -1) end
+            horiz = horiz.Unit
+            local face = CFrame.new(pos, pos + horiz)
+            hrp.CFrame = face * CFrame.Angles(math.pi, 0, 0)
+        elseif mode == "spin" then
+            _spinAngle = (_spinAngle + 47) % 360
+            hrp.CFrame = hrp.CFrame * CFrame.Angles(
+                math.rad(_spinAngle),
+                math.rad(_spinAngle * 2),
+                math.rad(_spinAngle * 0.5)
+            )
+        elseif mode == "velocity" then
+            -- CFrame untouched - we only spoof the velocity vector
+            hrp.AssemblyLinearVelocity = Vector3.new(1, 1, 1) * 16384
+        end
     end
 
     local function bind()
@@ -3438,13 +3477,9 @@ F.desync = (function()
             realCF = hrp.CFrame
             realLV = hrp.AssemblyLinearVelocity
             realAV = hrp.AssemblyAngularVelocity
-            pcall(function() hrp.CFrame = CFrame.new(randVoidPos()) end)
+            pcall(function() applySpoof(hrp) end)
         end)
 
-        -- BindToRenderStep at First priority so we restore HRP BEFORE the
-        -- default camera's PreRender step samples it. Plain RenderStepped
-        -- runs after the camera, which is why the user was seeing their
-        -- view in the sky - the camera locked onto void HRP for one frame.
         RunService:BindToRenderStep(
             RESTORE_BIND, Enum.RenderPriority.First.Value,
             function()
@@ -3454,8 +3489,6 @@ F.desync = (function()
                 if not hrp or not realCF then return end
                 pcall(function()
                     hrp.CFrame = realCF
-                    -- restore velocities too so the Humanoid doesn't think
-                    -- it just teleported - keeps walking input working
                     if realLV then hrp.AssemblyLinearVelocity  = realLV end
                     if realAV then hrp.AssemblyAngularVelocity = realAV end
                 end)
@@ -3463,9 +3496,7 @@ F.desync = (function()
         )
     end
 
-    -- detect outbound Shoot fires for voidspam.
-    -- Single hookmetamethod, gated by getgenv() so re-running the script
-    -- doesn't restack hooks.
+    -- detect outbound Shoot fires for voidspam mode
     if hookmetamethod and not getgenv()._F_DESYNC_HOOK then
         getgenv()._F_DESYNC_HOOK = true
         local _RS = game:GetService("ReplicatedStorage")
@@ -3478,8 +3509,6 @@ F.desync = (function()
                 local args = {...}
                 if args[1] == "Shoot" then
                     syncEnd = tick() + SHOT_SYNC_MS / 1000
-                    -- snap HRP back to real BEFORE the call returns so the
-                    -- server processes the shot at our real position
                     local c = lplr.Character
                     local hrp = c and c:FindFirstChild("HumanoidRootPart")
                     if hrp and realCF then
@@ -3491,18 +3520,17 @@ F.desync = (function()
         end))
     end
 
-    local function startVoid(newMode)
-        mode = newMode or "void"
+    local function startMode(newMode)
+        mode = newMode
         active = true
         syncEnd = 0
         bind()
     end
 
-    local function stopVoid()
+    local function stopAll()
         active = false
         if hbConn then hbConn:Disconnect(); hbConn = nil end
         pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
-        -- final restore
         local c = lplr.Character
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
         if hrp and realCF then
@@ -3513,19 +3541,25 @@ F.desync = (function()
             end)
         end
         realCF, realLV, realAV = nil, nil, nil
+        mode = "off"
     end
 
     return {
-        startVoid     = function() startVoid("void") end,
-        startVoidspam = function() startVoid("voidspam") end,
-        stop          = stopVoid,
-        isActive      = function() return active end,
-        getMode       = function() return mode end,
-        setRange      = function(minV, maxV)
+        -- mode starters - mutually exclusive (calling one auto-stops any
+        -- previous mode by re-binding the same Heartbeat)
+        startVoid       = function() startMode("void") end,
+        startVoidspam   = function() startMode("voidspam") end,
+        startUpsideDown = function() startMode("upsideDown") end,
+        startSpin       = function() startMode("spin") end,
+        startVelocity   = function() startMode("velocity") end,
+        stop            = stopAll,
+        isActive        = function() return active end,
+        getMode         = function() return mode end,
+        setRange        = function(minV, maxV)
             VOID_MIN = math.max(100, tonumber(minV) or VOID_MIN)
             VOID_MAX = math.max(VOID_MIN + 1, tonumber(maxV) or VOID_MAX)
         end,
-        setShotSyncMs = function(n)
+        setShotSyncMs   = function(n)
             SHOT_SYNC_MS = math.clamp(tonumber(n) or 100, 10, 1000)
         end,
     }

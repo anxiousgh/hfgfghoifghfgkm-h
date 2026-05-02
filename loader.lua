@@ -775,64 +775,99 @@ do
     Extras:AddSlider("BlinkDist", { Text = "Blink distance", Default = F.blink.getDistance(),
         Min = 1, Max = 200, Rounding = 0, Callback = F.blink.setDistance })
 
-    Extras:AddDivider()
-    Extras:AddLabel("Desync (server-side void)")
+end
 
-    -- mutually exclusive: turning on Voidspam disables Void desync and v.v.
-    -- Only one HRP spoof loop should run at a time.
-    Extras:AddToggle("DesyncVoid", { Text = "Void desync",
-        Default = false,
-        Tooltip = "Server-side: HRP teleports to a random point in the "
-            .. "50k-100k stud range every Heartbeat. Locally restored on "
-            .. "RenderStepped so you don't see it. Server can't hit you "
-            .. "because you're never where you appear to be.",
-        Callback = function(v)
-            if v then
-                if Toggles.DesyncVoidspam and Toggles.DesyncVoidspam.Value then
-                    Toggles.DesyncVoidspam:SetValue(false)
-                end
-                F.desync.startVoid()
-            else
-                F.desync.stop()
+-- Desync gets its own dedicated groupbox in the Movement tab so it
+-- doesn't clutter Extras and is easy to find.
+do
+    local Desync = Tabs.Movement:AddRightGroupbox("Desync")
+
+    -- helper: turn on `name`, turn off all other desync toggles in the
+    -- given list. Keeps the modes mutually exclusive without stacking
+    -- callbacks recursing into each other.
+    local DESYNC_KEYS = {
+        "DesyncVoid", "DesyncVoidspam",
+        "DesyncUpsideDown", "DesyncSpin", "DesyncVelocity",
+    }
+    local function selectMode(name)
+        for _, k in ipairs(DESYNC_KEYS) do
+            if k ~= name and Toggles[k] and Toggles[k].Value then
+                Toggles[k]:SetValue(false)
             end
+        end
+    end
+
+    Desync:AddToggle("DesyncVoid", { Text = "Void desync",
+        Default = false,
+        Tooltip = "HRP teleports to a random point in the configured "
+            .. "stud range every Heartbeat. Server can't hit you. "
+            .. "Locally restored before render so view stays normal.",
+        Callback = function(v)
+            if v then selectMode("DesyncVoid"); F.desync.startVoid()
+            else      F.desync.stop() end
         end,
     })
-    Extras:AddToggle("DesyncVoidspam", { Text = "Voidspam (sync on shoot)",
+    Desync:AddToggle("DesyncVoidspam", { Text = "Voidspam (sync on shoot)",
         Default = false,
-        Tooltip = "Same as Void desync but the moment you fire a Shoot "
-            .. "remote, the spoof releases for ~100ms so the server "
-            .. "processes your shot at your real position. Then we go "
-            .. "back to the void.",
+        Tooltip = "Void desync that releases the spoof for ~100ms when "
+            .. "your Shoot remote fires, so shots land at your real "
+            .. "position. Then back to void.",
         Callback = function(v)
-            if v then
-                if Toggles.DesyncVoid and Toggles.DesyncVoid.Value then
-                    Toggles.DesyncVoid:SetValue(false)
-                end
-                F.desync.startVoidspam()
-            else
-                F.desync.stop()
-            end
+            if v then selectMode("DesyncVoidspam"); F.desync.startVoidspam()
+            else      F.desync.stop() end
         end,
     })
-    Extras:AddSlider("DesyncShotSyncMs", {
+    Desync:AddToggle("DesyncUpsideDown", { Text = "Upside-down desync",
+        Default = false,
+        Tooltip = "Server-side: HRP rotated 180 deg on X each Heartbeat "
+            .. "(position preserved). Locally upright. Some games "
+            .. "relax origin-mismatch validation while we look glitched, "
+            .. "letting long-range TPs (Goto / clickTp) work without "
+            .. "kicks - try this if normal TPs are getting flagged.",
+        Callback = function(v)
+            if v then selectMode("DesyncUpsideDown"); F.desync.startUpsideDown()
+            else      F.desync.stop() end
+        end,
+    })
+    Desync:AddToggle("DesyncSpin", { Text = "Spin desync",
+        Default = false,
+        Tooltip = "HRP rotation churns wildly each Heartbeat (random "
+            .. "Euler). Position untouched. Confuses server-side aim "
+            .. "prediction without a void jump.",
+        Callback = function(v)
+            if v then selectMode("DesyncSpin"); F.desync.startSpin()
+            else      F.desync.stop() end
+        end,
+    })
+    Desync:AddToggle("DesyncVelocity", { Text = "Velocity desync",
+        Default = false,
+        Tooltip = "Sets HRP AssemblyLinearVelocity to ~16384 each "
+            .. "Heartbeat, restored locally. Server thinks we're moving "
+            .. "at impossible speed -> backtrack rejection on shooters "
+            .. "trying to lead us. CFrame stays put so we don't fly.",
+        Callback = function(v)
+            if v then selectMode("DesyncVelocity"); F.desync.startVelocity()
+            else      F.desync.stop() end
+        end,
+    })
+
+    Desync:AddDivider()
+
+    Desync:AddSlider("DesyncShotSyncMs", {
         Text     = "Voidspam shot sync (ms)",
         Default  = 100, Min = 10, Max = 500, Rounding = 0,
         Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
-    -- min/max paired sliders so the user can tune the spoof distance live.
-    -- defaults match F.desync internal defaults (5k - 20k stud).
     do
         local minStuds, maxStuds = 5000, 20000
-        local function push()
-            F.desync.setRange(minStuds, maxStuds)
-        end
-        Extras:AddSlider("DesyncMinStuds", {
-            Text     = "Desync min distance",
+        local function push() F.desync.setRange(minStuds, maxStuds) end
+        Desync:AddSlider("DesyncMinStuds", {
+            Text     = "Void min distance",
             Default  = 5000, Min = 500, Max = 100000, Rounding = 0,
             Callback = function(v) minStuds = v; push() end,
         })
-        Extras:AddSlider("DesyncMaxStuds", {
-            Text     = "Desync max distance",
+        Desync:AddSlider("DesyncMaxStuds", {
+            Text     = "Void max distance",
             Default  = 20000, Min = 500, Max = 100000, Rounding = 0,
             Callback = function(v) maxStuds = v; push() end,
         })
