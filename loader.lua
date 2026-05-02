@@ -775,6 +775,25 @@ do
     Extras:AddSlider("BlinkDist", { Text = "Blink distance", Default = F.blink.getDistance(),
         Min = 1, Max = 200, Rounding = 0, Callback = F.blink.setDistance })
 
+    Extras:AddButton({ Text = "Rocket jump", Func = F.rocketJump.fire })
+        :AddKeyPicker("RocketJumpKey", {
+            Default = "R", Mode = "Hold", Text = "Rocket jump", NoUI = false,
+        })
+    bindFireKey("RocketJumpKey", F.rocketJump.fire)
+    Extras:AddSlider("RocketJumpForce", {
+        Text = "Rocket force",
+        Tooltip = "Impulse magnitude (studs/sec) added to HRP velocity.",
+        Default = 200, Min = 50, Max = 2000, Rounding = 0,
+        Callback = function(v) F.rocketJump.setForce(v) end,
+    })
+    Extras:AddSlider("RocketJumpUpBias", {
+        Text = "Rocket up bias",
+        Tooltip = "0 = pure forward (camera direction), 1 = straight up. "
+            .. "Default 0.6 mostly up with some forward.",
+        Default = 0.6, Min = 0, Max = 1, Rounding = 2,
+        Callback = function(v) F.rocketJump.setUpBias(v) end,
+    })
+
 end
 
 -- Desync gets its own dedicated groupbox in the Movement tab.

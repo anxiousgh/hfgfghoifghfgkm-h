@@ -1929,6 +1929,39 @@ F.blink   = {
 }
 F.fov = { set = setFov, get = function() return CUSTOM_FOV end }
 
+-- ============================================================
+--  ROCKET JUMP
+--  Fire-and-forget impulse. Adds velocity to HRP in the camera's
+--  lookvector + up direction. Tunable force. Works in any state -
+--  no charge-up, no cooldown, just an instantaneous propulsion.
+-- ============================================================
+F.rocketJump = (function()
+    local force = 200    -- studs/sec impulse magnitude
+    local upBias = 0.6   -- 0=pure forward, 1=pure up. Default tilts up so
+                          -- you actually gain altitude rather than just sprinting.
+
+    local function fire()
+        local c = lplr.Character
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local cam = workspace.CurrentCamera
+        local fwd = cam.CFrame.LookVector
+        -- mix forward + up by upBias
+        local dir = fwd * (1 - upBias) + Vector3.new(0, 1, 0) * upBias
+        if dir.Magnitude < 0.01 then dir = Vector3.new(0, 1, 0) end
+        dir = dir.Unit
+        pcall(function()
+            hrp.AssemblyLinearVelocity = dir * force
+        end)
+    end
+
+    return {
+        fire = fire,
+        setForce  = function(n) force  = math.clamp(tonumber(n) or 200, 10, 5000) end,
+        setUpBias = function(n) upBias = math.clamp(tonumber(n) or 0.6, 0, 1) end,
+    }
+end)()
+
 -- aimbot
 F.aimbot = {
     settings   = AimbotSettings,
@@ -3536,13 +3569,20 @@ F.desync = (function()
 
         hbConn = RunService.Heartbeat:Connect(function()
             if not active then return end
-            if mode == "voidspam" and tick() < syncEnd then return end
             local c = lplr.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
+            -- ALWAYS capture realCF, even during voidspam sync window.
+            -- otherwise BindToRenderStep keeps writing stale realCF to
+            -- HRP every frame, which freezes the user in place. by
+            -- capturing every frame we let RenderStepped track the
+            -- current position - no override on movement.
             realCF = hrp.CFrame
             realLV = hrp.AssemblyLinearVelocity
             realAV = hrp.AssemblyAngularVelocity
+            -- only the spoof is skipped during the sync window, not
+            -- the capture above.
+            if mode == "voidspam" and tick() < syncEnd then return end
             pcall(function() applySpoof(hrp) end)
         end)
 
