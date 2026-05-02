@@ -752,20 +752,18 @@ do
     Move:AddToggle("AutoRespawn",{ Text = "Auto-respawn",  Default = false,
         Callback = function(v) if v then F.autoRespawn.start() else F.autoRespawn.stop() end end })
 
-    -- Rocket jump KeyPicker - hosted on a Toggle in the LEFT groupbox
-    -- because right-groupbox AddLabel:AddKeyPicker chaining errors in
-    -- this LinoriaLib version. The toggle is purely a host - we don't
-    -- read its Value, bindFireKey reads the picker key directly.
-    local RocketJumpHolder = Move:AddToggle("RocketJumpKeyHolder", {
-        Text = "Rocket jump (key fires it)", Default = false,
-        Callback = function() end,  -- no-op; key is the trigger
+    -- Rocket jump: toggle gates Space-as-rocket-boost. Off = normal jump.
+    -- On = pressing Space fires the rocket impulse instead. Manual fire
+    -- button + tuning sliders are over in the right Extras groupbox.
+    Move:AddToggle("RocketJump", {
+        Text = "Rocket jump (Space)",
+        Tooltip = "While on, pressing Space launches you forward+up instead "
+            .. "of jumping normally.",
+        Default = false,
+        Callback = function(v)
+            if v then F.rocketJump.start() else F.rocketJump.stop() end
+        end,
     })
-    RocketJumpHolder:AddKeyPicker("RocketJumpKey", {
-        Default = "R", Mode = "Hold", Text = "Rocket jump",
-        SyncToggleState = false,  -- key press doesn't auto-toggle the holder
-        NoUI = false,
-    })
-    bindFireKey("RocketJumpKey", F.rocketJump.fire)
 
     -- right side: extras (spin/flip/ice + blink)
     local Extras = Tabs.Movement:AddRightGroupbox("Extras")
@@ -802,8 +800,8 @@ do
     Extras:AddSlider("RocketJumpUpBias", {
         Text = "Rocket up bias",
         Tooltip = "0 = pure forward (camera direction), 1 = straight up. "
-            .. "Default 0.6 mostly up with some forward.",
-        Default = 0.6, Min = 0, Max = 1, Rounding = 2,
+            .. "Default 0.4 = mostly forward with some lift.",
+        Default = 0.4, Min = 0, Max = 1, Rounding = 2,
         Callback = function(v) F.rocketJump.setUpBias(v) end,
     })
 end

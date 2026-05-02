@@ -1931,14 +1931,16 @@ F.fov = { set = setFov, get = function() return CUSTOM_FOV end }
 
 -- ============================================================
 --  ROCKET JUMP
---  Fire-and-forget impulse. Adds velocity to HRP in the camera's
---  lookvector + up direction. Tunable force. Works in any state -
---  no charge-up, no cooldown, just an instantaneous propulsion.
+--  Toggle on -> pressing Space triggers an instant velocity blast
+--  in (camera lookvector + up) * force. Toggle off -> Space does
+--  the normal jump again. fire() can also be called directly for
+--  the manual-fire button.
 -- ============================================================
 F.rocketJump = (function()
-    local force = 200    -- studs/sec impulse magnitude
-    local upBias = 0.6   -- 0=pure forward, 1=pure up. Default tilts up so
-                          -- you actually gain altitude rather than just sprinting.
+    local force  = 200   -- studs/sec impulse magnitude
+    local upBias = 0.4   -- 0=pure forward, 1=pure up. Tilted toward forward
+                          -- since the user explicitly wants forward boost.
+    local conn
 
     local function fire()
         local c = lplr.Character
@@ -1946,7 +1948,6 @@ F.rocketJump = (function()
         if not hrp then return end
         local cam = workspace.CurrentCamera
         local fwd = cam.CFrame.LookVector
-        -- mix forward + up by upBias
         local dir = fwd * (1 - upBias) + Vector3.new(0, 1, 0) * upBias
         if dir.Magnitude < 0.01 then dir = Vector3.new(0, 1, 0) end
         dir = dir.Unit
@@ -1955,11 +1956,26 @@ F.rocketJump = (function()
         end)
     end
 
-    return {
-        fire = fire,
-        setForce  = function(n) force  = math.clamp(tonumber(n) or 200, 10, 5000) end,
-        setUpBias = function(n) upBias = math.clamp(tonumber(n) or 0.6, 0, 1) end,
-    }
+    local function start()
+        G.rocketJumpActive = true
+        if conn then conn:Disconnect() end
+        conn = UserInputService.InputBegan:Connect(function(input, gp)
+            if gp then return end
+            if not G.rocketJumpActive then return end
+            if input.KeyCode == Enum.KeyCode.Space then fire() end
+        end)
+    end
+
+    local function stop()
+        G.rocketJumpActive = false
+        if conn then conn:Disconnect(); conn = nil end
+    end
+
+    local t = makeToggle(start, stop, "rocketJumpActive")
+    t.fire      = fire    -- manual button still works regardless of toggle
+    t.setForce  = function(n) force  = math.clamp(tonumber(n) or 200, 10, 5000) end
+    t.setUpBias = function(n) upBias = math.clamp(tonumber(n) or 0.4, 0, 1) end
+    return t
 end)()
 
 -- aimbot
@@ -3700,6 +3716,7 @@ F.disableAll = function()
     F.games.hoodCustoms.knifeReach.stop()
     if F.desync then F.desync.stop() end
     if F.antiFling then F.antiFling.stop() end
+    if F.rocketJump and F.rocketJump.stop then F.rocketJump.stop() end
     stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
