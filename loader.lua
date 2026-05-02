@@ -833,14 +833,6 @@ do
 
     Desync:AddDivider()
 
-    Desync:AddSlider("DesyncRateHz", {
-        Text     = "Spoof rate (Hz)",
-        Tooltip  = "How many times per second the spoof fires. 60 = every "
-            .. "Heartbeat (most aggressive). Lower = more local stability "
-            .. "but easier for shooters to hit you between spoofs.",
-        Default  = 60, Min = 1, Max = 60, Rounding = 0,
-        Callback = function(v) F.desync.setRateHz(v) end,
-    })
     do
         local minStuds, maxStuds = 5000, 20000
         local function push() F.desync.setRange(minStuds, maxStuds) end

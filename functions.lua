@@ -3484,16 +3484,11 @@ F.desync = (function()
     local VOID_MIN     = 5000
     local VOID_MAX     = 20000
     local SHOT_SYNC_MS = 100
-    -- spoof rate in Hz. 60 = every Heartbeat (default). Lower = fewer
-    -- per-second writes (more local stability, easier to hit between
-    -- spoofs). Capped at 60 since Heartbeat is ~60Hz max.
-    local SPOOF_RATE_HZ = 60
 
     local active   = false
     local mode     = "void"   -- "void"|"voidspam"|"spin"|"velocity"|"off"
     local realCF, realLV, realAV
     local syncEnd  = 0
-    local _lastSpoof = 0
     local hbConn
     local RESTORE_BIND = "_F_DESYNC_RESTORE"
     local _spinAngle = 0
@@ -3531,11 +3526,6 @@ F.desync = (function()
         hbConn = RunService.Heartbeat:Connect(function()
             if not active then return end
             if mode == "voidspam" and tick() < syncEnd then return end
-            -- rate limiter: only spoof at most SPOOF_RATE_HZ times per sec
-            local interval = 1 / math.max(SPOOF_RATE_HZ, 1)
-            local now = tick()
-            if now - _lastSpoof < interval then return end
-            _lastSpoof = now
             local c = lplr.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
@@ -3625,9 +3615,6 @@ F.desync = (function()
         end,
         setShotSyncMs   = function(n)
             SHOT_SYNC_MS = math.clamp(tonumber(n) or 100, 10, 1000)
-        end,
-        setRateHz       = function(n)
-            SPOOF_RATE_HZ = math.clamp(tonumber(n) or 60, 1, 60)
         end,
     }
 end)()
