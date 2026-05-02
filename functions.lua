@@ -643,7 +643,7 @@ local function startFlip()
         if not char then return end
         local hrp=char:WaitForChild("HumanoidRootPart",5); if not hrp then return end
         local hum=char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.CameraOffset=Vector3.new(0,-4,0) end
+        if hum then hum.CameraOffset=Vector3.new(0,-5,0) end
         local _real={}; local _spoofing=false
         if G._flipHb then G._flipHb:Disconnect() end
         if G._flipRs then G._flipRs:Disconnect() end
