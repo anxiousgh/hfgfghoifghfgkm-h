@@ -516,6 +516,19 @@ local function stopNoclip()
     if G.noclipHBConn then G.noclipHBConn:Disconnect(); G.noclipHBConn=nil end
     if G.noclipConn and type(G.noclipConn)~="boolean" then G.noclipConn:Disconnect() end
     G.noclipConn=nil
+    -- restore CanCollide on the parts we were overriding. The engine
+    -- doesn't auto-restore once we stop writing false - parts stay at
+    -- the last value, so the character keeps passing through walls
+    -- after the toggle is off. Set them back to true here.
+    local c = lplr.Character
+    if c then
+        for _, name in ipairs({"HumanoidRootPart","UpperTorso","Torso","Head","LowerTorso"}) do
+            local p = c:FindFirstChild(name)
+            if p and p:IsA("BasePart") then
+                pcall(function() p.CanCollide = true end)
+            end
+        end
+    end
 end
 local function startNoclip()
     G.noclipActive=true
