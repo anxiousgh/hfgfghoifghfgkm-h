@@ -3109,18 +3109,6 @@ F.games.hoodCustoms.forceHit = (function()
         return t and SHOTGUN_NAMES[t.Name] == true
     end
 
-    local function getTargetSpecialPart(name)
-        if not target or not target.Character then return nil end
-        local sp = target.Character:FindFirstChild("SpecialParts") or target.Character
-        return sp:FindFirstChild(name)
-    end
-
-    local function getTargetMainPart()
-        return getTargetSpecialPart(hitPartName)
-            or getTargetSpecialPart("HumanoidRootPart")
-            or getTargetSpecialPart("Head")
-    end
-
     local function getHead()
         local c = lplr.Character
         return c and c:FindFirstChild("Head")
@@ -3176,10 +3164,15 @@ F.games.hoodCustoms.forceHit = (function()
         task.delay(5, function() if s and s.Parent then s:Destroy() end end)
     end
 
-    -- single-fire path: synthetic payload, direct FireServer
-    local function fireDirect()
-        local part = getTargetMainPart(); if not part then return end
-        local head = getHead(); if not head then return end
+    -- single-fire path: synthetic payload, direct FireServer.
+    -- `part` is the target body part already resolved by the caller
+    -- (fireOnce uses getCurrentTargetPart which reads ragebot target).
+    -- Returns true if FireServer was actually called, false otherwise -
+    -- the caller uses this to gate tracer/sound so we don't spam visuals
+    -- on no-op calls.
+    local function fireDirect(part)
+        if not part then return false end
+        local head = getHead(); if not head then return false end
         local origin = head.Position
         local hitPos = part.Position
         local dist   = (hitPos - origin).Magnitude
@@ -3191,9 +3184,11 @@ F.games.hoodCustoms.forceHit = (function()
             origin, aim, tick(),
         }
         local me = _RS:FindFirstChild("MainEvent")
+        if not me then return false end
+        local ok = pcall(function() me:FireServer("Shoot", payload) end)
         local mf = _RS:FindFirstChild("MainFunction")
-        if me then pcall(function() me:FireServer("Shoot", payload) end) end
         if mf then pcall(function() mf:InvokeServer("GunCheck") end) end
+        return ok
     end
 
     -- shotgun path: VIM click fires the gun natively (silent aim handles aim)
@@ -3227,12 +3222,14 @@ F.games.hoodCustoms.forceHit = (function()
 
     local function fireOnce()
         if tick() - lastFire < cooldown then return end
-        lastFire = tick()
         local part = getCurrentTargetPart(); if not part then return end
+        -- only commit lastFire AFTER we have a valid target, so the cooldown
+        -- doesn't tick during no-target frames
 
         if isShotgun() then
             -- shotgun: just click. don't TP - cone-collapse trips PRNG check.
-            -- Don't spawn a tracer either; the gun's own tracers will render.
+            -- gun renders its own tracers, so we don't spawn a fake one.
+            lastFire = tick()
             fireClick()
             playHitSound()
             return
@@ -3240,8 +3237,7 @@ F.games.hoodCustoms.forceHit = (function()
 
         -- single-fire: optional TP-wallbang, then synthetic FireServer.
         -- Capture the PRE-TP origin so the tracer renders from where the
-        -- user actually was, not from the post-TP teleport spot (otherwise
-        -- the tracer line jumps around as the body teleports).
+        -- user actually was, not from the post-TP teleport spot.
         local preTpOrigin
         do
             local head = getHead()
@@ -3263,12 +3259,16 @@ F.games.hoodCustoms.forceHit = (function()
             end
         end
 
-        fireDirect()
+        local fired = fireDirect(part)
 
-        -- visual / audio feedback (single-fire path; shotguns get their
-        -- own native tracers from the click-fire flow above)
-        if preTpOrigin then spawnTracer(preTpOrigin, part.Position) end
-        playHitSound()
+        -- only spawn visual/audio feedback when we ACTUALLY fired - otherwise
+        -- the autoshoot loop calling us 5x/sec with a missing MainEvent or
+        -- whatever else would spam tracers without any damage being dealt.
+        if fired then
+            lastFire = tick()
+            if preTpOrigin then spawnTracer(preTpOrigin, part.Position) end
+            playHitSound()
+        end
 
         if tpWallbang and saved then
             task.delay(tpRestoreDelay, function()
