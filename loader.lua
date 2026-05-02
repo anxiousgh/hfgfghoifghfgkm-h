@@ -776,9 +776,9 @@ do
         Min = 1, Max = 200, Rounding = 0, Callback = F.blink.setDistance })
 
     Extras:AddButton({ Text = "Rocket jump", Func = F.rocketJump.fire })
-        :AddKeyPicker("RocketJumpKey", {
-            Default = "R", Mode = "Hold", Text = "Rocket jump", NoUI = false,
-        })
+    Extras:AddLabel("Rocket jump key"):AddKeyPicker("RocketJumpKey", {
+        Default = "R", Mode = "Hold", Text = "Rocket jump", NoUI = false,
+    })
     bindFireKey("RocketJumpKey", F.rocketJump.fire)
     Extras:AddSlider("RocketJumpForce", {
         Text = "Rocket force",
