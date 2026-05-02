@@ -774,6 +774,51 @@ do
     Extras:AddButton({ Text = "Blink forward", Func = F.blink.fire })
     Extras:AddSlider("BlinkDist", { Text = "Blink distance", Default = F.blink.getDistance(),
         Min = 1, Max = 200, Rounding = 0, Callback = F.blink.setDistance })
+
+    Extras:AddDivider()
+    Extras:AddLabel("Desync (server-side void)")
+
+    -- mutually exclusive: turning on Voidspam disables Void desync and v.v.
+    -- Only one HRP spoof loop should run at a time.
+    Extras:AddToggle("DesyncVoid", { Text = "Void desync",
+        Default = false,
+        Tooltip = "Server-side: HRP teleports to a random point in the "
+            .. "50k-100k stud range every Heartbeat. Locally restored on "
+            .. "RenderStepped so you don't see it. Server can't hit you "
+            .. "because you're never where you appear to be.",
+        Callback = function(v)
+            if v then
+                if Toggles.DesyncVoidspam and Toggles.DesyncVoidspam.Value then
+                    Toggles.DesyncVoidspam:SetValue(false)
+                end
+                F.desync.startVoid()
+            else
+                F.desync.stop()
+            end
+        end,
+    })
+    Extras:AddToggle("DesyncVoidspam", { Text = "Voidspam (sync on shoot)",
+        Default = false,
+        Tooltip = "Same as Void desync but the moment you fire a Shoot "
+            .. "remote, the spoof releases for ~100ms so the server "
+            .. "processes your shot at your real position. Then we go "
+            .. "back to the void.",
+        Callback = function(v)
+            if v then
+                if Toggles.DesyncVoid and Toggles.DesyncVoid.Value then
+                    Toggles.DesyncVoid:SetValue(false)
+                end
+                F.desync.startVoidspam()
+            else
+                F.desync.stop()
+            end
+        end,
+    })
+    Extras:AddSlider("DesyncShotSyncMs", {
+        Text     = "Voidspam shot sync (ms)",
+        Default  = 100, Min = 10, Max = 500, Rounding = 0,
+        Callback = function(v) F.desync.setShotSyncMs(v) end,
+    })
 end
 
 -- ============================================================
@@ -1206,21 +1251,19 @@ do
         Default  = "Head",
         Callback = function(v) F.games.hoodCustoms.forceHit.setHitPart(v) end,
     })
-    HC:AddToggle("HCForceHitTpWallbang", { Text = "TP wallbang (single-fire only)",
-        Default = true,
-        Tooltip = "Teleport behind the target, fire, teleport back. "
-            .. "Skipped automatically when a shotgun is equipped.",
-        Callback = function(v) F.games.hoodCustoms.forceHit.setTpWallbang(v) end,
-    })
     HC:AddSlider("HCForceHitCooldown", {
         Text     = "Cooldown (sec)",
         Default  = 0.20, Min = 0, Max = 2, Rounding = 2,
         Callback = function(v) F.games.hoodCustoms.forceHit.setCooldown(v) end,
     })
-    HC:AddSlider("HCForceHitTpOffset", {
-        Text     = "TP offset (studs)",
-        Default  = 4, Min = 1, Max = 30, Rounding = 0,
-        Callback = function(v) F.games.hoodCustoms.forceHit.setTpOffset(v) end,
+    HC:AddDropdown("HCForceHitShotgunMode", {
+        Text     = "Shotgun mode",
+        Tooltip  = "click = fire the gun natively (silent aim handles aim, "
+            .. "no PRNG kick). synth = synthesize a 2-section payload at "
+            .. "the target (still WIP, often kicks for pattern spoof).",
+        Values   = { "click", "synth" },
+        Default  = "click",
+        Callback = function(v) F.games.hoodCustoms.forceHit.setShotgunMode(v) end,
     })
     -- Tracer + hit sound. FireServer doesn't render bullet visuals
     -- because we never go through the gun script, so we fake them

@@ -397,6 +397,19 @@ end
 --   faceDir  - Vector3 to face (only horizontal component is used).
 --              Pass nil to keep current horizontal facing.
 local function _uprightTp(char, hrp, position, faceDir)
+    -- pre-clean: if we're ragdolled / upside-down / sitting, joint
+    -- forces will yank HRP back the moment after we set CFrame. Clear
+    -- those states FIRST, write the new CFrame, then clear again to
+    -- counter any "respawn" code the game runs.
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            pcall(function() hum.PlatformStand = false end)
+            pcall(function() hum.Sit            = false end)
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end
+    end
+
     local horiz
     if faceDir then
         horiz = Vector3.new(faceDir.X, 0, faceDir.Z)
@@ -408,9 +421,17 @@ local function _uprightTp(char, hrp, position, faceDir)
     end
     horiz = horiz.Unit
     pcall(function()
+        -- briefly anchor so any constraint forces can't drag HRP back
+        -- before we finish writing the new orientation. One frame is
+        -- enough for the engine to commit the position write.
+        local wasAnchored = hrp.Anchored
+        hrp.Anchored = true
         hrp.CFrame = CFrame.new(position, position + horiz)
         hrp.AssemblyLinearVelocity  = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
+        task.defer(function()
+            if hrp and hrp.Parent then hrp.Anchored = wasAnchored end
+        end)
     end)
     if char then _forceStanding(char) end
 end
@@ -3076,13 +3097,22 @@ F.games.hoodCustoms.forceHit = (function()
         ["[Double Barrel]"]    = true,
         ["[Tactical Shotgun]"] = true,
     }
+    -- shotgun pellet counts (matches the natural game shots we captured)
+    local SHOTGUN_PELLETS = {
+        ["[Shotgun]"]          = 5,
+        ["[Double Barrel]"]    = 5,
+        ["[Tactical Shotgun]"] = 5,
+    }
 
     local target          = nil
     local hitPartName     = "Head"
-    local tpWallbang      = true
-    local tpOffset        = 4
-    local tpRestoreDelay  = 0.10
     local cooldown        = 0.20
+    -- shotgun spread strategy
+    --   "click"   -> click the mouse, gun fires natively (works, low risk)
+    --   "synth"   -> synthesize a 2-section payload (WIP - tries to bypass
+    --                the per-shot PRNG check). 2 stacked clusters ~3 studs
+    --                apart, sub-stud anti-zero-spread jitter inside each.
+    local shotgunMode     = "click"
 
     -- visual / audio feedback (FireServer doesn't render bullet visuals
     -- because we never hit the gun script, so we fake them locally)
@@ -3199,6 +3229,60 @@ F.games.hoodCustoms.forceHit = (function()
         end)
     end
 
+    -- shotgun synth path: 2 stacked clusters ~3 studs apart, sub-stud
+    -- anti-zero-spread jitter inside each. Section split matches the
+    -- natural 5-pellet gun pattern: 2 in section A, 3 in section B.
+    -- WIP - still trips HC's per-shot PRNG check most of the time.
+    local function fireShotgunSynth(part, pelletCount)
+        if not part then return false end
+        local head = getHead(); if not head then return false end
+        local origin = head.Position
+
+        local count1 = 2
+        local count2 = pelletCount - count1
+        if count2 < 1 then count2 = 1; count1 = pelletCount - 1 end
+
+        local cf = part.CFrame
+        local right = cf.RightVector
+        local centerA = part.Position - right * 1.5  -- 3 studs apart total
+        local centerB = part.Position + right * 1.5
+
+        local function jit()
+            return Vector3.new(
+                (math.random() - 0.5) * 0.04,
+                (math.random() - 0.5) * 0.04,
+                (math.random() - 0.5) * 0.04
+            )
+        end
+
+        local hits, targets = {}, {}
+        for i = 1, count1 do
+            local j   = jit()
+            local pos = centerA + j
+            hits[i]    = { Normal = (origin - pos).Unit, Instance = part, Position = pos }
+            targets[i] = { thePart = part, theOffset = j + (centerA - part.Position) }
+        end
+        for i = 1, count2 do
+            local idx = count1 + i
+            local j   = jit()
+            local pos = centerB + j
+            hits[idx]    = { Normal = (origin - pos).Unit, Instance = part, Position = pos }
+            targets[idx] = { thePart = part, theOffset = j + (centerB - part.Position) }
+        end
+
+        local hitPos = part.Position
+        local dist   = (hitPos - origin).Magnitude
+        local aim    = origin + workspace.CurrentCamera.CFrame.LookVector * dist
+        local payload = { hits, targets, origin, aim, tick() }
+
+        local me = _RS:FindFirstChild("MainEvent")
+        if not me then return false end
+        local ok = pcall(function() me:FireServer("Shoot", payload) end)
+        local mf = _RS:FindFirstChild("MainFunction")
+        if mf then pcall(function() mf:InvokeServer("GunCheck") end) end
+        return ok
+    end
+
     -- pick whichever target is most current. Ragebot's target auto-switches
     -- with locks/closest/mouse - we prefer it. Fall back to a manually-set
     -- target if ragebot has none.
@@ -3220,67 +3304,47 @@ F.games.hoodCustoms.forceHit = (function()
             or sp:FindFirstChild("Head")
     end
 
+    -- self-knock check: refuse to fire while we're K.O. so we don't
+    -- waste shots / trip "shooting while knocked" detection
+    local function selfIsKnocked()
+        if F.games and F.games.hoodCustoms and F.games.hoodCustoms.isKnocked then
+            local ok, knocked = pcall(F.games.hoodCustoms.isKnocked, lplr)
+            if ok and knocked then return true end
+        end
+        return false
+    end
+
     local function fireOnce()
         if tick() - lastFire < cooldown then return end
+        if selfIsKnocked() then return end
         local part = getCurrentTargetPart(); if not part then return end
-        -- only commit lastFire AFTER we have a valid target, so the cooldown
-        -- doesn't tick during no-target frames
 
+        local headPart = getHead()
+        local origin   = headPart and headPart.Position
+
+        local fired
         if isShotgun() then
-            -- shotgun: just click. don't TP - cone-collapse trips PRNG check.
-            -- gun renders its own tracers, so we don't spawn a fake one.
-            lastFire = tick()
-            fireClick()
-            playHitSound()
-            return
-        end
-
-        -- single-fire: optional TP-wallbang, then synthetic FireServer.
-        -- Capture the PRE-TP origin so the tracer renders from where the
-        -- user actually was, not from the post-TP teleport spot.
-        local preTpOrigin
-        do
-            local head = getHead()
-            preTpOrigin = head and head.Position
-        end
-
-        local saved
-        if tpWallbang then
-            local hrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                saved = hrp.CFrame
-                local tcf = part.CFrame
-                local behind = tcf.Position - tcf.LookVector * tpOffset + Vector3.new(0, 1, 0)
-                pcall(function()
-                    hrp.CFrame = CFrame.new(behind, tcf.Position)
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                end)
-                RunService.Heartbeat:Wait()
+            local tool = getEquippedTool()
+            local pellets = (tool and SHOTGUN_PELLETS[tool.Name]) or 5
+            if shotgunMode == "synth" then
+                fired = fireShotgunSynth(part, pellets)
+            else
+                fireClick()
+                fired = true
             end
+        else
+            fired = fireDirect(part)
         end
 
-        local fired = fireDirect(part)
-
-        -- only spawn visual/audio feedback when we ACTUALLY fired - otherwise
-        -- the autoshoot loop calling us 5x/sec with a missing MainEvent or
-        -- whatever else would spam tracers without any damage being dealt.
         if fired then
             lastFire = tick()
-            if preTpOrigin then spawnTracer(preTpOrigin, part.Position) end
+            -- skip the fake tracer for the click-fire path: the gun renders
+            -- its own native tracers and ours would just be a duplicate
+            local skipTracer = isShotgun() and shotgunMode == "click"
+            if origin and not skipTracer then
+                spawnTracer(origin, part.Position)
+            end
             playHitSound()
-        end
-
-        if tpWallbang and saved then
-            task.delay(tpRestoreDelay, function()
-                local c = lplr.Character
-                local hrp = c and c:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    pcall(function()
-                        hrp.CFrame = saved
-                        hrp.AssemblyLinearVelocity = Vector3.zero
-                    end)
-                end
-            end)
         end
     end
 
@@ -3302,9 +3366,11 @@ F.games.hoodCustoms.forceHit = (function()
     t.getTarget     = function() return target end
     t.setHitPart    = function(name) hitPartName = name or "Head" end
     t.getHitPart    = function() return hitPartName end
-    t.setTpWallbang = function(v) tpWallbang = v == true end
     t.setCooldown   = function(n) cooldown = math.max(0, tonumber(n) or 0.2) end
-    t.setTpOffset   = function(n) tpOffset = math.clamp(tonumber(n) or 4, 1, 60) end
+    t.setShotgunMode = function(m)
+        if m == "synth" or m == "click" then shotgunMode = m end
+    end
+    t.getShotgunMode = function() return shotgunMode end
     -- tracer + hit sound
     t.setTracerEnabled  = function(v) tracerEnabled = v == true end
     t.setTracerColor    = function(c) if typeof(c) == "Color3" then tracerColor = c end end
@@ -3317,6 +3383,125 @@ F.games.hoodCustoms.forceHit = (function()
     return t
 end)()
 
+-- ============================================================
+--  MOVEMENT: DESYNC  (void desync + voidspam)
+--  Pattern: every Heartbeat, save HRP CFrame and write a random void
+--  position (50k-100k stud range, all axes randomized). Replicates to
+--  the server -> server thinks our HRP is in the void, can't be hit.
+--  Every RenderStepped, restore the saved CFrame BEFORE the camera
+--  draws -> locally we render at our real position.
+--
+--  Modes:
+--    "void"     - constant spoof. We're in the void server-side at all
+--                 times. Locally moves normally.
+--    "voidspam" - same, but when our outbound MainEvent:FireServer("Shoot")
+--                 fires, we briefly hold the spoof OFF for ~SHOT_SYNC_MS
+--                 so the shot gets processed at our real position. Then
+--                 we go back to void.
+-- ============================================================
+F.desync = (function()
+    local VOID_MIN = 5e4   -- 50,000 stud
+    local VOID_MAX = 1e5   -- 100,000 stud
+    local SHOT_SYNC_MS = 100  -- voidspam: ms to hold sync after a Shoot
+
+    local active   = false
+    local mode     = "void"   -- "void" or "voidspam"
+    local realCF   = nil      -- captured each Heartbeat, restored each RenderStepped
+    local syncEnd  = 0        -- voidspam: tick() until which to skip the void write
+    local hbConn, rsConn
+
+    local function randVoidPos()
+        local function axis()
+            local mag = VOID_MIN + math.random() * (VOID_MAX - VOID_MIN)
+            return (math.random() < 0.5) and -mag or mag
+        end
+        return Vector3.new(axis(), axis(), axis())
+    end
+
+    local function bind()
+        if hbConn then hbConn:Disconnect() end
+        if rsConn then rsConn:Disconnect() end
+        hbConn = RunService.Heartbeat:Connect(function()
+            if not active then return end
+            -- voidspam: skip the spoof during the sync window after a Shoot
+            if mode == "voidspam" and tick() < syncEnd then return end
+            local c = lplr.Character
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
+            realCF = hrp.CFrame
+            pcall(function() hrp.CFrame = CFrame.new(randVoidPos()) end)
+        end)
+        rsConn = RunService.RenderStepped:Connect(function()
+            if not active then return end
+            local c = lplr.Character
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if not hrp or not realCF then return end
+            pcall(function() hrp.CFrame = realCF end)
+        end)
+    end
+
+    -- detect outbound Shoot fires for voidspam.
+    -- Single hookmetamethod, gated by getgenv() so re-running the script
+    -- doesn't restack hooks.
+    if hookmetamethod and not getgenv()._F_DESYNC_HOOK then
+        getgenv()._F_DESYNC_HOOK = true
+        local _RS = game:GetService("ReplicatedStorage")
+        local mainEvent = _RS:FindFirstChild("MainEvent")
+        local oldNc
+        oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            local m = getnamecallmethod()
+            if m == "FireServer" and active and mode == "voidspam"
+               and rawequal(self, mainEvent) then
+                local args = {...}
+                if args[1] == "Shoot" then
+                    syncEnd = tick() + SHOT_SYNC_MS / 1000
+                    -- snap HRP back to real BEFORE the call returns so the
+                    -- server processes the shot at our real position
+                    local c = lplr.Character
+                    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                    if hrp and realCF then
+                        pcall(function() hrp.CFrame = realCF end)
+                    end
+                end
+            end
+            return oldNc(self, ...)
+        end))
+    end
+
+    local function startVoid(newMode)
+        mode = newMode or "void"
+        active = true
+        syncEnd = 0
+        bind()
+    end
+
+    local function stopVoid()
+        active = false
+        if hbConn then hbConn:Disconnect(); hbConn = nil end
+        if rsConn then rsConn:Disconnect(); rsConn = nil end
+        -- final restore
+        local c = lplr.Character
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if hrp and realCF then pcall(function() hrp.CFrame = realCF end) end
+        realCF = nil
+    end
+
+    return {
+        startVoid     = function() startVoid("void") end,
+        startVoidspam = function() startVoid("voidspam") end,
+        stop          = stopVoid,
+        isActive      = function() return active end,
+        getMode       = function() return mode end,
+        setRange      = function(minV, maxV)
+            VOID_MIN = math.max(1, tonumber(minV) or VOID_MIN)
+            VOID_MAX = math.max(VOID_MIN + 1, tonumber(maxV) or VOID_MAX)
+        end,
+        setShotSyncMs = function(n)
+            SHOT_SYNC_MS = math.clamp(tonumber(n) or 100, 10, 1000)
+        end,
+    }
+end)()
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
@@ -3326,6 +3511,7 @@ F.disableAll = function()
     F.games.hoodCustoms.autoReload.stop(); F.games.hoodCustoms.godmode.stop()
     F.games.hoodCustoms.forceHit.stop()
     F.games.hoodCustoms.knifeReach.stop()
+    if F.desync then F.desync.stop() end
     stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
