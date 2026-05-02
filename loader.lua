@@ -804,12 +804,6 @@ do
     local function selectPlayer(pl)
         _selected = pl
         refreshSelectedLabel()
-        -- mirror to HC force-hit so the user doesn't pick the target twice
-        pcall(function()
-            if F.games and F.games.hoodCustoms and F.games.hoodCustoms.forceHit then
-                F.games.hoodCustoms.forceHit.setTarget(pl)
-            end
-        end)
     end
 
     P:AddDivider()
@@ -1197,9 +1191,10 @@ do
     HC:AddLabel("Force Hit (shotgun support WIP)")
     HC:AddToggle("HCForceHit", { Text = "Enable",
         Default = false,
-        Tooltip = "Press the hotkey with a target selected in the Players tab. "
-            .. "Single-fire weapons use a synthetic FireServer payload; "
-            .. "shotguns fall back to a click (silent aim does the redirect).",
+        Tooltip = "Hooks the ragebot's auto-shoot. While AutoShoot is on and "
+            .. "the ragebot has a target locked, every fire goes through a "
+            .. "synthetic Shoot remote instead of a click. Single-fire = forced "
+            .. "hit. Shotguns fall back to click (silent aim handles redirect).",
         Callback = function(v)
             if v then F.games.hoodCustoms.forceHit.start()
             else      F.games.hoodCustoms.forceHit.stop() end
@@ -1233,17 +1228,6 @@ do
         Default  = 4, Min = 1, Max = 30, Rounding = 0,
         Callback = function(v) F.games.hoodCustoms.forceHit.setTpOffset(v) end,
     })
-    -- Fire hotkey. Same one-shot pattern as the Combat-tab TP-shoot key:
-    -- KeyPicker on a label so it doesn't auto-toggle anything, then
-    -- bindFireKey wires the press to forceHit.fire(). The fire() method
-    -- itself checks G.hcForceHitActive so the toggle still gates it.
-    HC:AddLabel("Force Hit key"):AddKeyPicker("HCForceHitKey", {
-        Default = "E", Mode = "Hold", Text = "Force Hit", NoUI = false,
-    })
-    bindFireKey("HCForceHitKey", function()
-        F.games.hoodCustoms.forceHit.fire()
-    end)
-
     -- Tracer + hit sound. FireServer doesn't render bullet visuals
     -- because we never go through the gun script, so we fake them
     -- locally for visual + audio feedback on each forced hit.

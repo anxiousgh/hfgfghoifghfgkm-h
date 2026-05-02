@@ -1605,6 +1605,17 @@ RunService.Heartbeat:Connect(function()
         if not lc or not lc:FindFirstChildOfClass("Tool") then return end
     end
     _rbLastShot = tick()
+    -- HC Force Hit hook: when active, fire the synthetic Shoot remote
+    -- (or click for shotguns) instead of just clicking. forceHit.fire()
+    -- is gated by G.hcForceHitActive and reads ragebot's current target,
+    -- so locking a target with the ragebot is what selects the victim.
+    if G.hcForceHitActive
+        and F and F.games and F.games.hoodCustoms
+        and F.games.hoodCustoms.forceHit
+        and F.games.hoodCustoms.forceHit.fire then
+        F.games.hoodCustoms.forceHit.fire()
+        return
+    end
     VirtualInputManager:SendMouseButtonEvent(0,0,0,true,game,0)
     VirtualInputManager:SendMouseButtonEvent(0,0,0,false,game,0)
 end)
@@ -3192,11 +3203,31 @@ F.games.hoodCustoms.forceHit = (function()
         end)
     end
 
+    -- pick whichever target is most current. Ragebot's target auto-switches
+    -- with locks/closest/mouse - we prefer it. Fall back to a manually-set
+    -- target if ragebot has none.
+    local function currentTarget()
+        if rbGetTarget then
+            local p = rbGetTarget()
+            if p and p.Parent then return p end
+        end
+        if target and target.Parent then return target end
+        return nil
+    end
+
+    -- like getTargetMainPart() but uses currentTarget() instead of `target`
+    local function getCurrentTargetPart()
+        local p = currentTarget(); if not p or not p.Character then return nil end
+        local sp = p.Character:FindFirstChild("SpecialParts") or p.Character
+        return sp:FindFirstChild(hitPartName)
+            or sp:FindFirstChild("HumanoidRootPart")
+            or sp:FindFirstChild("Head")
+    end
+
     local function fireOnce()
         if tick() - lastFire < cooldown then return end
         lastFire = tick()
-        if not target or not target.Parent then return end
-        local part = getTargetMainPart(); if not part then return end
+        local part = getCurrentTargetPart(); if not part then return end
 
         if isShotgun() then
             -- shotgun: just click. don't TP - cone-collapse trips PRNG check.
