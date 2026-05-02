@@ -2228,6 +2228,72 @@ end
 F.antiVcBan = { fire = antiVcBanFire }
 
 -- ============================================================
+--  ANTI-FLING
+--  Caps HRP linear+angular velocity each Heartbeat. Real fling
+--  exploits push velocities to 1e6+ stud/sec; anything above the
+--  cap gets clamped before physics applies it. Default cap is
+--  generous (5000 stud/sec) so it doesn't fight fly/speed/blink.
+--  Also resets velocity to zero when over the cap, since fling
+--  exploits often spike a single frame and then stop.
+-- ============================================================
+F.antiFling = (function()
+    local cap     = 5000      -- stud/sec, both linear and angular
+    local hbConn
+    local charConn
+
+    local function clampHrp()
+        local c = lplr.Character; if not c then return end
+        local hrp = c:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+        local v  = hrp.AssemblyLinearVelocity
+        local av = hrp.AssemblyAngularVelocity
+        if v and v.Magnitude > cap then
+            pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
+        end
+        if av and av.Magnitude > cap then
+            pcall(function() hrp.AssemblyAngularVelocity = Vector3.zero end)
+        end
+        -- some flings target other body parts (Torso, limbs); sweep
+        -- those too. Limited to a few high-mass parts so we don't
+        -- iterate the whole rig every frame.
+        for _, name in ipairs({"UpperTorso","LowerTorso","Torso","Head"}) do
+            local p = c:FindFirstChild(name)
+            if p and p:IsA("BasePart") then
+                local pv  = p.AssemblyLinearVelocity
+                local pav = p.AssemblyAngularVelocity
+                if pv and pv.Magnitude > cap then
+                    pcall(function() p.AssemblyLinearVelocity = Vector3.zero end)
+                end
+                if pav and pav.Magnitude > cap then
+                    pcall(function() p.AssemblyAngularVelocity = Vector3.zero end)
+                end
+            end
+        end
+    end
+
+    local function start()
+        G.antiFlingActive = true
+        if hbConn then hbConn:Disconnect() end
+        hbConn = RunService.Heartbeat:Connect(function()
+            if not G.antiFlingActive then return end
+            clampHrp()
+        end)
+        if charConn then charConn:Disconnect() end
+        charConn = lplr.CharacterAdded:Connect(function() task.wait(0.2); clampHrp() end)
+    end
+
+    local function stop()
+        G.antiFlingActive = false
+        if hbConn   then hbConn:Disconnect();   hbConn   = nil end
+        if charConn then charConn:Disconnect(); charConn = nil end
+    end
+
+    local t = makeToggle(start, stop, "antiFlingActive")
+    t.setCap = function(n) cap = math.max(50, tonumber(n) or 5000) end
+    t.getCap = function() return cap end
+    return t
+end)()
+
+-- ============================================================
 --  SERVER HOPPER
 -- ============================================================
 local TeleportService = game:GetService("TeleportService")
@@ -3418,11 +3484,16 @@ F.desync = (function()
     local VOID_MIN     = 5000
     local VOID_MAX     = 20000
     local SHOT_SYNC_MS = 100
+    -- spoof rate in Hz. 60 = every Heartbeat (default). Lower = fewer
+    -- per-second writes (more local stability, easier to hit between
+    -- spoofs). Capped at 60 since Heartbeat is ~60Hz max.
+    local SPOOF_RATE_HZ = 60
 
     local active   = false
-    local mode     = "void"   -- "void"|"voidspam"|"upsideDown"|"spin"|"velocity"|"off"
+    local mode     = "void"   -- "void"|"voidspam"|"spin"|"velocity"|"off"
     local realCF, realLV, realAV
     local syncEnd  = 0
+    local _lastSpoof = 0
     local hbConn
     local RESTORE_BIND = "_F_DESYNC_RESTORE"
     local _spinAngle = 0
@@ -3440,17 +3511,6 @@ F.desync = (function()
     local function applySpoof(hrp)
         if mode == "void" or mode == "voidspam" then
             hrp.CFrame = CFrame.new(randVoidPos())
-        elseif mode == "upsideDown" then
-            -- preserve XYZ position, flip on X axis (head-down). The
-            -- horizontal facing of the original CFrame is preserved by
-            -- multiplying after the flip.
-            local pos = hrp.Position
-            local lv  = hrp.CFrame.LookVector
-            local horiz = Vector3.new(lv.X, 0, lv.Z)
-            if horiz.Magnitude < 0.01 then horiz = Vector3.new(0, 0, -1) end
-            horiz = horiz.Unit
-            local face = CFrame.new(pos, pos + horiz)
-            hrp.CFrame = face * CFrame.Angles(math.pi, 0, 0)
         elseif mode == "spin" then
             _spinAngle = (_spinAngle + 47) % 360
             hrp.CFrame = hrp.CFrame * CFrame.Angles(
@@ -3471,6 +3531,11 @@ F.desync = (function()
         hbConn = RunService.Heartbeat:Connect(function()
             if not active then return end
             if mode == "voidspam" and tick() < syncEnd then return end
+            -- rate limiter: only spoof at most SPOOF_RATE_HZ times per sec
+            local interval = 1 / math.max(SPOOF_RATE_HZ, 1)
+            local now = tick()
+            if now - _lastSpoof < interval then return end
+            _lastSpoof = now
             local c = lplr.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
@@ -3549,7 +3614,6 @@ F.desync = (function()
         -- previous mode by re-binding the same Heartbeat)
         startVoid       = function() startMode("void") end,
         startVoidspam   = function() startMode("voidspam") end,
-        startUpsideDown = function() startMode("upsideDown") end,
         startSpin       = function() startMode("spin") end,
         startVelocity   = function() startMode("velocity") end,
         stop            = stopAll,
@@ -3561,6 +3625,9 @@ F.desync = (function()
         end,
         setShotSyncMs   = function(n)
             SHOT_SYNC_MS = math.clamp(tonumber(n) or 100, 10, 1000)
+        end,
+        setRateHz       = function(n)
+            SPOOF_RATE_HZ = math.clamp(tonumber(n) or 60, 1, 60)
         end,
     }
 end)()
@@ -3575,6 +3642,7 @@ F.disableAll = function()
     F.games.hoodCustoms.forceHit.stop()
     F.games.hoodCustoms.knifeReach.stop()
     if F.desync then F.desync.stop() end
+    if F.antiFling then F.antiFling.stop() end
     stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false

@@ -777,17 +777,17 @@ do
 
 end
 
--- Desync gets its own dedicated groupbox in the Movement tab so it
--- doesn't clutter Extras and is easy to find.
+-- Desync gets its own dedicated groupbox in the Movement tab.
+-- NOTE: Voidspam lives in the Games -> Hood Customs tab because it
+-- hooks the HC-specific MainEvent("Shoot") remote; sticking it here
+-- would imply it works in any game. The mutex below treats the HC
+-- voidspam toggle (HCVoidspam) as part of the same set so all four
+-- desync toggles are mutually exclusive.
 do
     local Desync = Tabs.Movement:AddRightGroupbox("Desync")
 
-    -- helper: turn on `name`, turn off all other desync toggles in the
-    -- given list. Keeps the modes mutually exclusive without stacking
-    -- callbacks recursing into each other.
     local DESYNC_KEYS = {
-        "DesyncVoid", "DesyncVoidspam",
-        "DesyncUpsideDown", "DesyncSpin", "DesyncVelocity",
+        "DesyncVoid", "DesyncSpin", "DesyncVelocity", "HCVoidspam",
     }
     local function selectMode(name)
         for _, k in ipairs(DESYNC_KEYS) do
@@ -796,6 +796,8 @@ do
             end
         end
     end
+    -- expose the mutex helper to other tabs (HC tab uses it for HCVoidspam)
+    getgenv()._F_DESYNC_SELECT = selectMode
 
     Desync:AddToggle("DesyncVoid", { Text = "Void desync",
         Default = false,
@@ -804,28 +806,6 @@ do
             .. "Locally restored before render so view stays normal.",
         Callback = function(v)
             if v then selectMode("DesyncVoid"); F.desync.startVoid()
-            else      F.desync.stop() end
-        end,
-    })
-    Desync:AddToggle("DesyncVoidspam", { Text = "Voidspam (sync on shoot)",
-        Default = false,
-        Tooltip = "Void desync that releases the spoof for ~100ms when "
-            .. "your Shoot remote fires, so shots land at your real "
-            .. "position. Then back to void.",
-        Callback = function(v)
-            if v then selectMode("DesyncVoidspam"); F.desync.startVoidspam()
-            else      F.desync.stop() end
-        end,
-    })
-    Desync:AddToggle("DesyncUpsideDown", { Text = "Upside-down desync",
-        Default = false,
-        Tooltip = "Server-side: HRP rotated 180 deg on X each Heartbeat "
-            .. "(position preserved). Locally upright. Some games "
-            .. "relax origin-mismatch validation while we look glitched, "
-            .. "letting long-range TPs (Goto / clickTp) work without "
-            .. "kicks - try this if normal TPs are getting flagged.",
-        Callback = function(v)
-            if v then selectMode("DesyncUpsideDown"); F.desync.startUpsideDown()
             else      F.desync.stop() end
         end,
     })
@@ -853,10 +833,13 @@ do
 
     Desync:AddDivider()
 
-    Desync:AddSlider("DesyncShotSyncMs", {
-        Text     = "Voidspam shot sync (ms)",
-        Default  = 100, Min = 10, Max = 500, Rounding = 0,
-        Callback = function(v) F.desync.setShotSyncMs(v) end,
+    Desync:AddSlider("DesyncRateHz", {
+        Text     = "Spoof rate (Hz)",
+        Tooltip  = "How many times per second the spoof fires. 60 = every "
+            .. "Heartbeat (most aggressive). Lower = more local stability "
+            .. "but easier for shooters to hit you between spoofs.",
+        Default  = 60, Min = 1, Max = 60, Rounding = 0,
+        Callback = function(v) F.desync.setRateHz(v) end,
     })
     do
         local minStuds, maxStuds = 5000, 20000
@@ -1057,6 +1040,25 @@ do
         Default = "T", Mode = "Hold", Text = "Respawn",
     })
     bindFireKey("RespawnKey", F.respawn.fire)
+
+    -- =================== ANTI-FLING ===================
+    local AntiFling = Tabs.Misc:AddLeftGroupbox("Anti-fling")
+    AntiFling:AddToggle("AntiFling", { Text = "Enable",
+        Default = false,
+        Tooltip = "Caps HRP + torso/head linear+angular velocity each "
+            .. "Heartbeat. Real flings push velocity to 1e6+ stud/sec; "
+            .. "anything above the cap gets reset to zero before physics "
+            .. "applies it. Default cap (5000) is generous enough not to "
+            .. "fight fly/speed/blink.",
+        Callback = function(v)
+            if v then F.antiFling.start() else F.antiFling.stop() end
+        end,
+    })
+    AntiFling:AddSlider("AntiFlingCap", {
+        Text     = "Velocity cap (stud/sec)",
+        Default  = 5000, Min = 100, Max = 50000, Rounding = 0,
+        Callback = function(v) F.antiFling.setCap(v) end,
+    })
 
     -- =================== SERVER HOPPER ===================
     local Srv = Tabs.Misc:AddLeftGroupbox("Server hop")
@@ -1367,6 +1369,36 @@ do
         Text     = "Hit sound volume",
         Default  = 1.0, Min = 0, Max = 3, Rounding = 2,
         Callback = function(v) F.games.hoodCustoms.forceHit.setHitSoundVolume(v) end,
+    })
+
+    HC:AddDivider()
+
+    -- Voidspam lives here (not in Movement -> Desync) because it hooks
+    -- the HC-specific MainEvent("Shoot") remote. Mutually exclusive with
+    -- the other desync modes via the shared selectMode helper exposed
+    -- on getgenv()._F_DESYNC_SELECT.
+    HC:AddLabel("Voidspam (HC-only desync)")
+    HC:AddToggle("HCVoidspam", { Text = "Voidspam (sync on shoot)",
+        Default = false,
+        Tooltip = "Server-side void desync that releases the spoof for "
+            .. "~100ms when your MainEvent('Shoot') fires - so shots "
+            .. "land at your real position. HC-specific because it hooks "
+            .. "that remote. Mutually exclusive with the Movement-tab "
+            .. "desync modes.",
+        Callback = function(v)
+            if v then
+                local sel = getgenv()._F_DESYNC_SELECT
+                if sel then sel("HCVoidspam") end
+                F.desync.startVoidspam()
+            else
+                F.desync.stop()
+            end
+        end,
+    })
+    HC:AddSlider("HCVoidspamShotSyncMs", {
+        Text     = "Shot sync window (ms)",
+        Default  = 100, Min = 10, Max = 500, Rounding = 0,
+        Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
 
     end -- close: if not inHoodCustoms() then ... else ...
