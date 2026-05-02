@@ -1212,12 +1212,6 @@ do
             .. "Skipped automatically when a shotgun is equipped.",
         Callback = function(v) F.games.hoodCustoms.forceHit.setTpWallbang(v) end,
     })
-    HC:AddToggle("HCForceHitAmmo", { Text = "Auto-refill ammo (cclosure-style)",
-        Default = true,
-        Tooltip = "Writes Tool.Script.Ammo.Value back to its observed max "
-            .. "every Heartbeat so the gun never visually depletes.",
-        Callback = function(v) F.games.hoodCustoms.forceHit.setAutoRefill(v) end,
-    })
     HC:AddSlider("HCForceHitCooldown", {
         Text     = "Cooldown (sec)",
         Default  = 0.20, Min = 0, Max = 2, Rounding = 2,

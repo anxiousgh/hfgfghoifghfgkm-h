@@ -427,7 +427,11 @@ local function hookAutoReChar(char)
         lplr.CharacterAdded:Once(function(newChar)
             if not G.autoReActive then return end
             local newHrp=newChar:WaitForChild("HumanoidRootPart",5)
-            if newHrp then task.wait(0.15); newHrp.CFrame = _uprightCF(cf) end
+            if newHrp then
+                task.wait(0.15)
+                local upright = _uprightCF(cf)
+                if upright then pcall(function() newHrp.CFrame = upright end) end
+            end
             _forceStanding(newChar)
         end)
     end)
@@ -449,9 +453,18 @@ local function cmdRe()
     local hrp=char:FindFirstChild("HumanoidRootPart")
     if hrp then G.savedCFrame=hrp.CFrame end
     lplr.CharacterAdded:Once(function(newChar)
-        if G.savedCFrame then
-            local newHrp=newChar:WaitForChild("HumanoidRootPart",5)
-            if newHrp then task.wait(0.1); newHrp.CFrame = _uprightCF(G.savedCFrame); G.savedCFrame=nil end
+        -- snapshot G.savedCFrame BEFORE the yield. Otherwise a second
+        -- cmdRe / autoRe Once may set it to nil during task.wait(0.1)
+        -- and we'd assign nil to CFrame ("CoordinateFrame expected, got nil")
+        local cf = G.savedCFrame
+        G.savedCFrame = nil
+        if cf then
+            local newHrp = newChar:WaitForChild("HumanoidRootPart",5)
+            if newHrp then
+                task.wait(0.1)
+                local upright = _uprightCF(cf)
+                if upright then pcall(function() newHrp.CFrame = upright end) end
+            end
         end
         _forceStanding(newChar)
     end)
@@ -3070,7 +3083,6 @@ F.games.hoodCustoms.forceHit = (function()
     local tpOffset        = 4
     local tpRestoreDelay  = 0.10
     local cooldown        = 0.20
-    local autoRefillAmmo  = true
 
     -- visual / audio feedback (FireServer doesn't render bullet visuals
     -- because we never hit the gun script, so we fake them locally)
@@ -3083,7 +3095,6 @@ F.games.hoodCustoms.forceHit = (function()
     local hitSoundId      = 135698842254153  -- "crit" by default
     local hitSoundVolume  = 1.0
 
-    local autoRefillConn
     local lastFire = 0
 
     local _RS = game:GetService("ReplicatedStorage")
@@ -3113,16 +3124,6 @@ F.games.hoodCustoms.forceHit = (function()
     local function getHead()
         local c = lplr.Character
         return c and c:FindFirstChild("Head")
-    end
-
-    local function getAmmoIntValue()
-        local tool = getEquippedTool(); if not tool then return nil end
-        local script = tool:FindFirstChild("Script"); if not script then return nil end
-        local ammo = script:FindFirstChild("Ammo")
-        if ammo and (ammo:IsA("IntValue") or ammo:IsA("NumberValue")) then
-            return ammo, script
-        end
-        return nil
     end
 
     -- spawn a fake bullet tracer: a thin neon part along origin -> hitPos,
@@ -3283,31 +3284,12 @@ F.games.hoodCustoms.forceHit = (function()
         end
     end
 
-    local function startAutoRefill()
-        if autoRefillConn then autoRefillConn:Disconnect() end
-        local maxByTool = setmetatable({}, { __mode = "k" })
-        autoRefillConn = RunService.Heartbeat:Connect(function()
-            if not G.hcForceHitActive then return end
-            if not autoRefillAmmo then return end
-            local ammo, script = getAmmoIntValue()
-            if not ammo then return end
-            local tool = script.Parent
-            local seen = maxByTool[tool] or 0
-            if ammo.Value > seen then seen = ammo.Value; maxByTool[tool] = seen end
-            if seen > 0 and ammo.Value < seen then
-                pcall(function() ammo.Value = seen end)
-            end
-        end)
-    end
-
     local function start()
         G.hcForceHitActive = true
-        if autoRefillAmmo then startAutoRefill() end
     end
 
     local function stop()
         G.hcForceHitActive = false
-        if autoRefillConn  then autoRefillConn:Disconnect();  autoRefillConn  = nil end
     end
 
     local t = makeToggle(start, stop, "hcForceHitActive")
@@ -3321,16 +3303,6 @@ F.games.hoodCustoms.forceHit = (function()
     t.setHitPart    = function(name) hitPartName = name or "Head" end
     t.getHitPart    = function() return hitPartName end
     t.setTpWallbang = function(v) tpWallbang = v == true end
-    t.setAutoRefill = function(v)
-        autoRefillAmmo = v == true
-        if G.hcForceHitActive then
-            if autoRefillAmmo then
-                startAutoRefill()
-            elseif autoRefillConn then
-                autoRefillConn:Disconnect(); autoRefillConn = nil
-            end
-        end
-    end
     t.setCooldown   = function(n) cooldown = math.max(0, tonumber(n) or 0.2) end
     t.setTpOffset   = function(n) tpOffset = math.clamp(tonumber(n) or 4, 1, 60) end
     -- tracer + hit sound
