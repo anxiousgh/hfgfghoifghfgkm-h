@@ -399,14 +399,12 @@ end
 local function _uprightTp(char, hrp, position, faceDir)
     -- pre-clean: if we're ragdolled / upside-down / sitting, joint
     -- forces will yank HRP back the moment after we set CFrame. Clear
-    -- those states FIRST, write the new CFrame, then clear again to
-    -- counter any "respawn" code the game runs.
+    -- those states FIRST so the humanoid stops fighting the teleport.
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
             pcall(function() hum.PlatformStand = false end)
             pcall(function() hum.Sit            = false end)
-            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
         end
     end
 
@@ -420,19 +418,17 @@ local function _uprightTp(char, hrp, position, faceDir)
         if horiz.Magnitude < 0.01 then horiz = Vector3.new(0, 0, -1) end
     end
     horiz = horiz.Unit
+    local newCF = CFrame.new(position, position + horiz)
     pcall(function()
-        -- briefly anchor so any constraint forces can't drag HRP back
-        -- before we finish writing the new orientation. One frame is
-        -- enough for the engine to commit the position write.
-        local wasAnchored = hrp.Anchored
-        hrp.Anchored = true
-        hrp.CFrame = CFrame.new(position, position + horiz)
+        hrp.CFrame = newCF
         hrp.AssemblyLinearVelocity  = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
-        task.defer(function()
-            if hrp and hrp.Parent then hrp.Anchored = wasAnchored end
-        end)
     end)
+    -- notify desync so its Heartbeat-captured realCF gets updated to the
+    -- new position. otherwise its RenderStepped restore would undo our TP.
+    if F and F.desync and F.desync.notifyTeleport then
+        F.desync.notifyTeleport(newCF)
+    end
     if char then _forceStanding(char) end
 end
 
@@ -3636,6 +3632,19 @@ F.desync = (function()
         end,
         setVelocityMag  = function(n)
             VEL_MAGNITUDE = math.max(1, tonumber(n) or 16384)
+        end,
+        -- called by external TP code (_uprightTp etc) so our captured
+        -- realCF reflects the new position. without this our next
+        -- RenderStepped restore would yank HRP back to where it was
+        -- before the user's teleport.
+        notifyTeleport  = function(newCF)
+            if typeof(newCF) == "CFrame" then
+                realCF = newCF
+            else
+                local c = lplr.Character
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if hrp then realCF = hrp.CFrame end
+            end
         end,
     }
 end)()
