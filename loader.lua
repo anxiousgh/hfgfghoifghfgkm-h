@@ -819,6 +819,24 @@ do
         Default  = 100, Min = 10, Max = 500, Rounding = 0,
         Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
+    -- min/max paired sliders so the user can tune the spoof distance live.
+    -- defaults match F.desync internal defaults (5k - 20k stud).
+    do
+        local minStuds, maxStuds = 5000, 20000
+        local function push()
+            F.desync.setRange(minStuds, maxStuds)
+        end
+        Extras:AddSlider("DesyncMinStuds", {
+            Text     = "Desync min distance",
+            Default  = 5000, Min = 500, Max = 100000, Rounding = 0,
+            Callback = function(v) minStuds = v; push() end,
+        })
+        Extras:AddSlider("DesyncMaxStuds", {
+            Text     = "Desync max distance",
+            Default  = 20000, Min = 500, Max = 100000, Rounding = 0,
+            Callback = function(v) maxStuds = v; push() end,
+        })
+    end
 end
 
 -- ============================================================

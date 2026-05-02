@@ -3400,15 +3400,22 @@ end)()
 --                 we go back to void.
 -- ============================================================
 F.desync = (function()
-    local VOID_MIN = 5e4   -- 50,000 stud
-    local VOID_MAX = 1e5   -- 100,000 stud
-    local SHOT_SYNC_MS = 100  -- voidspam: ms to hold sync after a Shoot
+    -- Smaller default range than 5e4 / 1e5 - those huge jumps confused
+    -- physics enough that the local Humanoid would get stuck in the
+    -- "falling" state and stop responding to movement input. 5k stud is
+    -- still well outside any map / hit-validation cone.
+    local VOID_MIN = 5000
+    local VOID_MAX = 20000
+    local SHOT_SYNC_MS = 100
 
     local active   = false
-    local mode     = "void"   -- "void" or "voidspam"
-    local realCF   = nil      -- captured each Heartbeat, restored each RenderStepped
-    local syncEnd  = 0        -- voidspam: tick() until which to skip the void write
-    local hbConn, rsConn
+    local mode     = "void"
+    local realCF   = nil
+    local realLV   = nil    -- linear velocity, restored too so Humanoid keeps walking
+    local realAV   = nil    -- angular velocity
+    local syncEnd  = 0
+    local hbConn
+    local RESTORE_BIND = "_F_DESYNC_RESTORE"
 
     local function randVoidPos()
         local function axis()
@@ -3420,24 +3427,40 @@ F.desync = (function()
 
     local function bind()
         if hbConn then hbConn:Disconnect() end
-        if rsConn then rsConn:Disconnect() end
+        pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
+
         hbConn = RunService.Heartbeat:Connect(function()
             if not active then return end
-            -- voidspam: skip the spoof during the sync window after a Shoot
             if mode == "voidspam" and tick() < syncEnd then return end
             local c = lplr.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
             realCF = hrp.CFrame
+            realLV = hrp.AssemblyLinearVelocity
+            realAV = hrp.AssemblyAngularVelocity
             pcall(function() hrp.CFrame = CFrame.new(randVoidPos()) end)
         end)
-        rsConn = RunService.RenderStepped:Connect(function()
-            if not active then return end
-            local c = lplr.Character
-            local hrp = c and c:FindFirstChild("HumanoidRootPart")
-            if not hrp or not realCF then return end
-            pcall(function() hrp.CFrame = realCF end)
-        end)
+
+        -- BindToRenderStep at First priority so we restore HRP BEFORE the
+        -- default camera's PreRender step samples it. Plain RenderStepped
+        -- runs after the camera, which is why the user was seeing their
+        -- view in the sky - the camera locked onto void HRP for one frame.
+        RunService:BindToRenderStep(
+            RESTORE_BIND, Enum.RenderPriority.First.Value,
+            function()
+                if not active then return end
+                local c = lplr.Character
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if not hrp or not realCF then return end
+                pcall(function()
+                    hrp.CFrame = realCF
+                    -- restore velocities too so the Humanoid doesn't think
+                    -- it just teleported - keeps walking input working
+                    if realLV then hrp.AssemblyLinearVelocity  = realLV end
+                    if realAV then hrp.AssemblyAngularVelocity = realAV end
+                end)
+            end
+        )
     end
 
     -- detect outbound Shoot fires for voidspam.
@@ -3478,12 +3501,18 @@ F.desync = (function()
     local function stopVoid()
         active = false
         if hbConn then hbConn:Disconnect(); hbConn = nil end
-        if rsConn then rsConn:Disconnect(); rsConn = nil end
+        pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
         -- final restore
         local c = lplr.Character
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
-        if hrp and realCF then pcall(function() hrp.CFrame = realCF end) end
-        realCF = nil
+        if hrp and realCF then
+            pcall(function()
+                hrp.CFrame = realCF
+                if realLV then hrp.AssemblyLinearVelocity  = realLV end
+                if realAV then hrp.AssemblyAngularVelocity = realAV end
+            end)
+        end
+        realCF, realLV, realAV = nil, nil, nil
     end
 
     return {
@@ -3493,7 +3522,7 @@ F.desync = (function()
         isActive      = function() return active end,
         getMode       = function() return mode end,
         setRange      = function(minV, maxV)
-            VOID_MIN = math.max(1, tonumber(minV) or VOID_MIN)
+            VOID_MIN = math.max(100, tonumber(minV) or VOID_MIN)
             VOID_MAX = math.max(VOID_MIN + 1, tonumber(maxV) or VOID_MAX)
         end,
         setShotSyncMs = function(n)
