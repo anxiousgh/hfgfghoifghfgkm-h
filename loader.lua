@@ -804,6 +804,12 @@ do
     local function selectPlayer(pl)
         _selected = pl
         refreshSelectedLabel()
+        -- mirror to HC force-hit so the user doesn't pick the target twice
+        pcall(function()
+            if F.games and F.games.hoodCustoms and F.games.hoodCustoms.forceHit then
+                F.games.hoodCustoms.forceHit.setTarget(pl)
+            end
+        end)
     end
 
     P:AddDivider()
@@ -1181,6 +1187,62 @@ do
             else      F.games.hoodCustoms.godmode.stop() end
         end,
     })
+
+    HC:AddDivider()
+
+    -- ---- Force Hit ----
+    -- Target is shared with the Players tab selection (selectPlayer there
+    -- calls forceHit.setTarget on every change). Hotkey + part dropdown +
+    -- TP-wallbang + auto-refill ammo all live here.
+    HC:AddLabel("Force Hit (shotgun support WIP)")
+    HC:AddToggle("HCForceHit", { Text = "Enable",
+        Default = false,
+        Tooltip = "Press the hotkey with a target selected in the Players tab. "
+            .. "Single-fire weapons use a synthetic FireServer payload; "
+            .. "shotguns fall back to a click (silent aim does the redirect).",
+        Callback = function(v)
+            if v then F.games.hoodCustoms.forceHit.start()
+            else      F.games.hoodCustoms.forceHit.stop() end
+        end,
+    })
+    HC:AddDropdown("HCForceHitPart", {
+        Text     = "Hit part",
+        Values   = { "Head", "UpperTorso", "HumanoidRootPart" },
+        Default  = "Head",
+        Callback = function(v) F.games.hoodCustoms.forceHit.setHitPart(v) end,
+    })
+    HC:AddToggle("HCForceHitTpWallbang", { Text = "TP wallbang (single-fire only)",
+        Default = true,
+        Tooltip = "Teleport behind the target, fire, teleport back. "
+            .. "Skipped automatically when a shotgun is equipped.",
+        Callback = function(v) F.games.hoodCustoms.forceHit.setTpWallbang(v) end,
+    })
+    HC:AddToggle("HCForceHitAmmo", { Text = "Auto-refill ammo (cclosure-style)",
+        Default = true,
+        Tooltip = "Writes Tool.Script.Ammo.Value back to its observed max "
+            .. "every Heartbeat so the gun never visually depletes.",
+        Callback = function(v) F.games.hoodCustoms.forceHit.setAutoRefill(v) end,
+    })
+    HC:AddSlider("HCForceHitCooldown", {
+        Text     = "Cooldown (sec)",
+        Default  = 0.20, Min = 0, Max = 2, Rounding = 2,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setCooldown(v) end,
+    })
+    HC:AddSlider("HCForceHitTpOffset", {
+        Text     = "TP offset (studs)",
+        Default  = 4, Min = 1, Max = 30, Rounding = 0,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setTpOffset(v) end,
+    })
+    -- Fire hotkey. Same one-shot pattern as the Combat-tab TP-shoot key:
+    -- KeyPicker on a label so it doesn't auto-toggle anything, then
+    -- bindFireKey wires the press to forceHit.fire(). The fire() method
+    -- itself checks G.hcForceHitActive so the toggle still gates it.
+    HC:AddLabel("Force Hit key"):AddKeyPicker("HCForceHitKey", {
+        Default = "E", Mode = "Hold", Text = "Force Hit", NoUI = false,
+    })
+    bindFireKey("HCForceHitKey", function()
+        F.games.hoodCustoms.forceHit.fire()
+    end)
 
     end -- close: if not inHoodCustoms() then ... else ...
 end

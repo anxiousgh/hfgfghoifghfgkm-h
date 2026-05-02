@@ -3025,6 +3025,210 @@ F.games.hoodCustoms.godmode = (function()
     )
 end)()
 
+-- ============================================================
+--  GAMES: HOOD CUSTOMS - FORCE HIT  (single-fire, shotgun WIP)
+--  On hotkey press, force a hit on the chosen target:
+--
+--   * SINGLE-FIRE weapons -> direct FireServer("Shoot", payload)
+--     with synthetic single-pellet payload (Head as origin,
+--     camera-aligned aim, hit on chosen body part). Optional
+--     TP-wallbang teleports into LoS, fires, teleports back.
+--
+--   * SHOTGUNS ([Shotgun] / [Double Barrel] / [Tactical Shotgun]) -
+--     synthesizing a payload trips HC's per-shot PRNG check
+--     ("attempt on spoofing spread pattern"). Falls back to
+--     VirtualInputManager click so the gun fires natively. Pellets
+--     land on target via natural cone when silent aim is on. No
+--     TP wallbang on this path - silent aim collapsing the cone
+--     to 0 spread also trips the pattern check.
+--
+--  Optional ammo refill writes Tool.Script.Ammo.Value to its
+--  observed max each Heartbeat (cclosure-style), keeps the gun
+--  visually full and ready to click-fire.
+-- ============================================================
+F.games.hoodCustoms.forceHit = (function()
+    local SHOTGUN_NAMES = {
+        ["[Shotgun]"]          = true,
+        ["[Double Barrel]"]    = true,
+        ["[Tactical Shotgun]"] = true,
+    }
+
+    local target          = nil
+    local hitPartName     = "Head"
+    local tpWallbang      = true
+    local tpOffset        = 4
+    local tpRestoreDelay  = 0.10
+    local cooldown        = 0.20
+    local autoRefillAmmo  = true
+
+    local autoRefillConn
+    local lastFire = 0
+
+    local _RS = game:GetService("ReplicatedStorage")
+
+    local function getEquippedTool()
+        local c = lplr.Character
+        return c and c:FindFirstChildOfClass("Tool")
+    end
+
+    local function isShotgun()
+        local t = getEquippedTool()
+        return t and SHOTGUN_NAMES[t.Name] == true
+    end
+
+    local function getTargetSpecialPart(name)
+        if not target or not target.Character then return nil end
+        local sp = target.Character:FindFirstChild("SpecialParts") or target.Character
+        return sp:FindFirstChild(name)
+    end
+
+    local function getTargetMainPart()
+        return getTargetSpecialPart(hitPartName)
+            or getTargetSpecialPart("HumanoidRootPart")
+            or getTargetSpecialPart("Head")
+    end
+
+    local function getHead()
+        local c = lplr.Character
+        return c and c:FindFirstChild("Head")
+    end
+
+    local function getAmmoIntValue()
+        local tool = getEquippedTool(); if not tool then return nil end
+        local script = tool:FindFirstChild("Script"); if not script then return nil end
+        local ammo = script:FindFirstChild("Ammo")
+        if ammo and (ammo:IsA("IntValue") or ammo:IsA("NumberValue")) then
+            return ammo, script
+        end
+        return nil
+    end
+
+    -- single-fire path: synthetic payload, direct FireServer
+    local function fireDirect()
+        local part = getTargetMainPart(); if not part then return end
+        local head = getHead(); if not head then return end
+        local origin = head.Position
+        local hitPos = part.Position
+        local dist   = (hitPos - origin).Magnitude
+        local aim    = origin + workspace.CurrentCamera.CFrame.LookVector * dist
+        local normal = (origin - hitPos).Unit
+        local payload = {
+            { { Normal = normal, Instance = part, Position = hitPos } },
+            { { thePart = part, theOffset = Vector3.new(0, 0, 0) } },
+            origin, aim, tick(),
+        }
+        local me = _RS:FindFirstChild("MainEvent")
+        local mf = _RS:FindFirstChild("MainFunction")
+        if me then pcall(function() me:FireServer("Shoot", payload) end) end
+        if mf then pcall(function() mf:InvokeServer("GunCheck") end) end
+    end
+
+    -- shotgun path: VIM click fires the gun natively (silent aim handles aim)
+    local function fireClick()
+        pcall(function()
+            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true,  game, 0)
+            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        end)
+    end
+
+    local function fireOnce()
+        if tick() - lastFire < cooldown then return end
+        lastFire = tick()
+        if not target or not target.Parent then return end
+        local part = getTargetMainPart(); if not part then return end
+
+        if isShotgun() then
+            -- shotgun: just click. don't TP - cone-collapse trips PRNG check.
+            fireClick()
+            return
+        end
+
+        -- single-fire: optional TP-wallbang, then synthetic FireServer
+        local saved
+        if tpWallbang then
+            local hrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                saved = hrp.CFrame
+                local tcf = part.CFrame
+                local behind = tcf.Position - tcf.LookVector * tpOffset + Vector3.new(0, 1, 0)
+                pcall(function()
+                    hrp.CFrame = CFrame.new(behind, tcf.Position)
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                end)
+                RunService.Heartbeat:Wait()
+            end
+        end
+
+        fireDirect()
+
+        if tpWallbang and saved then
+            task.delay(tpRestoreDelay, function()
+                local c = lplr.Character
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    pcall(function()
+                        hrp.CFrame = saved
+                        hrp.AssemblyLinearVelocity = Vector3.zero
+                    end)
+                end
+            end)
+        end
+    end
+
+    local function startAutoRefill()
+        if autoRefillConn then autoRefillConn:Disconnect() end
+        local maxByTool = setmetatable({}, { __mode = "k" })
+        autoRefillConn = RunService.Heartbeat:Connect(function()
+            if not G.hcForceHitActive then return end
+            if not autoRefillAmmo then return end
+            local ammo, script = getAmmoIntValue()
+            if not ammo then return end
+            local tool = script.Parent
+            local seen = maxByTool[tool] or 0
+            if ammo.Value > seen then seen = ammo.Value; maxByTool[tool] = seen end
+            if seen > 0 and ammo.Value < seen then
+                pcall(function() ammo.Value = seen end)
+            end
+        end)
+    end
+
+    local function start()
+        G.hcForceHitActive = true
+        if autoRefillAmmo then startAutoRefill() end
+    end
+
+    local function stop()
+        G.hcForceHitActive = false
+        if autoRefillConn  then autoRefillConn:Disconnect();  autoRefillConn  = nil end
+    end
+
+    local t = makeToggle(start, stop, "hcForceHitActive")
+    -- public hotkey trigger - the loader's bindFireKey calls this
+    t.fire          = function()
+        if not G.hcForceHitActive then return end
+        fireOnce()
+    end
+    t.setTarget     = function(plr) target = plr end
+    t.getTarget     = function() return target end
+    t.setHitPart    = function(name) hitPartName = name or "Head" end
+    t.getHitPart    = function() return hitPartName end
+    t.setTpWallbang = function(v) tpWallbang = v == true end
+    t.setAutoRefill = function(v)
+        autoRefillAmmo = v == true
+        if G.hcForceHitActive then
+            if autoRefillAmmo then
+                startAutoRefill()
+            elseif autoRefillConn then
+                autoRefillConn:Disconnect(); autoRefillConn = nil
+            end
+        end
+    end
+    t.setCooldown   = function(n) cooldown = math.max(0, tonumber(n) or 0.2) end
+    t.setTpOffset   = function(n) tpOffset = math.clamp(tonumber(n) or 4, 1, 60) end
+    t.isShotgunEquipped = isShotgun
+    return t
+end)()
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
@@ -3032,6 +3236,7 @@ F.disableAll = function()
     F.games.hoodCustoms.antiAfkTag.stop(); F.games.hoodCustoms.forceAfkTag.stop()
     F.games.hoodCustoms.autoStomp.stop()
     F.games.hoodCustoms.autoReload.stop(); F.games.hoodCustoms.godmode.stop()
+    F.games.hoodCustoms.forceHit.stop()
     F.games.hoodCustoms.knifeReach.stop()
     stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
