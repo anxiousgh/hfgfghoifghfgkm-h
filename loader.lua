@@ -1244,6 +1244,57 @@ do
         F.games.hoodCustoms.forceHit.fire()
     end)
 
+    -- Tracer + hit sound. FireServer doesn't render bullet visuals
+    -- because we never go through the gun script, so we fake them
+    -- locally for visual + audio feedback on each forced hit.
+    HC:AddToggle("HCForceHitTracer", { Text = "Show fake bullet tracer",
+        Default = true,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setTracerEnabled(v) end,
+    })
+    HC:AddLabel("Tracer color"):AddColorPicker("HCForceHitTracerColor", {
+        Default  = Color3.fromRGB(0, 255, 80),
+        Callback = function(c) F.games.hoodCustoms.forceHit.setTracerColor(c) end,
+    })
+    HC:AddSlider("HCForceHitTracerLife", {
+        Text     = "Tracer lifetime",
+        Default  = 0.20, Min = 0.05, Max = 1.0, Rounding = 2,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setTracerLifetime(v) end,
+    })
+    HC:AddToggle("HCForceHitHitSound", { Text = "Play hit sound",
+        Default = true,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setHitSoundEnabled(v) end,
+    })
+    do
+        local SOUNDS = {
+            { label = "deep bell",     id = 104441273771318 },
+            { label = "crit",          id = 135698842254153 },
+            { label = "m4a1",          id = 18521643711 },
+            { label = "pack a punch",  id = 7408420244 },
+        }
+        local labels = {}
+        local byLabel = {}
+        for _, s in ipairs(SOUNDS) do
+            table.insert(labels, s.label)
+            byLabel[s.label] = s.id
+        end
+        HC:AddDropdown("HCForceHitSoundId", {
+            Text     = "Hit sound",
+            Values   = labels,
+            Default  = "crit",
+            Callback = function(v)
+                local id = byLabel[v]
+                if id then F.games.hoodCustoms.forceHit.setHitSoundId(id) end
+            end,
+        })
+        -- push initial value so the API matches the GUI default
+        F.games.hoodCustoms.forceHit.setHitSoundId(byLabel["crit"])
+    end
+    HC:AddSlider("HCForceHitSoundVolume", {
+        Text     = "Hit sound volume",
+        Default  = 1.0, Min = 0, Max = 3, Rounding = 2,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setHitSoundVolume(v) end,
+    })
+
     end -- close: if not inHoodCustoms() then ... else ...
 end
 

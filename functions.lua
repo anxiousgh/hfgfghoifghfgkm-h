@@ -3061,6 +3061,17 @@ F.games.hoodCustoms.forceHit = (function()
     local cooldown        = 0.20
     local autoRefillAmmo  = true
 
+    -- visual / audio feedback (FireServer doesn't render bullet visuals
+    -- because we never hit the gun script, so we fake them locally)
+    local tracerEnabled   = true
+    local tracerColor     = Color3.fromRGB(0, 255, 80)  -- bright green, like the
+                                                         -- screenshot you showed
+    local tracerLifetime  = 0.20  -- seconds; fades 0.3 -> 1 transparency
+    local tracerThickness = 0.12  -- stud, neon part width
+    local hitSoundEnabled = true
+    local hitSoundId      = 135698842254153  -- "crit" by default
+    local hitSoundVolume  = 1.0
+
     local autoRefillConn
     local lastFire = 0
 
@@ -3103,6 +3114,56 @@ F.games.hoodCustoms.forceHit = (function()
         return nil
     end
 
+    -- spawn a fake bullet tracer: a thin neon part along origin -> hitPos,
+    -- fading out and self-destructing after `tracerLifetime`. Local-only
+    -- (Parent = workspace, but the part is invisible to anyone but us
+    -- since the server never hears about it).
+    local function spawnTracer(origin, hitPos)
+        if not tracerEnabled then return end
+        local dist = (hitPos - origin).Magnitude
+        if dist < 0.5 then return end
+
+        local part = Instance.new("Part")
+        part.Anchored      = true
+        part.CanCollide    = false
+        part.CanTouch      = false
+        part.CanQuery      = false
+        part.Material      = Enum.Material.Neon
+        part.Color         = tracerColor
+        part.Transparency  = 0.30
+        part.Size          = Vector3.new(tracerThickness, tracerThickness, dist)
+        part.CFrame        = CFrame.new((origin + hitPos) * 0.5, hitPos)
+        part.Name          = "_fh_tracer"
+        part.Parent        = workspace
+
+        task.spawn(function()
+            local steps = 8
+            local startT = 0.30
+            local endT   = 1.0
+            for i = 1, steps do
+                task.wait(tracerLifetime / steps)
+                if not part.Parent then return end
+                part.Transparency = startT + (endT - startT) * (i / steps)
+            end
+            if part.Parent then part:Destroy() end
+        end)
+    end
+
+    -- play the configured hit sound at the target's position. Local-only
+    -- (parented to PlayerGui so distance-based attenuation doesn't fade
+    -- it when we're far from the target). Auto-destroys after playback.
+    local function playHitSound()
+        if not hitSoundEnabled then return end
+        if not hitSoundId or hitSoundId == 0 then return end
+        local pg = lplr:FindFirstChildOfClass("PlayerGui")
+        local s = Instance.new("Sound")
+        s.SoundId = "rbxassetid://" .. tostring(hitSoundId)
+        s.Volume  = math.clamp(hitSoundVolume, 0, 5)
+        s.Parent  = pg or workspace
+        s:Play()
+        task.delay(5, function() if s and s.Parent then s:Destroy() end end)
+    end
+
     -- single-fire path: synthetic payload, direct FireServer
     local function fireDirect()
         local part = getTargetMainPart(); if not part then return end
@@ -3139,11 +3200,22 @@ F.games.hoodCustoms.forceHit = (function()
 
         if isShotgun() then
             -- shotgun: just click. don't TP - cone-collapse trips PRNG check.
+            -- Don't spawn a tracer either; the gun's own tracers will render.
             fireClick()
+            playHitSound()
             return
         end
 
-        -- single-fire: optional TP-wallbang, then synthetic FireServer
+        -- single-fire: optional TP-wallbang, then synthetic FireServer.
+        -- Capture the PRE-TP origin so the tracer renders from where the
+        -- user actually was, not from the post-TP teleport spot (otherwise
+        -- the tracer line jumps around as the body teleports).
+        local preTpOrigin
+        do
+            local head = getHead()
+            preTpOrigin = head and head.Position
+        end
+
         local saved
         if tpWallbang then
             local hrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
@@ -3160,6 +3232,11 @@ F.games.hoodCustoms.forceHit = (function()
         end
 
         fireDirect()
+
+        -- visual / audio feedback (single-fire path; shotguns get their
+        -- own native tracers from the click-fire flow above)
+        if preTpOrigin then spawnTracer(preTpOrigin, part.Position) end
+        playHitSound()
 
         if tpWallbang and saved then
             task.delay(tpRestoreDelay, function()
@@ -3225,6 +3302,14 @@ F.games.hoodCustoms.forceHit = (function()
     end
     t.setCooldown   = function(n) cooldown = math.max(0, tonumber(n) or 0.2) end
     t.setTpOffset   = function(n) tpOffset = math.clamp(tonumber(n) or 4, 1, 60) end
+    -- tracer + hit sound
+    t.setTracerEnabled  = function(v) tracerEnabled = v == true end
+    t.setTracerColor    = function(c) if typeof(c) == "Color3" then tracerColor = c end end
+    t.setTracerLifetime = function(n) tracerLifetime = math.clamp(tonumber(n) or 0.2, 0.05, 2) end
+    t.setTracerThickness = function(n) tracerThickness = math.clamp(tonumber(n) or 0.12, 0.02, 1) end
+    t.setHitSoundEnabled = function(v) hitSoundEnabled = v == true end
+    t.setHitSoundId      = function(id) hitSoundId = tonumber(id) or 0 end
+    t.setHitSoundVolume  = function(n) hitSoundVolume = math.clamp(tonumber(n) or 1, 0, 5) end
     t.isShotgunEquipped = isShotgun
     return t
 end)()
