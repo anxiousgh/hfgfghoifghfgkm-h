@@ -752,6 +752,21 @@ do
     Move:AddToggle("AutoRespawn",{ Text = "Auto-respawn",  Default = false,
         Callback = function(v) if v then F.autoRespawn.start() else F.autoRespawn.stop() end end })
 
+    -- Rocket jump KeyPicker - hosted on a Toggle in the LEFT groupbox
+    -- because right-groupbox AddLabel:AddKeyPicker chaining errors in
+    -- this LinoriaLib version. The toggle is purely a host - we don't
+    -- read its Value, bindFireKey reads the picker key directly.
+    local RocketJumpHolder = Move:AddToggle("RocketJumpKeyHolder", {
+        Text = "Rocket jump (key fires it)", Default = false,
+        Callback = function() end,  -- no-op; key is the trigger
+    })
+    RocketJumpHolder:AddKeyPicker("RocketJumpKey", {
+        Default = "R", Mode = "Hold", Text = "Rocket jump",
+        SyncToggleState = false,  -- key press doesn't auto-toggle the holder
+        NoUI = false,
+    })
+    bindFireKey("RocketJumpKey", F.rocketJump.fire)
+
     -- right side: extras (spin/flip/ice + blink)
     local Extras = Tabs.Movement:AddRightGroupbox("Extras")
 
@@ -775,11 +790,9 @@ do
     Extras:AddSlider("BlinkDist", { Text = "Blink distance", Default = F.blink.getDistance(),
         Min = 1, Max = 200, Rounding = 0, Callback = F.blink.setDistance })
 
+    -- Rocket jump - manual fire button + force/bias sliders.
+    -- The KeyPicker for it is up in the Move (left) groupbox.
     Extras:AddButton({ Text = "Rocket jump", Func = F.rocketJump.fire })
-    Extras:AddLabel("Rocket jump key"):AddKeyPicker("RocketJumpKey", {
-        Default = "R", Mode = "Hold", Text = "Rocket jump", NoUI = false,
-    })
-    bindFireKey("RocketJumpKey", F.rocketJump.fire)
     Extras:AddSlider("RocketJumpForce", {
         Text = "Rocket force",
         Tooltip = "Impulse magnitude (studs/sec) added to HRP velocity.",
@@ -793,7 +806,6 @@ do
         Default = 0.6, Min = 0, Max = 1, Rounding = 2,
         Callback = function(v) F.rocketJump.setUpBias(v) end,
     })
-
 end
 
 -- Desync gets its own dedicated groupbox in the Movement tab.
