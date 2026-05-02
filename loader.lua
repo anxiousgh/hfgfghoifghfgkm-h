@@ -847,6 +847,22 @@ do
             Callback = function(v) maxStuds = v; push() end,
         })
     end
+
+    Desync:AddSlider("DesyncSpinSpeed", {
+        Text     = "Spin speed (deg/frame)",
+        Tooltip  = "Spin desync only - how many degrees the angle "
+            .. "increments each Heartbeat. Higher = faster rotation churn.",
+        Default  = 47, Min = 1, Max = 360, Rounding = 0,
+        Callback = function(v) F.desync.setSpinSpeed(v) end,
+    })
+    Desync:AddSlider("DesyncVelocityMag", {
+        Text     = "Velocity magnitude",
+        Tooltip  = "Velocity desync only - magnitude of the spoofed "
+            .. "AssemblyLinearVelocity. 16384 is the classic backtrack-"
+            .. "trip value; lower = subtler, higher = more aggressive.",
+        Default  = 16384, Min = 100, Max = 100000, Rounding = 0,
+        Callback = function(v) F.desync.setVelocityMag(v) end,
+    })
 end
 
 -- ============================================================

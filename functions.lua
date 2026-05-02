@@ -3480,6 +3480,12 @@ F.desync = (function()
     local VOID_MIN     = 5000
     local VOID_MAX     = 20000
     local SHOT_SYNC_MS = 100
+    -- spin: degrees added to _spinAngle each Heartbeat. Larger = faster
+    -- rotation churn server-side.
+    local SPIN_STEP    = 47
+    -- velocity: magnitude written to AssemblyLinearVelocity each Heartbeat.
+    -- 16384 is the classic "impossible speed" the backtrack detector trips on.
+    local VEL_MAGNITUDE = 16384
 
     local active   = false
     local mode     = "void"   -- "void"|"voidspam"|"spin"|"velocity"|"off"
@@ -3503,7 +3509,7 @@ F.desync = (function()
         if mode == "void" or mode == "voidspam" then
             hrp.CFrame = CFrame.new(randVoidPos())
         elseif mode == "spin" then
-            _spinAngle = (_spinAngle + 47) % 360
+            _spinAngle = (_spinAngle + SPIN_STEP) % 360
             hrp.CFrame = hrp.CFrame * CFrame.Angles(
                 math.rad(_spinAngle),
                 math.rad(_spinAngle * 2),
@@ -3511,7 +3517,7 @@ F.desync = (function()
             )
         elseif mode == "velocity" then
             -- CFrame untouched - we only spoof the velocity vector
-            hrp.AssemblyLinearVelocity = Vector3.new(1, 1, 1) * 16384
+            hrp.AssemblyLinearVelocity = Vector3.new(1, 1, 1) * VEL_MAGNITUDE
         end
     end
 
@@ -3611,6 +3617,12 @@ F.desync = (function()
         end,
         setShotSyncMs   = function(n)
             SHOT_SYNC_MS = math.clamp(tonumber(n) or 100, 10, 1000)
+        end,
+        setSpinSpeed    = function(n)
+            SPIN_STEP = math.clamp(tonumber(n) or 47, 1, 360)
+        end,
+        setVelocityMag  = function(n)
+            VEL_MAGNITUDE = math.max(1, tonumber(n) or 16384)
         end,
     }
 end)()
