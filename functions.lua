@@ -3634,15 +3634,25 @@ F.desync = (function()
     end
 
     -- raknet desync: hook outbound packet 0x1B (physics replication) and
-    -- corrupt a 4-byte field at offset 1 with 0xFFFFFFFF. The server can't
-    -- reconcile our position - no Heartbeat/RenderStep loop, no local
-    -- CFrame writes. Pure network-layer trick. Only fires when active+mode
-    -- match. Hook is installed ONCE and gated by SHARED state so re-running
-    -- the script doesn't stack hooks and doesn't leak old IIFE state.
-    if raknet and not getgenv()._F_DESYNC_RAKNET_INSTALLED then
+    -- corrupt a 4-byte field at offset 1. Resolves raknet lazily because
+    -- some executors expose it after script load, not before. Hook is
+    -- installed at most ONCE per session, gated by SHARED state so the
+    -- IIFE on script reload doesn't stack hooks.
+    local function findRaknet()
+        local r = rawget(getgenv(), "raknet")
+        if r then return r end
+        local ok, val = pcall(function() return raknet end)
+        if ok and val then return val end
+        return nil
+    end
+
+    local function ensureRaknetHook()
+        if getgenv()._F_DESYNC_RAKNET_INSTALLED then return true end
+        local r = findRaknet()
+        if not r or not r.add_send_hook then return false end
         getgenv()._F_DESYNC_RAKNET_INSTALLED = true
         pcall(function()
-            raknet.add_send_hook(function(packet)
+            r.add_send_hook(function(packet)
                 local s = getgenv()._F_DESYNC_STATE
                 if not s or not s.active or s.mode ~= "raknet" then return end
                 if packet.PacketId == 0x1B then
@@ -3653,6 +3663,7 @@ F.desync = (function()
                 end
             end)
         end)
+        return true
     end
 
     -- detect outbound Shoot fires for voidspam mode
@@ -3721,9 +3732,13 @@ F.desync = (function()
         startVoidspam   = function() startMode("voidspam") end,
         startSpin       = function() startMode("spin") end,
         startVelocity   = function() startMode("velocity") end,
-        startRaknet     = function() startMode("raknet") end,
+        startRaknet     = function()
+            if not ensureRaknetHook() then return false end
+            startMode("raknet")
+            return true
+        end,
         stop            = stopAll,
-        isRaknetAvailable = function() return raknet ~= nil end,
+        isRaknetAvailable = function() return findRaknet() ~= nil end,
         isActive        = function() return active end,
         getMode         = function() return mode end,
         setRange        = function(minV, maxV)
