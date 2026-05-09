@@ -817,7 +817,7 @@ do
     local Desync = Tabs.Movement:AddRightGroupbox("Desync")
 
     local DESYNC_KEYS = {
-        "DesyncVoid", "DesyncSpin", "DesyncVelocity", "HCVoidspam",
+        "DesyncVoid", "DesyncSpin", "DesyncVelocity", "DesyncRaknet", "HCVoidspam",
     }
     local function selectMode(name)
         for _, k in ipairs(DESYNC_KEYS) do
@@ -860,6 +860,27 @@ do
             else      F.desync.stop() end
         end,
     })
+
+    -- Raknet desync: only available if the executor exposes raknet (the
+    -- packet-hook API). Hooks outbound packet 0x1B (physics replication)
+    -- and corrupts a 4-byte field, breaking server-side position tracking
+    -- without any local CFrame writes. Most reliable desync, no freeze
+    -- risk because nothing local changes.
+    if F.desync.isRaknetAvailable() then
+        Desync:AddToggle("DesyncRaknet", { Text = "Raknet desync",
+            Default = false,
+            Tooltip = "Hooks outbound physics packet 0x1B and corrupts the "
+                .. "timestamp/sequence field. Server can't reconcile our "
+                .. "position. Pure network-layer trick - no local CFrame "
+                .. "writes, no Heartbeat loop, no freeze risk.",
+            Callback = function(v)
+                if v then selectMode("DesyncRaknet"); F.desync.startRaknet()
+                else      F.desync.stop() end
+            end,
+        })
+    else
+        Desync:AddLabel("Raknet desync: unavailable (executor lacks raknet)")
+    end
 
     Desync:AddDivider()
 

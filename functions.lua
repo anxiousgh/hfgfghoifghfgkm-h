@@ -3551,15 +3551,17 @@ F.desync = (function()
     local VOID_MIN     = 5000
     local VOID_MAX     = 20000
     local SHOT_SYNC_MS = 100
-    -- spin: degrees added to _spinAngle each Heartbeat. Larger = faster
-    -- rotation churn server-side.
     local SPIN_STEP    = 47
-    -- velocity: magnitude written to AssemblyLinearVelocity each Heartbeat.
-    -- 16384 is the classic "impossible speed" the backtrack detector trips on.
     local VEL_MAGNITUDE = 16384
 
+    -- shared state in getgenv() so the raknet hook (which is installed
+    -- ONCE at module load and survives script re-runs) reads the current
+    -- IIFE's active/mode rather than stale upvalues from an old IIFE.
+    getgenv()._F_DESYNC_STATE = getgenv()._F_DESYNC_STATE or { active = false, mode = "off" }
+    local SHARED = getgenv()._F_DESYNC_STATE
+
     local active   = false
-    local mode     = "void"   -- "void"|"voidspam"|"spin"|"velocity"|"off"
+    local mode     = "off"   -- "void"|"voidspam"|"spin"|"velocity"|"raknet"|"off"
     local realCF, realLV, realAV
     local syncEnd  = 0
     local hbConn
@@ -3631,6 +3633,28 @@ F.desync = (function()
         )
     end
 
+    -- raknet desync: hook outbound packet 0x1B (physics replication) and
+    -- corrupt a 4-byte field at offset 1 with 0xFFFFFFFF. The server can't
+    -- reconcile our position - no Heartbeat/RenderStep loop, no local
+    -- CFrame writes. Pure network-layer trick. Only fires when active+mode
+    -- match. Hook is installed ONCE and gated by SHARED state so re-running
+    -- the script doesn't stack hooks and doesn't leak old IIFE state.
+    if raknet and not getgenv()._F_DESYNC_RAKNET_INSTALLED then
+        getgenv()._F_DESYNC_RAKNET_INSTALLED = true
+        pcall(function()
+            raknet.add_send_hook(function(packet)
+                local s = getgenv()._F_DESYNC_STATE
+                if not s or not s.active or s.mode ~= "raknet" then return end
+                if packet.PacketId == 0x1B then
+                    local ok, buf = pcall(function() return packet.AsBuffer end)
+                    if not ok or not buf then return end
+                    pcall(function() buffer.writeu32(buf, 1, 0xFFFFFFFF) end)
+                    pcall(function() packet:SetData(buf) end)
+                end
+            end)
+        end)
+    end
+
     -- detect outbound Shoot fires for voidspam mode
     if hookmetamethod and not getgenv()._F_DESYNC_HOOK then
         getgenv()._F_DESYNC_HOOK = true
@@ -3659,11 +3683,22 @@ F.desync = (function()
         mode = newMode
         active = true
         syncEnd = 0
+        SHARED.active = true
+        SHARED.mode   = newMode
+        if newMode == "raknet" then
+            -- raknet path is purely network-layer. Tear down any active
+            -- Heartbeat / RenderStep loop from a previous mode.
+            if hbConn then hbConn:Disconnect(); hbConn = nil end
+            pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
+            return
+        end
         bind()
     end
 
     local function stopAll()
         active = false
+        SHARED.active = false
+        SHARED.mode   = "off"
         if hbConn then hbConn:Disconnect(); hbConn = nil end
         pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
         local c = lplr.Character
@@ -3686,7 +3721,9 @@ F.desync = (function()
         startVoidspam   = function() startMode("voidspam") end,
         startSpin       = function() startMode("spin") end,
         startVelocity   = function() startMode("velocity") end,
+        startRaknet     = function() startMode("raknet") end,
         stop            = stopAll,
+        isRaknetAvailable = function() return raknet ~= nil end,
         isActive        = function() return active end,
         getMode         = function() return mode end,
         setRange        = function(minV, maxV)
