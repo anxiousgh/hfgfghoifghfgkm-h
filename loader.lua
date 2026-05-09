@@ -756,9 +756,10 @@ do
     -- On = pressing Space fires the rocket impulse instead. Manual fire
     -- button + tuning sliders are over in the right Extras groupbox.
     Move:AddToggle("RocketJump", {
-        Text = "Rocket jump (Space)",
-        Tooltip = "While on, pressing Space launches you forward+up instead "
-            .. "of jumping normally.",
+        Text = "Rocket jump (on jump)",
+        Tooltip = "While on, every actual JUMP gets a forward+up velocity "
+            .. "blast on top of the normal jump impulse. Holding Space "
+            .. "doesn't repeat - fires once per Humanoid.Jump event.",
         Default = false,
         Callback = function(v)
             if v then F.rocketJump.start() else F.rocketJump.stop() end

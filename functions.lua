@@ -1938,9 +1938,8 @@ F.fov = { set = setFov, get = function() return CUSTOM_FOV end }
 -- ============================================================
 F.rocketJump = (function()
     local force  = 200   -- studs/sec impulse magnitude
-    local upBias = 0.4   -- 0=pure forward, 1=pure up. Tilted toward forward
-                          -- since the user explicitly wants forward boost.
-    local conn
+    local upBias = 0.4   -- 0=pure forward, 1=pure up
+    local jumpConn, charConn
 
     local function fire()
         local c = lplr.Character
@@ -1956,19 +1955,33 @@ F.rocketJump = (function()
         end)
     end
 
+    -- hook Humanoid.Jump going true. Fires once per actual jump event;
+    -- holding Space doesn't repeat-trigger because the engine only flips
+    -- Jump=true on each new ground-jump (auto-resets to false). Re-hooks
+    -- on respawn via charConn.
+    local function hook(char)
+        local hum = char and char:WaitForChild("Humanoid", 5)
+        if not hum then return end
+        if jumpConn then jumpConn:Disconnect() end
+        jumpConn = hum:GetPropertyChangedSignal("Jump"):Connect(function()
+            if not G.rocketJumpActive then return end
+            if hum.Jump then fire() end
+        end)
+    end
+
     local function start()
         G.rocketJumpActive = true
-        if conn then conn:Disconnect() end
-        conn = UserInputService.InputBegan:Connect(function(input, gp)
-            if gp then return end
-            if not G.rocketJumpActive then return end
-            if input.KeyCode == Enum.KeyCode.Space then fire() end
+        if charConn then charConn:Disconnect() end
+        charConn = lplr.CharacterAdded:Connect(function(c)
+            if G.rocketJumpActive then task.spawn(hook, c) end
         end)
+        if lplr.Character then task.spawn(hook, lplr.Character) end
     end
 
     local function stop()
         G.rocketJumpActive = false
-        if conn then conn:Disconnect(); conn = nil end
+        if jumpConn then jumpConn:Disconnect(); jumpConn = nil end
+        if charConn then charConn:Disconnect(); charConn = nil end
     end
 
     local t = makeToggle(start, stop, "rocketJumpActive")
