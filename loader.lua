@@ -817,7 +817,8 @@ do
     local Desync = Tabs.Movement:AddRightGroupbox("Desync")
 
     local DESYNC_KEYS = {
-        "DesyncVoid", "DesyncSpin", "DesyncVelocity", "DesyncRaknet", "HCVoidspam",
+        "DesyncVoid", "DesyncSky", "DesyncSpin", "DesyncVelocity",
+        "DesyncRaknet", "HCVoidspam",
     }
     local function selectMode(name)
         for _, k in ipairs(DESYNC_KEYS) do
@@ -836,6 +837,17 @@ do
             .. "Locally restored before render so view stays normal.",
         Callback = function(v)
             if v then selectMode("DesyncVoid"); F.desync.startVoid()
+            else      F.desync.stop() end
+        end,
+    })
+    Desync:AddToggle("DesyncSky", { Text = "Sky desync",
+        Default = false,
+        Tooltip = "Pushes HRP up by Sky height each Heartbeat (X/Z and "
+            .. "rotation preserved). Server sees us floating above our "
+            .. "real position. Locally restored before render. Pair this "
+            .. "with the Sky height slider to tune how far up.",
+        Callback = function(v)
+            if v then selectMode("DesyncSky"); F.desync.startSky()
             else      F.desync.stop() end
         end,
     })
@@ -918,6 +930,13 @@ do
             .. "trip value; lower = subtler, higher = more aggressive.",
         Default  = 16384, Min = 100, Max = 100000, Rounding = 0,
         Callback = function(v) F.desync.setVelocityMag(v) end,
+    })
+    Desync:AddSlider("DesyncSkyHeight", {
+        Text     = "Sky height",
+        Tooltip  = "Sky desync only - studs above the real position to "
+            .. "push HRP server-side.",
+        Default  = 5000, Min = 50, Max = 100000, Rounding = 0,
+        Callback = function(v) F.desync.setSkyHeight(v) end,
     })
 end
 

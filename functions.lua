@@ -3553,6 +3553,8 @@ F.desync = (function()
     local SHOT_SYNC_MS = 100
     local SPIN_STEP    = 47
     local VEL_MAGNITUDE = 16384
+    -- sky desync: how many studs to shove HRP up server-side (X/Z preserved)
+    local SKY_HEIGHT   = 5000
 
     -- shared state in getgenv() so the raknet hook (which is installed
     -- ONCE at module load and survives script re-runs) reads the current
@@ -3581,6 +3583,11 @@ F.desync = (function()
     local function applySpoof(hrp)
         if mode == "void" or mode == "voidspam" then
             hrp.CFrame = CFrame.new(randVoidPos())
+        elseif mode == "sky" then
+            -- preserve XZ + rotation, push Y up by SKY_HEIGHT. server sees
+            -- us floating in the sky directly above our real position.
+            local cf = hrp.CFrame
+            hrp.CFrame = cf + Vector3.new(0, SKY_HEIGHT, 0)
         elseif mode == "spin" then
             _spinAngle = (_spinAngle + SPIN_STEP) % 360
             hrp.CFrame = hrp.CFrame * CFrame.Angles(
@@ -3730,6 +3737,7 @@ F.desync = (function()
         -- previous mode by re-binding the same Heartbeat)
         startVoid       = function() startMode("void") end,
         startVoidspam   = function() startMode("voidspam") end,
+        startSky        = function() startMode("sky") end,
         startSpin       = function() startMode("spin") end,
         startVelocity   = function() startMode("velocity") end,
         startRaknet     = function()
@@ -3753,6 +3761,9 @@ F.desync = (function()
         end,
         setVelocityMag  = function(n)
             VEL_MAGNITUDE = math.max(1, tonumber(n) or 16384)
+        end,
+        setSkyHeight    = function(n)
+            SKY_HEIGHT = math.clamp(tonumber(n) or 5000, 50, 100000)
         end,
         -- called by external TP code (_uprightTp etc) so our captured
         -- realCF reflects the new position. without this our next
