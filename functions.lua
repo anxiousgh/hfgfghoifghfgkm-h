@@ -977,15 +977,20 @@ if hookmetamethod then
         getgenv()._F_NAMECALL_HOOKED = true
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
+        -- Cheap-bool early-outs FIRST. Roblox calls __namecall thousands of
+        -- times per second; the previous version did getnamecallmethod() +
+        -- 5 string compares for every single call before checking Enabled.
+        -- That overhead compounds with the ragebot/voidspam hooks and was
+        -- a freeze contributor.
+        if not AimbotSettings.Enabled then return oldNamecall(...) end
+        if not cachedTarget then return oldNamecall(...) end
+        if not hasTool then return oldNamecall(...) end
+        if checkcaller() then return oldNamecall(...) end
         local method = getnamecallmethod()
         if method ~= "Raycast" and method ~= "FindPartOnRay" and method ~= "findPartOnRay"
             and method ~= "FindPartOnRayWithIgnoreList" and method ~= "FindPartOnRayWithWhitelist" then
             return oldNamecall(...)
         end
-        if not AimbotSettings.Enabled then return oldNamecall(...) end
-        if checkcaller() then return oldNamecall(...) end
-        if not hasTool then return oldNamecall(...) end
-        if not cachedTarget then return oldNamecall(...) end
         if math.random(100) > AimbotSettings.HitChance then return oldNamecall(...) end
         local args = {...}
         if not rawequal(args[1], workspace) then return oldNamecall(...) end
@@ -1567,15 +1572,17 @@ if hookmetamethod and not getgenv()._F_RB_NAMECALL_HOOKED then
     getgenv()._F_RB_NAMECALL_HOOKED = true
     local rbOldNamecall
     rbOldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
+        -- cheap bool / userdata checks first; only do getnamecallmethod
+        -- + string compares on the rare frames where ragebot is engaged
+        if not RageSettings.SilentForce then return rbOldNamecall(...) end
+        local part = rbCachedTarget; if not part then return rbOldNamecall(...) end
+        if RageSettings.SilentMethod == "Mouse.Hit/Target" then return rbOldNamecall(...) end
+        if checkcaller() then return rbOldNamecall(...) end
         local method = getnamecallmethod()
         if method ~= "Raycast" and method ~= "FindPartOnRay" and method ~= "findPartOnRay"
             and method ~= "FindPartOnRayWithIgnoreList" and method ~= "FindPartOnRayWithWhitelist" then
             return rbOldNamecall(...)
         end
-        if not RageSettings.SilentForce then return rbOldNamecall(...) end
-        if RageSettings.SilentMethod == "Mouse.Hit/Target" then return rbOldNamecall(...) end
-        if checkcaller() then return rbOldNamecall(...) end
-        local part = rbCachedTarget; if not part then return rbOldNamecall(...) end
         local args = {...}
         if not rawequal(args[1], workspace) then return rbOldNamecall(...) end
         local m = RageSettings.SilentMethod; local targetPos = part.Position
@@ -2376,79 +2383,94 @@ end)()
 --  cleanly on stop.
 -- ============================================================
 F.prompts = (function()
-    local function eachPrompt(fn)
-        for _, d in ipairs(workspace:GetDescendants()) do
-            if d:IsA("ProximityPrompt") then fn(d) end
+    -- Each prompt gets ONE PropertyChangedSignal per watched property, plus
+    -- ONE PromptShown listener for autoFire. Listeners self-gate on G flags,
+    -- so toggling a module on/off never connects/disconnects per-prompt -
+    -- it just flips a bool. The previous version installed/disconnected
+    -- listeners on every toggle, which leaked entries in aPromptConns over
+    -- the session as prompts spawned and was a freeze contributor.
+    --
+    -- Anti-restore: the property-changed listeners DETECT when the game
+    -- writes the value back and re-apply our value. So even prompts the
+    -- game tries to "fix" stay patched.
+
+    -- weak-keyed: when a prompt is destroyed, the entry is GC'd, no leak.
+    local installed = setmetatable({}, { __mode = "k" })
+
+    local function installAll(prompt)
+        if installed[prompt] then return end
+        installed[prompt] = true
+
+        prompt:GetPropertyChangedSignal("HoldDuration"):Connect(function()
+            if G.promptInstantActive and prompt.HoldDuration ~= 0 then
+                pcall(function() prompt.HoldDuration = 0 end)
+            end
+        end)
+        prompt:GetPropertyChangedSignal("MaxActivationDistance"):Connect(function()
+            if G.promptRangeActive and prompt.MaxActivationDistance ~= math.huge then
+                pcall(function() prompt.MaxActivationDistance = math.huge end)
+            end
+        end)
+        prompt:GetPropertyChangedSignal("RequiresLineOfSight"):Connect(function()
+            if G.promptRangeActive and prompt.RequiresLineOfSight then
+                pcall(function() prompt.RequiresLineOfSight = false end)
+            end
+        end)
+        prompt.PromptShown:Connect(function()
+            if G.promptAutoFireActive and fireproximityprompt then
+                pcall(function() fireproximityprompt(prompt) end)
+            end
+        end)
+
+        -- apply current values if any module is already on
+        if G.promptInstantActive then pcall(function() prompt.HoldDuration = 0 end) end
+        if G.promptRangeActive then
+            pcall(function() prompt.MaxActivationDistance = math.huge end)
+            pcall(function() prompt.RequiresLineOfSight   = false end)
         end
     end
 
-    -- ----- INSTANT ACTIVATION (no hold) -----
-    local iConn
-    local function iApply(p) pcall(function() p.HoldDuration = 0 end) end
+    -- single workspace.DescendantAdded across all 3 modules. Gated on
+    -- getgenv() so script reload doesn't stack listeners.
+    if not getgenv()._F_PROMPT_HOOKED then
+        getgenv()._F_PROMPT_HOOKED = true
+        workspace.DescendantAdded:Connect(function(d)
+            if d:IsA("ProximityPrompt") then installAll(d) end
+        end)
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then installAll(d) end
+        end
+    end
+
+    -- when a module turns on, sweep already-installed prompts and apply.
+    -- when it turns off, listeners stay but self-gate to no-op.
+    local function applyInstant()
+        for prompt in pairs(installed) do
+            if prompt.Parent then pcall(function() prompt.HoldDuration = 0 end) end
+        end
+    end
+    local function applyRange()
+        for prompt in pairs(installed) do
+            if prompt.Parent then
+                pcall(function() prompt.MaxActivationDistance = math.huge end)
+                pcall(function() prompt.RequiresLineOfSight   = false end)
+            end
+        end
+    end
+
     local instantActivation = makeToggle(
-        function()
-            G.promptInstantActive = true
-            eachPrompt(iApply)
-            if iConn then iConn:Disconnect() end
-            iConn = workspace.DescendantAdded:Connect(function(d)
-                if G.promptInstantActive and d:IsA("ProximityPrompt") then iApply(d) end
-            end)
-        end,
-        function()
-            G.promptInstantActive = false
-            if iConn then iConn:Disconnect(); iConn = nil end
-        end,
+        function() G.promptInstantActive  = true;  applyInstant() end,
+        function() G.promptInstantActive  = false end,
         "promptInstantActive"
     )
-
-    -- ----- UNLIMITED RANGE (any distance, through walls) -----
-    local rConn
-    local function rApply(p)
-        pcall(function() p.MaxActivationDistance = math.huge end)
-        pcall(function() p.RequiresLineOfSight   = false end)
-    end
     local unlimitedRange = makeToggle(
-        function()
-            G.promptRangeActive = true
-            eachPrompt(rApply)
-            if rConn then rConn:Disconnect() end
-            rConn = workspace.DescendantAdded:Connect(function(d)
-                if G.promptRangeActive and d:IsA("ProximityPrompt") then rApply(d) end
-            end)
-        end,
-        function()
-            G.promptRangeActive = false
-            if rConn then rConn:Disconnect(); rConn = nil end
-        end,
+        function() G.promptRangeActive    = true;  applyRange() end,
+        function() G.promptRangeActive    = false end,
         "promptRangeActive"
     )
-
-    -- ----- AUTO-FIRE (fire on PromptShown) -----
-    local aConn
-    local aPromptConns = {}  -- per-prompt PromptShown listeners
-    local function aHook(p)
-        local conn = p.PromptShown:Connect(function()
-            if G.promptAutoFireActive and fireproximityprompt then
-                pcall(function() fireproximityprompt(p) end)
-            end
-        end)
-        table.insert(aPromptConns, conn)
-    end
     local autoFire = makeToggle(
-        function()
-            G.promptAutoFireActive = true
-            eachPrompt(aHook)
-            if aConn then aConn:Disconnect() end
-            aConn = workspace.DescendantAdded:Connect(function(d)
-                if G.promptAutoFireActive and d:IsA("ProximityPrompt") then aHook(d) end
-            end)
-        end,
-        function()
-            G.promptAutoFireActive = false
-            if aConn then aConn:Disconnect(); aConn = nil end
-            for _, c in ipairs(aPromptConns) do pcall(function() c:Disconnect() end) end
-            aPromptConns = {}
-        end,
+        function() G.promptAutoFireActive = true end,
+        function() G.promptAutoFireActive = false end,
         "promptAutoFireActive"
     )
 
@@ -3799,17 +3821,18 @@ F.desync = (function()
         local mainEvent = _RS:FindFirstChild("MainEvent")
         local oldNc
         oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-            local m = getnamecallmethod()
-            if m == "FireServer" and active and mode == "voidspam"
-               and rawequal(self, mainEvent) then
-                local args = {...}
-                if args[1] == "Shoot" then
-                    syncEnd = tick() + SHOT_SYNC_MS / 1000
-                    local c = lplr.Character
-                    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-                    if hrp and realCF then
-                        pcall(function() hrp.CFrame = realCF end)
-                    end
+            -- Cheap-bool early-outs first. Voidspam is rarely active so
+            -- 99%+ of calls return after the first comparison.
+            if not active or mode ~= "voidspam" then return oldNc(self, ...) end
+            if not rawequal(self, mainEvent) then return oldNc(self, ...) end
+            if getnamecallmethod() ~= "FireServer" then return oldNc(self, ...) end
+            local args = {...}
+            if args[1] == "Shoot" then
+                syncEnd = tick() + SHOT_SYNC_MS / 1000
+                local c = lplr.Character
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if hrp and realCF then
+                    pcall(function() hrp.CFrame = realCF end)
                 end
             end
             return oldNc(self, ...)
