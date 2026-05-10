@@ -3658,19 +3658,43 @@ F.desync = (function()
         local r = findRaknet()
         if not r or not r.add_send_hook then return false end
         getgenv()._F_DESYNC_RAKNET_INSTALLED = true
+        -- pin the hook function on getgenv so it can't be garbage-collected
+        -- even if the executor's raknet impl doesn't keep a strong ref to it.
+        -- Reads SHARED via the always-fresh getgenv() lookup so state changes
+        -- by the IIFE on script reload are seen immediately.
+        getgenv()._F_DESYNC_RAKNET_FN = function(packet)
+            local s = getgenv()._F_DESYNC_STATE
+            if not s or not s.active or s.mode ~= "raknet" then return end
+            if packet.PacketId == 0x1B then
+                local ok, buf = pcall(function() return packet.AsBuffer end)
+                if not ok or not buf then return end
+                pcall(function() buffer.writeu32(buf, 1, 0xFFFFFFFF) end)
+                pcall(function() packet:SetData(buf) end)
+            end
+        end
         pcall(function()
-            r.add_send_hook(function(packet)
-                local s = getgenv()._F_DESYNC_STATE
-                if not s or not s.active or s.mode ~= "raknet" then return end
-                if packet.PacketId == 0x1B then
-                    local ok, buf = pcall(function() return packet.AsBuffer end)
-                    if not ok or not buf then return end
-                    pcall(function() buffer.writeu32(buf, 1, 0xFFFFFFFF) end)
-                    pcall(function() packet:SetData(buf) end)
-                end
-            end)
+            r.add_send_hook(getgenv()._F_DESYNC_RAKNET_FN)
         end)
         return true
+    end
+
+    -- watchdog: every second, if SHARED.active drifted to false (some other
+    -- code path reset it, the table got replaced, etc.) but the user expects
+    -- raknet desync to be on, re-assert SHARED.active. The hook will start
+    -- working again on the next outbound packet.
+    if not getgenv()._F_DESYNC_RAKNET_WATCHDOG then
+        getgenv()._F_DESYNC_RAKNET_WATCHDOG = true
+        task.spawn(function()
+            while true do
+                task.wait(1)
+                local s = getgenv()._F_DESYNC_STATE
+                local want = getgenv()._F_DESYNC_RAKNET_WANTED
+                if want and s and (not s.active or s.mode ~= "raknet") then
+                    s.active = true
+                    s.mode   = "raknet"
+                end
+            end
+        end)
     end
 
     -- detect outbound Shoot fires for voidspam mode
@@ -3703,9 +3727,10 @@ F.desync = (function()
         syncEnd = 0
         SHARED.active = true
         SHARED.mode   = newMode
+        -- watchdog flag: tells the periodic re-asserter to keep SHARED in
+        -- the raknet state. Cleared on stop or non-raknet mode switch.
+        getgenv()._F_DESYNC_RAKNET_WANTED = (newMode == "raknet")
         if newMode == "raknet" then
-            -- raknet path is purely network-layer. Tear down any active
-            -- Heartbeat / RenderStep loop from a previous mode.
             if hbConn then hbConn:Disconnect(); hbConn = nil end
             pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
             return
@@ -3717,6 +3742,7 @@ F.desync = (function()
         active = false
         SHARED.active = false
         SHARED.mode   = "off"
+        getgenv()._F_DESYNC_RAKNET_WANTED = false
         if hbConn then hbConn:Disconnect(); hbConn = nil end
         pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
         local c = lplr.Character
