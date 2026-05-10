@@ -684,6 +684,98 @@ local function startFlip()
     end)
 end
 
+-- ---- Tilt 90° (sideways roll) ----
+-- Same Heartbeat-spoof / RenderStep-First-restore pattern as flip, but
+-- the spoof multiplies by CFrame.Angles(0,0,math.pi/2) instead of (pi,0,0).
+-- Server sees us lying on our side; locally we're upright (camera locked
+-- to local head via First-priority restore).
+local function stopTilt()
+    G.tiltActive=false
+    if G._tiltHb then G._tiltHb:Disconnect(); G._tiltHb=nil end
+    pcall(function() RunService:UnbindFromRenderStep("TiltRestore") end)
+    if G._tiltCharConn then G._tiltCharConn:Disconnect(); G._tiltCharConn=nil end
+    local char=lplr.Character
+    if char then
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.CameraOffset=Vector3.zero end
+    end
+end
+local function startTilt()
+    G.tiltActive=true
+    local function setup(char)
+        if not char then return end
+        local hrp=char:WaitForChild("HumanoidRootPart",5); if not hrp then return end
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.CameraOffset=Vector3.zero end
+        local _real={}; local _spoofing=false
+        if G._tiltHb then G._tiltHb:Disconnect() end
+        pcall(function() RunService:UnbindFromRenderStep("TiltRestore") end)
+        G._tiltHb=RunService.Heartbeat:Connect(function()
+            if not hrp or not hrp.Parent then return end
+            _real[1]=hrp.CFrame; _real[2]=hrp.AssemblyLinearVelocity; _spoofing=true
+            local look=hrp.CFrame.LookVector
+            local yaw=math.atan2(look.X,look.Z)
+            -- preserve yaw, tilt 90° on Z (sideways)
+            hrp.CFrame=CFrame.new(hrp.Position)*CFrame.fromEulerAnglesYXZ(0,yaw,0)*CFrame.Angles(0,0,math.pi/2)
+        end)
+        RunService:BindToRenderStep("TiltRestore", Enum.RenderPriority.First.Value, function()
+            if _spoofing and _real[1] then
+                if hrp and hrp.Parent then hrp.CFrame=_real[1]; hrp.AssemblyLinearVelocity=_real[2] end
+                _spoofing=false
+            end
+        end)
+    end
+    setup(lplr.Character)
+    G._tiltCharConn=lplr.CharacterAdded:Connect(function(c)
+        if G.tiltActive then task.wait(0.1); setup(c) end
+    end)
+end
+
+-- ---- Backwards (180° yaw - server sees us facing the opposite way) ----
+-- Useful as anti-aim: enemies' silent aim/aimbot points at the back of
+-- our head while our local head is facing the other way.
+local function stopBackwards()
+    G.backwardsActive=false
+    if G._bwHb then G._bwHb:Disconnect(); G._bwHb=nil end
+    pcall(function() RunService:UnbindFromRenderStep("BackwardsRestore") end)
+    if G._bwCharConn then G._bwCharConn:Disconnect(); G._bwCharConn=nil end
+    local char=lplr.Character
+    if char then
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.CameraOffset=Vector3.zero end
+    end
+end
+local function startBackwards()
+    G.backwardsActive=true
+    local function setup(char)
+        if not char then return end
+        local hrp=char:WaitForChild("HumanoidRootPart",5); if not hrp then return end
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.CameraOffset=Vector3.zero end
+        local _real={}; local _spoofing=false
+        if G._bwHb then G._bwHb:Disconnect() end
+        pcall(function() RunService:UnbindFromRenderStep("BackwardsRestore") end)
+        G._bwHb=RunService.Heartbeat:Connect(function()
+            if not hrp or not hrp.Parent then return end
+            _real[1]=hrp.CFrame; _real[2]=hrp.AssemblyLinearVelocity; _spoofing=true
+            local look=hrp.CFrame.LookVector
+            local yaw=math.atan2(look.X,look.Z)
+            -- rotate yaw by 180° so we face the opposite direction
+            hrp.CFrame=CFrame.new(hrp.Position)*CFrame.fromEulerAnglesYXZ(0,yaw+math.pi,0)
+        end)
+        RunService:BindToRenderStep("BackwardsRestore", Enum.RenderPriority.First.Value, function()
+            if _spoofing and _real[1] then
+                if hrp and hrp.Parent then hrp.CFrame=_real[1]; hrp.AssemblyLinearVelocity=_real[2] end
+                _spoofing=false
+            end
+        end)
+    end
+    setup(lplr.Character)
+    G._bwCharConn=lplr.CharacterAdded:Connect(function(c)
+        if G.backwardsActive then task.wait(0.1); setup(c) end
+    end)
+end
+
 local function stopSpin()
     G.spinActive=false
     pcall(function() RunService:UnbindFromRenderStep("SpinStep") end)
@@ -1933,6 +2025,8 @@ F.zoom      = makeToggle(startZoom,      stopZoom,      "zoomActive")
 F.spin      = makeToggle(startSpin,      stopSpin,      "spinActive")
 F.spin.setSpeed = function(n) SPIN_SPEED = tonumber(n) or SPIN_SPEED end
 F.flip      = makeToggle(startFlip,      stopFlip,      "flipActive")
+F.tilt      = makeToggle(startTilt,      stopTilt,      "tiltActive")
+F.backwards = makeToggle(startBackwards, stopBackwards, "backwardsActive")
 F.ice       = makeToggle(startIce,       stopIce,       "iceActive")
 F.ice.setSlide = function(n) ICE_SLIDE = math.clamp(tonumber(n) or ICE_SLIDE, 0, 0.999) end
 
@@ -3968,7 +4062,7 @@ F.disableAll = function()
         if F.prompts.autoFire          then F.prompts.autoFire.stop()          end
     end
     stopNoclip(); stopFullbright(); stopFreecam()
-    stopZoom(); stopSpin(); stopFlip(); stopIce()
+    stopZoom(); stopSpin(); stopFlip(); stopTilt(); stopBackwards(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
     TrigSettings.Enabled=false
     RageSettings.SilentForce=false; RageSettings.AutoShoot=false

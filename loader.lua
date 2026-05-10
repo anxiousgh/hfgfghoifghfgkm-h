@@ -774,9 +774,42 @@ do
     Extras:AddSlider("SpinSpeed", { Text = "Spin speed", Default = 50,
         Min = 1, Max = 200, Rounding = 0, Callback = F.spin.setSpeed })
 
-    Extras:AddToggle("Flip", { Text = "Upside down",
+    -- orientation spoofs (flip / tilt / backwards) - mutually exclusive
+    -- so the spoofs don't compound. Each writes a different rotation to
+    -- the server-side HRP and restores the local one before the camera
+    -- reads it (BindToRenderStep at First priority).
+    local ORIENT_KEYS = { "Flip", "Tilt", "Backwards" }
+    local function selectOrient(name)
+        for _, k in ipairs(ORIENT_KEYS) do
+            if k ~= name and Toggles[k] and Toggles[k].Value then
+                Toggles[k]:SetValue(false)
+            end
+        end
+    end
+
+    Extras:AddToggle("Flip", { Text = "Upside down (180° X)",
         Default = false,
-        Callback = function(v) if v then F.flip.start() else F.flip.stop() end end })
+        Tooltip = "Server sees HRP rotated 180° on X (head down). Locally upright.",
+        Callback = function(v)
+            if v then selectOrient("Flip"); F.flip.start() else F.flip.stop() end
+        end,
+    })
+    Extras:AddToggle("Tilt", { Text = "Tilt sideways (90° Z)",
+        Default = false,
+        Tooltip = "Server sees HRP tilted 90° on Z (lying sideways). Locally upright.",
+        Callback = function(v)
+            if v then selectOrient("Tilt"); F.tilt.start() else F.tilt.stop() end
+        end,
+    })
+    Extras:AddToggle("Backwards", { Text = "Face backwards (180° Y)",
+        Default = false,
+        Tooltip = "Server sees HRP yaw flipped 180°. Acts as anti-aim: "
+            .. "enemies' aimbot points at the back of our head while "
+            .. "locally we face the other way.",
+        Callback = function(v)
+            if v then selectOrient("Backwards"); F.backwards.start() else F.backwards.stop() end
+        end,
+    })
 
     Extras:AddToggle("Ice", { Text = "Ice slide", Default = false,
         Callback = function(v) if v then F.ice.start() else F.ice.stop() end end })
