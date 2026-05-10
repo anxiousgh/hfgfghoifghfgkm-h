@@ -639,6 +639,7 @@ local function stopFlip()
     G.flipActive=false
     if G._flipHb then G._flipHb:Disconnect(); G._flipHb=nil end
     if G._flipRs then G._flipRs:Disconnect(); G._flipRs=nil end
+    pcall(function() RunService:UnbindFromRenderStep("FlipRestore") end)
     if G._flipCharConn then G._flipCharConn:Disconnect(); G._flipCharConn=nil end
     local char=lplr.Character
     if char then
@@ -652,10 +653,15 @@ local function startFlip()
         if not char then return end
         local hrp=char:WaitForChild("HumanoidRootPart",5); if not hrp then return end
         local hum=char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.CameraOffset=Vector3.new(0,-5,0) end
+        -- camera offset zeroed: BindToRenderStep at First priority below
+        -- restores HRP BEFORE the camera samples it, so the camera
+        -- naturally stays at the local upright head position. No offset
+        -- needed - and the previous -5 offset put the camera above the
+        -- head because the timing fixed itself differently here.
+        if hum then hum.CameraOffset=Vector3.zero end
         local _real={}; local _spoofing=false
         if G._flipHb then G._flipHb:Disconnect() end
-        if G._flipRs then G._flipRs:Disconnect() end
+        pcall(function() RunService:UnbindFromRenderStep("FlipRestore") end)
         G._flipHb=RunService.Heartbeat:Connect(function()
             if not hrp or not hrp.Parent then return end
             _real[1]=hrp.CFrame; _real[2]=hrp.AssemblyLinearVelocity; _spoofing=true
@@ -663,7 +669,9 @@ local function startFlip()
             local yaw=math.atan2(look.X,look.Z)
             hrp.CFrame=CFrame.new(hrp.Position)*CFrame.fromEulerAnglesYXZ(0,yaw,0)*CFrame.Angles(math.pi,0,0)
         end)
-        G._flipRs=RunService.RenderStepped:Connect(function()
+        -- restore at First priority so the default camera sees the upright
+        -- local HRP, not the spoofed flipped one
+        RunService:BindToRenderStep("FlipRestore", Enum.RenderPriority.First.Value, function()
             if _spoofing and _real[1] then
                 if hrp and hrp.Parent then hrp.CFrame=_real[1]; hrp.AssemblyLinearVelocity=_real[2] end
                 _spoofing=false
@@ -3795,20 +3803,37 @@ F.desync = (function()
         return true
     end
 
-    -- watchdog: every second, if SHARED.active drifted to false (some other
-    -- code path reset it, the table got replaced, etc.) but the user expects
-    -- raknet desync to be on, re-assert SHARED.active. The hook will start
-    -- working again on the next outbound packet.
+    -- watchdog: re-asserts SHARED.active state every 1s AND re-installs the
+    -- raknet hook every 10s. Potassium's raknet hooks have been observed to
+    -- expire / get cleared after a while - re-calling add_send_hook with our
+    -- pinned function refreshes the registration. If the executor dedupes
+    -- by fn ref it's a no-op; if it stacks, the duplicate hooks all do the
+    -- same idempotent write (write 0xFFFFFFFF at offset 1) so output is
+    -- unchanged. The 10s cadence is slow enough to avoid runaway stacking.
     if not getgenv()._F_DESYNC_RAKNET_WATCHDOG then
         getgenv()._F_DESYNC_RAKNET_WATCHDOG = true
         task.spawn(function()
+            local lastReinstall = 0
             while true do
                 task.wait(1)
                 local s = getgenv()._F_DESYNC_STATE
                 local want = getgenv()._F_DESYNC_RAKNET_WANTED
-                if want and s and (not s.active or s.mode ~= "raknet") then
-                    s.active = true
-                    s.mode   = "raknet"
+                if want and s then
+                    -- (a) state re-assert (fast path)
+                    if not s.active or s.mode ~= "raknet" then
+                        s.active = true
+                        s.mode   = "raknet"
+                    end
+                    -- (b) hook re-install (slow path, every 10s)
+                    if tick() - lastReinstall >= 10 then
+                        lastReinstall = tick()
+                        local r = findRaknet()
+                        if r and r.add_send_hook and getgenv()._F_DESYNC_RAKNET_FN then
+                            pcall(function()
+                                r.add_send_hook(getgenv()._F_DESYNC_RAKNET_FN)
+                            end)
+                        end
+                    end
                 end
             end
         end)
