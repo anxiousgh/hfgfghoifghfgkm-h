@@ -2365,6 +2365,101 @@ F.antiFling = (function()
 end)()
 
 -- ============================================================
+--  PROXIMITY PROMPTS  (3 independent modules)
+--    F.prompts.instantActivation  HoldDuration = 0 on every prompt
+--    F.prompts.unlimitedRange     MaxActivationDistance = huge,
+--                                  RequiresLineOfSight = false
+--    F.prompts.autoFire           on PromptShown -> fireproximityprompt
+--                                  (requires executor support)
+--  Each module independently scans existing prompts on start, hooks
+--  workspace.DescendantAdded for future prompts, and disconnects
+--  cleanly on stop.
+-- ============================================================
+F.prompts = (function()
+    local function eachPrompt(fn)
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then fn(d) end
+        end
+    end
+
+    -- ----- INSTANT ACTIVATION (no hold) -----
+    local iConn
+    local function iApply(p) pcall(function() p.HoldDuration = 0 end) end
+    local instantActivation = makeToggle(
+        function()
+            G.promptInstantActive = true
+            eachPrompt(iApply)
+            if iConn then iConn:Disconnect() end
+            iConn = workspace.DescendantAdded:Connect(function(d)
+                if G.promptInstantActive and d:IsA("ProximityPrompt") then iApply(d) end
+            end)
+        end,
+        function()
+            G.promptInstantActive = false
+            if iConn then iConn:Disconnect(); iConn = nil end
+        end,
+        "promptInstantActive"
+    )
+
+    -- ----- UNLIMITED RANGE (any distance, through walls) -----
+    local rConn
+    local function rApply(p)
+        pcall(function() p.MaxActivationDistance = math.huge end)
+        pcall(function() p.RequiresLineOfSight   = false end)
+    end
+    local unlimitedRange = makeToggle(
+        function()
+            G.promptRangeActive = true
+            eachPrompt(rApply)
+            if rConn then rConn:Disconnect() end
+            rConn = workspace.DescendantAdded:Connect(function(d)
+                if G.promptRangeActive and d:IsA("ProximityPrompt") then rApply(d) end
+            end)
+        end,
+        function()
+            G.promptRangeActive = false
+            if rConn then rConn:Disconnect(); rConn = nil end
+        end,
+        "promptRangeActive"
+    )
+
+    -- ----- AUTO-FIRE (fire on PromptShown) -----
+    local aConn
+    local aPromptConns = {}  -- per-prompt PromptShown listeners
+    local function aHook(p)
+        local conn = p.PromptShown:Connect(function()
+            if G.promptAutoFireActive and fireproximityprompt then
+                pcall(function() fireproximityprompt(p) end)
+            end
+        end)
+        table.insert(aPromptConns, conn)
+    end
+    local autoFire = makeToggle(
+        function()
+            G.promptAutoFireActive = true
+            eachPrompt(aHook)
+            if aConn then aConn:Disconnect() end
+            aConn = workspace.DescendantAdded:Connect(function(d)
+                if G.promptAutoFireActive and d:IsA("ProximityPrompt") then aHook(d) end
+            end)
+        end,
+        function()
+            G.promptAutoFireActive = false
+            if aConn then aConn:Disconnect(); aConn = nil end
+            for _, c in ipairs(aPromptConns) do pcall(function() c:Disconnect() end) end
+            aPromptConns = {}
+        end,
+        "promptAutoFireActive"
+    )
+
+    return {
+        instantActivation = instantActivation,
+        unlimitedRange    = unlimitedRange,
+        autoFire          = autoFire,
+    }
+end)()
+
+-- ============================================================
 --  SERVER HOPPER
 -- ============================================================
 local TeleportService = game:GetService("TeleportService")
@@ -3819,6 +3914,11 @@ F.disableAll = function()
     if F.desync then F.desync.stop() end
     if F.antiFling then F.antiFling.stop() end
     if F.rocketJump and F.rocketJump.stop then F.rocketJump.stop() end
+    if F.prompts then
+        if F.prompts.instantActivation then F.prompts.instantActivation.stop() end
+        if F.prompts.unlimitedRange    then F.prompts.unlimitedRange.stop()    end
+        if F.prompts.autoFire          then F.prompts.autoFire.stop()          end
+    end
     stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false

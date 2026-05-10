@@ -1143,6 +1143,38 @@ do
         Callback = function(v) F.antiFling.setCap(v) end,
     })
 
+    -- =================== PROXIMITY PROMPTS ===================
+    local Prompts = Tabs.Misc:AddLeftGroupbox("Proximity prompts")
+    Prompts:AddToggle("PromptInstantActivation", { Text = "Instant activation",
+        Default = false,
+        Tooltip = "Sets HoldDuration=0 on every ProximityPrompt. Press "
+            .. "the prompt key once and it fires - no holding required.",
+        Callback = function(v)
+            if v then F.prompts.instantActivation.start()
+            else      F.prompts.instantActivation.stop() end
+        end,
+    })
+    Prompts:AddToggle("PromptUnlimitedRange", { Text = "Unlimited range",
+        Default = false,
+        Tooltip = "Sets MaxActivationDistance=huge and "
+            .. "RequiresLineOfSight=false on every ProximityPrompt. "
+            .. "Triggerable from any distance, through walls.",
+        Callback = function(v)
+            if v then F.prompts.unlimitedRange.start()
+            else      F.prompts.unlimitedRange.stop() end
+        end,
+    })
+    Prompts:AddToggle("PromptAutoFire", { Text = "Auto-fire",
+        Default = false,
+        Tooltip = "Fires every ProximityPrompt the moment it becomes "
+            .. "visible - no input needed. Requires the executor to "
+            .. "expose fireproximityprompt.",
+        Callback = function(v)
+            if v then F.prompts.autoFire.start()
+            else      F.prompts.autoFire.stop() end
+        end,
+    })
+
     -- =================== SERVER HOPPER ===================
     local Srv = Tabs.Misc:AddLeftGroupbox("Server hop")
 
