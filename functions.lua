@@ -3829,17 +3829,17 @@ F.desync = (function()
             local c = lplr.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
-            -- ALWAYS capture realCF, even during voidspam sync window.
-            -- otherwise BindToRenderStep keeps writing stale realCF to
-            -- HRP every frame, which freezes the user in place. by
-            -- capturing every frame we let RenderStepped track the
-            -- current position - no override on movement.
             realCF = hrp.CFrame
             realLV = hrp.AssemblyLinearVelocity
             realAV = hrp.AssemblyAngularVelocity
-            -- only the spoof is skipped during the sync window, not
-            -- the capture above.
-            if mode == "voidspam" and tick() < syncEnd then return end
+            -- voidspam: pure void desync (random per-frame position)
+            -- EXCEPT during the MouseButton1 sync window where we skip
+            -- the spoof entirely. syncEnd is written by the input
+            -- listener pinned in getgenv() so it survives script reload.
+            if mode == "voidspam" then
+                local ge = getgenv()._F_DESYNC_SYNC_END or 0
+                if tick() < ge then return end
+            end
             pcall(function() applySpoof(hrp) end)
         end)
 
@@ -3933,30 +3933,28 @@ F.desync = (function()
         end)
     end
 
-    -- detect outbound Shoot fires for voidspam mode
-    if hookmetamethod and not getgenv()._F_DESYNC_HOOK then
-        getgenv()._F_DESYNC_HOOK = true
-        local _RS = game:GetService("ReplicatedStorage")
-        local mainEvent = _RS:FindFirstChild("MainEvent")
-        local oldNc
-        oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-            -- Cheap-bool early-outs first. Voidspam is rarely active so
-            -- 99%+ of calls return after the first comparison.
-            if not active or mode ~= "voidspam" then return oldNc(self, ...) end
-            if not rawequal(self, mainEvent) then return oldNc(self, ...) end
-            if getnamecallmethod() ~= "FireServer" then return oldNc(self, ...) end
-            local args = {...}
-            if args[1] == "Shoot" then
-                syncEnd = tick() + SHOT_SYNC_MS / 1000
-                local c = lplr.Character
-                local hrp = c and c:FindFirstChild("HumanoidRootPart")
-                if hrp and realCF then
-                    pcall(function() hrp.CFrame = realCF end)
-                end
-            end
-            return oldNc(self, ...)
-        end))
+    -- voidspam: pure input-based trigger. On MouseButton1 down, set
+    -- syncEnd so the Heartbeat skips the spoof for SHOT_SYNC_MS ms.
+    -- No namecall hook, no synchronous HRP.CFrame writes per shot -
+    -- the previous version did a write inside the namecall closure on
+    -- every Shoot fire, which stalled / crashed the engine when
+    -- ForceHit's autoshoot fired many shots per second.
+    if not getgenv()._F_DESYNC_INPUT_HOOK then
+        getgenv()._F_DESYNC_INPUT_HOOK = true
+        UserInputService.InputBegan:Connect(function(input, gp)
+            if gp then return end
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+            local s = getgenv()._F_DESYNC_STATE
+            if not s or not s.active or s.mode ~= "voidspam" then return end
+            -- read the IIFE's current SHOT_SYNC_MS via a getgenv shim.
+            -- the IIFE writes this on init / setShotSyncMs.
+            local ms = getgenv()._F_DESYNC_SHOT_SYNC_MS or 100
+            getgenv()._F_DESYNC_SYNC_END = tick() + ms / 1000
+        end)
     end
+    -- mirror SHOT_SYNC_MS into getgenv so the input listener (which is
+    -- pinned across reloads) sees the current value
+    getgenv()._F_DESYNC_SHOT_SYNC_MS = SHOT_SYNC_MS
 
     local function startMode(newMode)
         mode = newMode
@@ -3980,6 +3978,7 @@ F.desync = (function()
         SHARED.active = false
         SHARED.mode   = "off"
         getgenv()._F_DESYNC_RAKNET_WANTED = false
+        getgenv()._F_DESYNC_SYNC_END      = 0
         if hbConn then hbConn:Disconnect(); hbConn = nil end
         pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
         local c = lplr.Character
@@ -4018,6 +4017,7 @@ F.desync = (function()
         end,
         setShotSyncMs   = function(n)
             SHOT_SYNC_MS = math.clamp(tonumber(n) or 100, 10, 1000)
+            getgenv()._F_DESYNC_SHOT_SYNC_MS = SHOT_SYNC_MS
         end,
         setSpinSpeed    = function(n)
             SPIN_STEP = math.clamp(tonumber(n) or 47, 1, 360)
