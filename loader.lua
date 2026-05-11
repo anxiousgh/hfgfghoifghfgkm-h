@@ -1189,12 +1189,23 @@ do
     })
     Prompts:AddToggle("PromptUnlimitedRange", { Text = "Unlimited range",
         Default = false,
-        Tooltip = "Sets MaxActivationDistance=huge and "
-            .. "RequiresLineOfSight=false on every ProximityPrompt. "
-            .. "Triggerable from any distance, through walls.",
+        Tooltip = "Sets MaxActivationDistance=huge on every "
+            .. "ProximityPrompt. Original distance is restored when "
+            .. "the toggle turns off (stashed as an attribute on the "
+            .. "prompt the first time we see it).",
         Callback = function(v)
             if v then F.prompts.unlimitedRange.start()
             else      F.prompts.unlimitedRange.stop() end
+        end,
+    })
+    Prompts:AddToggle("PromptThroughWalls", { Text = "Through walls",
+        Default = false,
+        Tooltip = "Sets RequiresLineOfSight=false on every "
+            .. "ProximityPrompt so it triggers even if there's "
+            .. "geometry in the way. Original value restored on stop.",
+        Callback = function(v)
+            if v then F.prompts.throughWalls.start()
+            else      F.prompts.throughWalls.stop() end
         end,
     })
     Prompts:AddToggle("PromptAutoFire", { Text = "Auto-fire",

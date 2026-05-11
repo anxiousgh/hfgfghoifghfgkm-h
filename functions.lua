@@ -2485,23 +2485,40 @@ end)()
 --  cleanly on stop.
 -- ============================================================
 F.prompts = (function()
-    -- Each prompt gets ONE PropertyChangedSignal per watched property, plus
-    -- ONE PromptShown listener for autoFire. Listeners self-gate on G flags,
-    -- so toggling a module on/off never connects/disconnects per-prompt -
-    -- it just flips a bool. The previous version installed/disconnected
-    -- listeners on every toggle, which leaked entries in aPromptConns over
-    -- the session as prompts spawned and was a freeze contributor.
+    -- Each prompt: ONE PropertyChangedSignal per watched property + ONE
+    -- PromptShown for autoFire, installed on first sight. Listeners
+    -- self-gate on G flags, so toggling modules on/off never connects/
+    -- disconnects per-prompt.
     --
-    -- Anti-restore: the property-changed listeners DETECT when the game
-    -- writes the value back and re-apply our value. So even prompts the
-    -- game tries to "fix" stay patched.
+    -- Anti-restore: when the game writes a property back to default, the
+    -- listener re-applies our value.
+    --
+    -- Originals are stashed as instance attributes the first time we see
+    -- a prompt - so when a module turns OFF we can restore the prompt's
+    -- original HoldDuration / MaxActivationDistance / RequiresLineOfSight
+    -- instead of leaving it stuck on our spoofed value.
 
-    -- weak-keyed: when a prompt is destroyed, the entry is GC'd, no leak.
     local installed = setmetatable({}, { __mode = "k" })
+    local ATTR_HOLD = "_F_origHoldDuration"
+    local ATTR_DIST = "_F_origMaxDist"
+    local ATTR_LOS  = "_F_origRequiresLoS"
 
     local function installAll(prompt)
         if installed[prompt] then return end
         installed[prompt] = true
+
+        -- stash originals once. Only write the attribute if it's missing,
+        -- so re-installation across script reloads doesn't overwrite the
+        -- attribute with our already-spoofed value.
+        if prompt:GetAttribute(ATTR_HOLD) == nil then
+            prompt:SetAttribute(ATTR_HOLD, prompt.HoldDuration)
+        end
+        if prompt:GetAttribute(ATTR_DIST) == nil then
+            prompt:SetAttribute(ATTR_DIST, prompt.MaxActivationDistance)
+        end
+        if prompt:GetAttribute(ATTR_LOS) == nil then
+            prompt:SetAttribute(ATTR_LOS, prompt.RequiresLineOfSight)
+        end
 
         prompt:GetPropertyChangedSignal("HoldDuration"):Connect(function()
             if G.promptInstantActive and prompt.HoldDuration ~= 0 then
@@ -2514,7 +2531,7 @@ F.prompts = (function()
             end
         end)
         prompt:GetPropertyChangedSignal("RequiresLineOfSight"):Connect(function()
-            if G.promptRangeActive and prompt.RequiresLineOfSight then
+            if G.promptWallsActive and prompt.RequiresLineOfSight then
                 pcall(function() prompt.RequiresLineOfSight = false end)
             end
         end)
@@ -2524,16 +2541,12 @@ F.prompts = (function()
             end
         end)
 
-        -- apply current values if any module is already on
+        -- apply currently-active states
         if G.promptInstantActive then pcall(function() prompt.HoldDuration = 0 end) end
-        if G.promptRangeActive then
-            pcall(function() prompt.MaxActivationDistance = math.huge end)
-            pcall(function() prompt.RequiresLineOfSight   = false end)
-        end
+        if G.promptRangeActive   then pcall(function() prompt.MaxActivationDistance = math.huge end) end
+        if G.promptWallsActive   then pcall(function() prompt.RequiresLineOfSight   = false end) end
     end
 
-    -- single workspace.DescendantAdded across all 3 modules. Gated on
-    -- getgenv() so script reload doesn't stack listeners.
     if not getgenv()._F_PROMPT_HOOKED then
         getgenv()._F_PROMPT_HOOKED = true
         workspace.DescendantAdded:Connect(function(d)
@@ -2544,31 +2557,54 @@ F.prompts = (function()
         end
     end
 
-    -- when a module turns on, sweep already-installed prompts and apply.
-    -- when it turns off, listeners stay but self-gate to no-op.
-    local function applyInstant()
+    -- ---- generic apply / restore helpers ----
+    local function sweep(applyFn)
         for prompt in pairs(installed) do
-            if prompt.Parent then pcall(function() prompt.HoldDuration = 0 end) end
+            if prompt.Parent then pcall(function() applyFn(prompt) end) end
         end
     end
-    local function applyRange()
+    local function restoreFromAttr(attr, prop, fallback)
         for prompt in pairs(installed) do
             if prompt.Parent then
-                pcall(function() prompt.MaxActivationDistance = math.huge end)
-                pcall(function() prompt.RequiresLineOfSight   = false end)
+                local orig = prompt:GetAttribute(attr)
+                if orig == nil then orig = fallback end
+                pcall(function() prompt[prop] = orig end)
             end
         end
     end
 
     local instantActivation = makeToggle(
-        function() G.promptInstantActive  = true;  applyInstant() end,
-        function() G.promptInstantActive  = false end,
+        function()
+            G.promptInstantActive = true
+            sweep(function(p) p.HoldDuration = 0 end)
+        end,
+        function()
+            G.promptInstantActive = false
+            restoreFromAttr(ATTR_HOLD, "HoldDuration", 1)
+        end,
         "promptInstantActive"
     )
     local unlimitedRange = makeToggle(
-        function() G.promptRangeActive    = true;  applyRange() end,
-        function() G.promptRangeActive    = false end,
+        function()
+            G.promptRangeActive = true
+            sweep(function(p) p.MaxActivationDistance = math.huge end)
+        end,
+        function()
+            G.promptRangeActive = false
+            restoreFromAttr(ATTR_DIST, "MaxActivationDistance", 10)
+        end,
         "promptRangeActive"
+    )
+    local throughWalls = makeToggle(
+        function()
+            G.promptWallsActive = true
+            sweep(function(p) p.RequiresLineOfSight = false end)
+        end,
+        function()
+            G.promptWallsActive = false
+            restoreFromAttr(ATTR_LOS, "RequiresLineOfSight", true)
+        end,
+        "promptWallsActive"
     )
     local autoFire = makeToggle(
         function() G.promptAutoFireActive = true end,
@@ -2579,6 +2615,7 @@ F.prompts = (function()
     return {
         instantActivation = instantActivation,
         unlimitedRange    = unlimitedRange,
+        throughWalls      = throughWalls,
         autoFire          = autoFire,
     }
 end)()
@@ -4059,6 +4096,7 @@ F.disableAll = function()
     if F.prompts then
         if F.prompts.instantActivation then F.prompts.instantActivation.stop() end
         if F.prompts.unlimitedRange    then F.prompts.unlimitedRange.stop()    end
+        if F.prompts.throughWalls      then F.prompts.throughWalls.stop()      end
         if F.prompts.autoFire          then F.prompts.autoFire.stop()          end
     end
     stopNoclip(); stopFullbright(); stopFreecam()
