@@ -2474,6 +2474,52 @@ F.antiFling = (function()
 end)()
 
 -- ============================================================
+--  FORCE CHAT  (re-enable chat in games that hid it)
+--  Some games disable Roblox's chat via StarterGui:SetCoreGuiEnabled
+--  or by setting TextChatService config Enabled = false. We force
+--  both back on and re-apply periodically so subsequent script
+--  attempts to disable it don't stick.
+-- ============================================================
+F.forceChat = (function()
+    local StarterGui = game:GetService("StarterGui")
+    local TextChatService = game:GetService("TextChatService")
+
+    local function applyOnce()
+        pcall(function()
+            StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, true)
+        end)
+        if TextChatService then
+            for _, c in ipairs(TextChatService:GetDescendants()) do
+                if c:IsA("ChatWindowConfiguration")
+                or c:IsA("ChatInputBarConfiguration")
+                or c:IsA("BubbleChatConfiguration") then
+                    pcall(function() c.Enabled = true end)
+                end
+            end
+        end
+    end
+
+    local function start()
+        G.forceChatActive = true
+        -- spawn a polling loop that re-applies every 2s. simpler than
+        -- hooking signals on multiple services + the SetCoreGuiEnabled
+        -- side. exits when G.forceChatActive flips false.
+        task.spawn(function()
+            while G.forceChatActive do
+                applyOnce()
+                task.wait(2)
+            end
+        end)
+    end
+
+    local function stop()
+        G.forceChatActive = false
+    end
+
+    return makeToggle(start, stop, "forceChatActive")
+end)()
+
+-- ============================================================
 --  PROXIMITY PROMPTS  (3 independent modules)
 --    F.prompts.instantActivation  HoldDuration = 0 on every prompt
 --    F.prompts.unlimitedRange     MaxActivationDistance = huge,
@@ -4099,6 +4145,7 @@ F.disableAll = function()
         if F.prompts.throughWalls      then F.prompts.throughWalls.stop()      end
         if F.prompts.autoFire          then F.prompts.autoFire.stop()          end
     end
+    if F.forceChat and F.forceChat.stop then F.forceChat.stop() end
     stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopTilt(); stopBackwards(); stopIce()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false

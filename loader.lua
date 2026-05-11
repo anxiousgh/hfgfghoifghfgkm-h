@@ -1176,6 +1176,20 @@ do
         Callback = function(v) F.antiFling.setCap(v) end,
     })
 
+    -- =================== FORCE CHAT ===================
+    local ForceChat = Tabs.Misc:AddLeftGroupbox("Force chat")
+    ForceChat:AddToggle("ForceChat", { Text = "Re-enable chat",
+        Default = false,
+        Tooltip = "Force Roblox's chat back on for games that hide it. "
+            .. "Sets CoreGuiType.Chat = true and re-enables every "
+            .. "ChatWindowConfiguration / ChatInputBarConfiguration / "
+            .. "BubbleChatConfiguration under TextChatService. Re-applies "
+            .. "every 2s so the game can't sneakily disable it again.",
+        Callback = function(v)
+            if v then F.forceChat.start() else F.forceChat.stop() end
+        end,
+    })
+
     -- =================== PROXIMITY PROMPTS ===================
     local Prompts = Tabs.Misc:AddLeftGroupbox("Proximity prompts")
     Prompts:AddToggle("PromptInstantActivation", { Text = "Instant activation",
