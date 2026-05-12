@@ -1505,6 +1505,15 @@ do
         Default  = "click",
         Callback = function(v) F.games.hoodCustoms.forceHit.setShotgunMode(v) end,
     })
+    HC:AddSlider("HCForceHitFireMult", {
+        Text     = "Shoot count (per fire)",
+        Tooltip  = "How many times to fire the shoot payload back-to-back "
+            .. "per autoshoot tick. 1 = normal. 3 means a 5-pellet shotgun "
+            .. "blast counts as 15 hits if the server doesn't dedupe. "
+            .. "Higher values can trip rate-limit anti-cheat - tune carefully.",
+        Default  = 1, Min = 1, Max = 10, Rounding = 0,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setFireMultiplier(v) end,
+    })
     -- Tracer + hit sound. FireServer doesn't render bullet visuals
     -- because we never go through the gun script, so we fake them
     -- locally for visual + audio feedback on each forced hit.

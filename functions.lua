@@ -3555,12 +3555,18 @@ F.games.hoodCustoms.forceHit = (function()
         ["[Double Barrel]"]    = true,
         ["[Tactical Shotgun]"] = true,
     }
-    -- shotgun pellet counts (matches the natural game shots we captured)
     local SHOTGUN_PELLETS = {
         ["[Shotgun]"]          = 5,
         ["[Double Barrel]"]    = 5,
         ["[Tactical Shotgun]"] = 5,
     }
+    -- Fallback substrings: catches any HC tool whose actual Name differs
+    -- from our hardcoded keys (case / spacing / bracket variations).
+    -- Without this fuzzy match, isShotgun() returns false and forceHit
+    -- routes the shot through fireDirect() which only sends 1 pellet -
+    -- the server flags "shotgun fired with 1 pellet" and kicks.
+    local SHOTGUN_SUBSTRINGS = { "shotgun", "barrel" }
+    local _loggedTools = {}  -- tools we've already logged Tool.Name for
 
     local target          = nil
     local hitPartName     = "Head"
@@ -3571,6 +3577,11 @@ F.games.hoodCustoms.forceHit = (function()
     --                the per-shot PRNG check). 2 stacked clusters ~3 studs
     --                apart, sub-stud anti-zero-spread jitter inside each.
     local shotgunMode     = "click"
+    -- multiplier: how many times to fire the shoot payload per forceHit
+    -- call. Default 1 = normal. >1 stacks identical packets back-to-back
+    -- for damage amplification (5-pellet shotgun x3 = 15 effective hits
+    -- if the server doesn't dedupe).
+    local fireMultiplier  = 1
 
     -- visual / audio feedback (FireServer doesn't render bullet visuals
     -- because we never hit the gun script, so we fake them locally)
@@ -3594,7 +3605,24 @@ F.games.hoodCustoms.forceHit = (function()
 
     local function isShotgun()
         local t = getEquippedTool()
-        return t and SHOTGUN_NAMES[t.Name] == true
+        if not t then return false end
+        if SHOTGUN_NAMES[t.Name] then return true end
+        -- substring fallback for unknown naming variations
+        local lower = t.Name:lower()
+        for _, key in ipairs(SHOTGUN_SUBSTRINGS) do
+            if lower:find(key, 1, true) then return true end
+        end
+        return false
+    end
+
+    -- diagnostic: log Tool.Name once per unique tool so the user can see
+    -- what HC actually names guns and confirm shotgun detection
+    local function logToolOnce()
+        local t = getEquippedTool()
+        if t and not _loggedTools[t.Name] then
+            _loggedTools[t.Name] = true
+            print(("[forceHit] equipped: %q  isShotgun=%s"):format(t.Name, tostring(isShotgun())))
+        end
     end
 
     local function getHead()
@@ -3777,28 +3805,41 @@ F.games.hoodCustoms.forceHit = (function()
         if selfIsKnocked() then return end
         local part = getCurrentTargetPart(); if not part then return end
 
+        -- diagnostic so the user can see if shotgun detection actually matches
+        logToolOnce()
+
         local headPart = getHead()
         local origin   = headPart and headPart.Position
-
-        local fired
-        if isShotgun() then
-            local tool = getEquippedTool()
-            local pellets = (tool and SHOTGUN_PELLETS[tool.Name]) or 5
-            if shotgunMode == "synth" then
-                fired = fireShotgunSynth(part, pellets)
-            else
-                fireClick()
-                fired = true
-            end
+        local shotgun  = isShotgun()
+        local tool     = getEquippedTool()
+        -- pellet count: explicit table lookup, otherwise default to 5 for
+        -- anything substring-matched as a shotgun, otherwise 1
+        local pellets
+        if shotgun then
+            pellets = (tool and SHOTGUN_PELLETS[tool.Name]) or 5
         else
-            fired = fireDirect(part)
+            pellets = 1
+        end
+
+        local fired = false
+        for _ = 1, math.max(1, fireMultiplier) do
+            if shotgun then
+                if shotgunMode == "synth" then
+                    if fireShotgunSynth(part, pellets) then fired = true end
+                else
+                    fireClick()
+                    fired = true
+                end
+            else
+                if fireDirect(part) then fired = true end
+            end
         end
 
         if fired then
             lastFire = tick()
             -- skip the fake tracer for the click-fire path: the gun renders
             -- its own native tracers and ours would just be a duplicate
-            local skipTracer = isShotgun() and shotgunMode == "click"
+            local skipTracer = shotgun and shotgunMode == "click"
             if origin and not skipTracer then
                 spawnTracer(origin, part.Position)
             end
@@ -3829,6 +3870,10 @@ F.games.hoodCustoms.forceHit = (function()
         if m == "synth" or m == "click" then shotgunMode = m end
     end
     t.getShotgunMode = function() return shotgunMode end
+    t.setFireMultiplier = function(n)
+        fireMultiplier = math.clamp(tonumber(n) or 1, 1, 10)
+    end
+    t.getFireMultiplier = function() return fireMultiplier end
     -- tracer + hit sound
     t.setTracerEnabled  = function(v) tracerEnabled = v == true end
     t.setTracerColor    = function(c) if typeof(c) == "Color3" then tracerColor = c end end
