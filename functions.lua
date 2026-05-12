@@ -76,7 +76,7 @@ local TrigSettings = {
 }
 
 local RageSettings = {
-    TargetUserId=nil, TargetPlayer=nil, SkipKnocked=false,
+    TargetUserId=nil, TargetPlayer=nil, SkipKnocked=false, IgnoreKnocked=false,
     ShowLine=true, ShowOutline=true, LineOrigin="Bottom", FaceTarget=false,
     Orbit=false, OrbitDistance=15, OrbitSpeed=60, OrbitHeight=5,
     AutoShoot=false, AutoShootDist=50, AutoShootVis=true, AutoShootRequireTool=false,
@@ -1432,6 +1432,17 @@ local function rbIsVisible(plr)
     return isReallyVisible(camPos, root.Position, ignore)
 end
 
+-- Returns true if the target should be completely skipped from selection
+-- (IgnoreKnocked mode). Separate from SkipKnocked which only blocks the
+-- auto-shoot but keeps the target locked.
+local function rbIgnoreByKnocked(plr)
+    if not RageSettings.IgnoreKnocked then return false end
+    local hc = F and F.games and F.games.hoodCustoms
+    if not hc or not hc.isKnocked then return false end
+    local ok, knocked = pcall(hc.isKnocked, plr)
+    return ok and knocked
+end
+
 local function rbGetTarget()
     if #_rbTargetList > 0 then
         local lchar=lplr.Character
@@ -1450,6 +1461,7 @@ local function rbGetTarget()
             local char=plr.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart")
             if not hrp then continue end
             local hum=char:FindFirstChildOfClass("Humanoid"); if not hum or hum.Health<=0 then continue end
+            if rbIgnoreByKnocked(plr) then continue end
             local dist
             if useMouse then
                 local sp,onScreen=cam:WorldToViewportPoint(hrp.Position)
@@ -1464,9 +1476,15 @@ local function rbGetTarget()
     end
     local uid=RageSettings.TargetUserId; if not uid then return nil end
     local plr=RageSettings.TargetPlayer
-    if plr and plr.Parent and plr.UserId==uid then return plr end
+    if plr and plr.Parent and plr.UserId==uid then
+        if rbIgnoreByKnocked(plr) then return nil end
+        return plr
+    end
     for _,p in ipairs(plrs:GetPlayers()) do
-        if p.UserId==uid then RageSettings.TargetPlayer=p; return p end
+        if p.UserId==uid then
+            if rbIgnoreByKnocked(p) then return nil end
+            RageSettings.TargetPlayer=p; return p
+        end
     end
     return nil
 end
@@ -2168,6 +2186,7 @@ F.ragebot = {
     setShowOutline  = function(b) RageSettings.ShowOutline = b == true end,
     setLineOrigin   = function(s) RageSettings.LineOrigin = tostring(s) end,
     setSkipKnocked  = function(b) RageSettings.SkipKnocked = b == true end,
+    setIgnoreKnocked = function(b) RageSettings.IgnoreKnocked = b == true end,
     setFaceTarget  = function(b) RageSettings.FaceTarget = b == true end,
     setOrbit       = function(b) RageSettings.Orbit = b == true end,
     setOrbitDistance = function(n) RageSettings.OrbitDistance = math.clamp(tonumber(n) or 15, 2, 200) end,

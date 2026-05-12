@@ -1328,8 +1328,20 @@ do
     HC:AddLabel("Ragebot")
     HC:AddToggle("RageSkipKnocked", {
         Text = "Skip knocked targets",
+        Tooltip = "Auto-shoot won't fire at K.O'd targets, but the "
+            .. "ragebot still keeps them locked / visualized.",
         Default = false,
         Callback = F.ragebot.setSkipKnocked,
+    })
+    HC:AddToggle("RageIgnoreKnocked", {
+        Text = "Ignore knocked targets",
+        Tooltip = "Stronger than Skip knocked: knocked players are "
+            .. "filtered out of target SELECTION entirely. The ragebot "
+            .. "never locks onto them in the first place - useful so the "
+            .. "lock auto-switches to the next live target instead of "
+            .. "sticking on someone who's down.",
+        Default = false,
+        Callback = F.ragebot.setIgnoreKnocked,
     })
 
     HC:AddDivider()
