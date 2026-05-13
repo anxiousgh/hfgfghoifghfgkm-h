@@ -3921,6 +3921,13 @@ F.desync = (function()
     local VEL_MAGNITUDE = 16384
     -- sky desync: how many studs to shove HRP up server-side (X/Z preserved)
     local SKY_HEIGHT   = 5000
+    -- raknet auto-cycle: alternates raknet ON / void OFF every N seconds.
+    -- Right before turning raknet back ON, the local HRP gets teleported
+    -- back to the original ghost position - so the ghost effectively stays
+    -- pinned to the same spot across cycles.
+    local RAKNET_CYCLE_ENABLED       = false
+    local RAKNET_CYCLE_ON_DURATION   = 30
+    local RAKNET_CYCLE_VOID_DURATION = 1
 
     -- shared state in getgenv() so the raknet hook (which is installed
     -- ONCE at module load and survives script re-runs) reads the current
@@ -4323,11 +4330,66 @@ F.desync = (function()
         if newMode == "raknet" then
             if hbConn then hbConn:Disconnect(); hbConn = nil end
             pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
-            -- build the ghost at the current HRP position so the user
-            -- can see where the server thinks they are
             local c = lplr.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             if hrp then ghostCreate(hrp.Position) end
+            -- if auto-cycle is on, spawn the alternation task. it captures
+            -- the original ghost position and pins it across cycles so
+            -- every re-enable lands the ghost back at the same spot.
+            if RAKNET_CYCLE_ENABLED and hrp then
+                local ghostPos = hrp.Position
+                getgenv()._F_DESYNC_CYCLE_TOKEN = (getgenv()._F_DESYNC_CYCLE_TOKEN or 0) + 1
+                local myToken = getgenv()._F_DESYNC_CYCLE_TOKEN
+                task.spawn(function()
+                    while active
+                       and getgenv()._F_DESYNC_CYCLE_TOKEN == myToken do
+                        -- Phase A: raknet is on, wait the on-duration
+                        local t0 = tick()
+                        while active
+                          and getgenv()._F_DESYNC_CYCLE_TOKEN == myToken
+                          and tick() - t0 < RAKNET_CYCLE_ON_DURATION do
+                            task.wait(0.1)
+                        end
+                        if not active or getgenv()._F_DESYNC_CYCLE_TOKEN ~= myToken then break end
+
+                        -- Phase B: drop the ghost, flip SHARED.mode to "void"
+                        -- so the raknet hook self-gates off; start the void
+                        -- Heartbeat+RenderStep loop.
+                        ghostRemove()
+                        SHARED.mode = "void"
+                        mode        = "void"
+                        getgenv()._F_DESYNC_RAKNET_WANTED = false
+                        bind()
+
+                        local t1 = tick()
+                        while active
+                          and getgenv()._F_DESYNC_CYCLE_TOKEN == myToken
+                          and tick() - t1 < RAKNET_CYCLE_VOID_DURATION do
+                            task.wait(0.05)
+                        end
+                        if not active or getgenv()._F_DESYNC_CYCLE_TOKEN ~= myToken then break end
+
+                        -- Transition back to raknet: teleport HRP to the
+                        -- original ghost position, kill the void loop,
+                        -- rebuild the ghost, flip SHARED.mode back.
+                        local nc = lplr.Character
+                        local nhrp = nc and nc:FindFirstChild("HumanoidRootPart")
+                        if nhrp then
+                            pcall(function() nhrp.CFrame = CFrame.new(ghostPos) end)
+                            -- desync notifies the BindToRenderStep restore so
+                            -- it doesn't drag HRP back to the pre-TP value
+                            realCF = nhrp.CFrame
+                        end
+                        if hbConn then hbConn:Disconnect(); hbConn = nil end
+                        pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
+
+                        ghostCreate(ghostPos)
+                        SHARED.mode = "raknet"
+                        mode        = "raknet"
+                        getgenv()._F_DESYNC_RAKNET_WANTED = true
+                    end
+                end)
+            end
             return
         end
         -- non-raknet mode: tear down any existing ghost
@@ -4342,7 +4404,8 @@ F.desync = (function()
         SHARED.mode   = "off"
         getgenv()._F_DESYNC_RAKNET_WANTED = false
         getgenv()._F_DESYNC_SYNC_END      = 0
-        -- always remove the ghost on any stop (cheap if it doesn't exist)
+        -- bump the cycle token so any running raknet-cycle task exits
+        getgenv()._F_DESYNC_CYCLE_TOKEN = (getgenv()._F_DESYNC_CYCLE_TOKEN or 0) + 1
         ghostRemove()
         -- if we were in raknet mode and the executor supports it, try
         -- removing the send hook for cleanliness
@@ -4400,6 +4463,19 @@ F.desync = (function()
         end,
         setSkyHeight    = function(n)
             SKY_HEIGHT = math.clamp(tonumber(n) or 5000, 50, 100000)
+        end,
+        -- raknet auto-cycle
+        setRaknetCycle = function(v)
+            RAKNET_CYCLE_ENABLED = v == true
+            if not RAKNET_CYCLE_ENABLED then
+                getgenv()._F_DESYNC_CYCLE_TOKEN = (getgenv()._F_DESYNC_CYCLE_TOKEN or 0) + 1
+            end
+        end,
+        setRaknetCycleOnDuration   = function(n)
+            RAKNET_CYCLE_ON_DURATION = math.clamp(tonumber(n) or 30, 1, 600)
+        end,
+        setRaknetCycleVoidDuration = function(n)
+            RAKNET_CYCLE_VOID_DURATION = math.clamp(tonumber(n) or 1, 0.1, 30)
         end,
         -- called by external TP code (_uprightTp etc) so our captured
         -- realCF reflects the new position. without this our next
