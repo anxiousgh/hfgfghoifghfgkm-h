@@ -921,6 +921,8 @@ do
                 selectMode("DesyncRaknet")
                 local ok = F.desync.startRaknet()
                 if not ok then
+                    -- raknet not exposed by this executor - turn the
+                    -- toggle back off and tell the user.
                     Toggles.DesyncRaknet:SetValue(false)
                     Library:Notify("Raknet desync unavailable: executor doesn't expose `raknet`", 4)
                 end
@@ -928,26 +930,6 @@ do
                 F.desync.stop()
             end
         end,
-    })
-    Desync:AddToggle("DesyncRaknetCycle", { Text = "Auto-cycle raknet",
-        Default = false,
-        Tooltip = "Periodically toggles raknet off and on. During the OFF "
-            .. "window, Void desync runs so server sees random positions. "
-            .. "Right before raknet turns back ON, your HRP is teleported "
-            .. "back to the original ghost spot - so the ghost stays "
-            .. "pinned to the same location across cycles. Pair with the "
-            .. "two duration sliders below.",
-        Callback = function(v) F.desync.setRaknetCycle(v) end,
-    })
-    Desync:AddSlider("DesyncRaknetOnSec", {
-        Text     = "Raknet on duration (s)",
-        Default  = 30, Min = 1, Max = 600, Rounding = 0,
-        Callback = function(v) F.desync.setRaknetCycleOnDuration(v) end,
-    })
-    Desync:AddSlider("DesyncRaknetVoidSec", {
-        Text     = "Raknet void interlude (s)",
-        Default  = 1, Min = 0.1, Max = 30, Rounding = 1,
-        Callback = function(v) F.desync.setRaknetCycleVoidDuration(v) end,
     })
 
     Desync:AddDivider()
