@@ -293,6 +293,77 @@ local function startInfJump()
     end)
 end
 
+-- ============================================================
+--  FORCE-ENABLE JUMP
+--  Defeats games that limit / disable jumping. Three common
+--  mechanisms covered:
+--    1. Humanoid:SetStateEnabled(Jumping, false) - we re-enable
+--       on every Space press AND on every property write the
+--       game makes via PropertyChangedSignal.
+--    2. Humanoid.JumpPower = 0 / JumpHeight = 0 - we re-write
+--       to a safe value whenever the game tries to zero them.
+--    3. Custom jump counter that just decides not to fire
+--       Humanoid.Jump = true - we directly write Humanoid.Jump
+--       = true on Space press, bypassing the game's check.
+-- ============================================================
+local _forceJumpConns = {}
+local function _fjClear()
+    for _, c in ipairs(_forceJumpConns) do pcall(function() c:Disconnect() end) end
+    _forceJumpConns = {}
+end
+local function _fjEnforce(hum)
+    if not hum then return end
+    pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end)
+    pcall(function()
+        if hum.UseJumpPower then
+            if hum.JumpPower <= 0 then hum.JumpPower = 50 end
+        else
+            if hum.JumpHeight <= 0 then hum.JumpHeight = 7.2 end
+        end
+    end)
+end
+local function _fjHookChar(char)
+    _fjClear()
+    local hum = char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    _fjEnforce(hum)
+    table.insert(_forceJumpConns, hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
+        if G.forceJumpActive then _fjEnforce(hum) end
+    end))
+    table.insert(_forceJumpConns, hum:GetPropertyChangedSignal("JumpHeight"):Connect(function()
+        if G.forceJumpActive then _fjEnforce(hum) end
+    end))
+end
+local function stopForceJump()
+    G.forceJumpActive = false
+    _fjClear()
+    if G._fjCharConn  then G._fjCharConn:Disconnect();  G._fjCharConn  = nil end
+    if G._fjInputConn then G._fjInputConn:Disconnect(); G._fjInputConn = nil end
+end
+local function startForceJump()
+    G.forceJumpActive = true
+    if G._fjCharConn then G._fjCharConn:Disconnect() end
+    G._fjCharConn = lplr.CharacterAdded:Connect(function(c)
+        if G.forceJumpActive then _fjHookChar(c) end
+    end)
+    if lplr.Character then _fjHookChar(lplr.Character) end
+    if G._fjInputConn then G._fjInputConn:Disconnect() end
+    G._fjInputConn = UserInputService.InputBegan:Connect(function(input, gp)
+        if gp then return end
+        if not G.forceJumpActive then return end
+        if input.KeyCode ~= Enum.KeyCode.Space then return end
+        local c = lplr.Character
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        if hum then
+            -- re-enable state + JumpPower right before the actual jump
+            -- (handles "you jumped 3 times, jump is on cooldown" cases
+            -- where the game flipped state/power right before this press)
+            _fjEnforce(hum)
+            pcall(function() hum.Jump = true end)
+        end
+    end)
+end
+
 local function stopAntiAfk()
     G.antiAfkActive=false
     if G.antiAfkConn then G.antiAfkConn:Disconnect(); G.antiAfkConn=nil end
@@ -2033,6 +2104,7 @@ F.speed = {
 F.bhop      = makeToggle(startBhop,      stopBhop,      "bhopActive")
 F.bhop.config = BHOP_CFG
 F.infJump   = makeToggle(startInfJump,   stopInfJump,   "infJumpActive")
+F.forceJump = makeToggle(startForceJump, stopForceJump, "forceJumpActive")
 F.antiAfk   = makeToggle(startAntiAfk,   stopAntiAfk,   "antiAfkActive")
 F.clickTp   = makeToggle(startClickTp,   stopClickTp,   "clickTpActive")
 F.autoRespawn = makeToggle(startAutoRe,  stopAutoRe,    "autoReActive")
@@ -4419,7 +4491,7 @@ end)()
 
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
-    stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopAntiAfk()
+    stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopForceJump(); stopAntiAfk()
     stopClickTp(); stopAutoRe(); F.autoEquip.stop()
     F.games.hoodCustoms.antiAfkTag.stop(); F.games.hoodCustoms.forceAfkTag.stop()
     F.games.hoodCustoms.autoStomp.stop()

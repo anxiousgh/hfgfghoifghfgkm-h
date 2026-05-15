@@ -734,6 +734,13 @@ do
 
     Move:AddToggle("InfJump",    { Text = "Infinite jump", Default = false,
         Callback = function(v) if v then F.infJump.start() else F.infJump.stop() end end })
+    Move:AddToggle("ForceJump",  { Text = "Force enable jump", Default = false,
+        Tooltip = "Defeats games that limit or disable jumping (3-jumps-"
+            .. "then-cooldown, jump-disabled-while-tagged, etc.). On Space "
+            .. "press: re-enables the Humanoid Jumping state, restores "
+            .. "JumpPower/JumpHeight if zeroed, then writes Humanoid.Jump "
+            .. "= true directly - bypassing any client-side counter.",
+        Callback = function(v) if v then F.forceJump.start() else F.forceJump.stop() end end })
     Move:AddToggle("AntiAfk",    { Text = "Anti-AFK",      Default = false,
         Callback = function(v) if v then F.antiAfk.start() else F.antiAfk.stop() end end })
 
