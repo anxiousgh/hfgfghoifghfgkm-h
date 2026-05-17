@@ -1672,6 +1672,30 @@ do
         Default  = 1, Min = 1, Max = 10, Rounding = 0,
         Callback = function(v) F.games.hoodCustoms.forceHit.setFireMultiplier(v) end,
     })
+
+    -- Pellet redirect: intercepts your natural shotgun fires (e.g. when
+    -- you click, or when forceHit uses "click" shotgun mode) and rewrites
+    -- each pellet to land on a body part of your current ragebot target,
+    -- as long as the redirect keeps the pellet's direction within
+    -- MaxAngle deg of its natural direction. This piggy-backs on the
+    -- gun's own validation -- we never fabricate a payload from scratch.
+    HC:AddLabel("Pellet redirect (intercept + redirect natural fires)")
+    HC:AddToggle("HCPelletRedirect", { Text = "Enable",
+        Default = false,
+        Callback = function(v)
+            if v then F.pelletRedirect.start() else F.pelletRedirect.stop() end
+        end,
+    })
+    HC:AddSlider("HCPelletRedirectAngle", {
+        Text     = "Max redirect angle",
+        Default  = F.pelletRedirect.getMaxAngle(),
+        Min = 1, Max = 45, Rounding = 0, Suffix = " deg",
+        Callback = F.pelletRedirect.setMaxAngle,
+    })
+    HC:AddToggle("HCPelletRedirectDebug", { Text = "Print redirect stats to console",
+        Default = false,
+        Callback = F.pelletRedirect.setDebug,
+    })
     -- Tracer + hit sound. FireServer doesn't render bullet visuals
     -- because we never go through the gun script, so we fake them
     -- locally for visual + audio feedback on each forced hit.
