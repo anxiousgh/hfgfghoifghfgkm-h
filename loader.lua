@@ -829,13 +829,39 @@ do
     Move:AddSlider("FlySpeed", { Text = "Fly speed", Default = F.fly.getSpeed(),
         Min = 5, Max = 500, Rounding = 0, Callback = F.fly.setSpeed })
 
-    local SpeedToggle = Move:AddToggle("Speed", { Text = "Speed", Default = false,
-        Callback = function(v) if v then F.speed.start(F.speed.getMultiplier()) else F.speed.stop() end end })
-    SpeedToggle:AddKeyPicker("SpeedKey", {
-        Default = "X", Mode = "Toggle", Text = "Speed key", SyncToggleState = true,
+    -- Walkspeed: real Humanoid.WalkSpeed override with anti-restore.
+    -- The loop re-asserts every time the game writes a different value,
+    -- so games that clamp walkspeed (e.g. "you can't sprint while reloading")
+    -- get overridden in real time.
+    local WalkspeedToggle = Move:AddToggle("Walkspeed", { Text = "Walkspeed", Default = false,
+        Callback = function(v) if v then F.walkspeed.start() else F.walkspeed.stop() end end })
+    WalkspeedToggle:AddKeyPicker("WalkspeedKey", {
+        Default = "C", Mode = "Toggle", Text = "Walkspeed key", SyncToggleState = true,
     })
-    Move:AddSlider("SpeedMult", { Text = "Speed multiplier", Default = F.speed.getMultiplier(),
-        Min = 1, Max = 20, Rounding = 1, Suffix = "x", Callback = F.speed.setMultiplier })
+    Move:AddSlider("WalkspeedVal", { Text = "Walkspeed value",
+        Default = F.walkspeed.getValue(), Min = 8, Max = 200, Rounding = 0,
+        Callback = F.walkspeed.setValue })
+
+    -- Jump power: real Humanoid.JumpPower override with anti-restore.
+    -- Pairs with Force Jump if the game also disables the jump state.
+    local JumpPowerToggle = Move:AddToggle("JumpPowerToggle", { Text = "Jump power", Default = false,
+        Callback = function(v) if v then F.jumpPower.start() else F.jumpPower.stop() end end })
+    JumpPowerToggle:AddKeyPicker("JumpPowerKey", {
+        Default = "V", Mode = "Toggle", Text = "Jump power key", SyncToggleState = true,
+    })
+    Move:AddSlider("JumpPowerVal", { Text = "Jump power value",
+        Default = F.jumpPower.getValue(), Min = 0, Max = 500, Rounding = 0,
+        Callback = F.jumpPower.setValue })
+
+    -- CFrame speed: legacy speedhack that pushes HRP every frame based on
+    -- camera direction + WASD. Doesn't touch Humanoid.WalkSpeed.
+    local SpeedToggle = Move:AddToggle("Speed", { Text = "CFrame speed", Default = false,
+        Callback = function(v) if v then F.cframeSpeed.start(F.cframeSpeed.getMultiplier()) else F.cframeSpeed.stop() end end })
+    SpeedToggle:AddKeyPicker("SpeedKey", {
+        Default = "X", Mode = "Toggle", Text = "CFrame speed key", SyncToggleState = true,
+    })
+    Move:AddSlider("SpeedMult", { Text = "CFrame speed multiplier", Default = F.cframeSpeed.getMultiplier(),
+        Min = 1, Max = 20, Rounding = 1, Suffix = "x", Callback = F.cframeSpeed.setMultiplier })
 
     Move:AddToggle("Bhop", { Text = "Bunnyhop", Default = false,
         Callback = function(v) if v then F.bhop.start() else F.bhop.stop() end end })
@@ -1227,7 +1253,7 @@ do
         Func = function()
             F.disableAll()
             for _, name in ipairs({
-                "Fly","Speed","Bhop","InfJump","AntiAfk","ClickTp","Noclip","AutoRespawn",
+                "Fly","Speed","Walkspeed","JumpPowerToggle","Bhop","InfJump","AntiAfk","ClickTp","Noclip","AutoRespawn",
                 "Fullbright","Freecam","Zoom","Spin","Flip","Ice",
                 "AimEnabled","TrigEnabled","CamEnabled",
                 "RageSilentForce","RageAutoShoot","RageOrbit","RageFaceTarget","RageCamSnap",

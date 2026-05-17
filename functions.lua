@@ -188,17 +188,140 @@ local function startFly()
     end)
 end
 
-local function stopSpeed()
+-- ============================================================
+--  WALKSPEED  (real Humanoid.WalkSpeed override with anti-restore)
+-- ============================================================
+--  Sets Humanoid.WalkSpeed to a fixed value and re-applies it
+--  whenever the game writes a different value to the property
+--  (via PropertyChangedSignal). Also re-hooks on CharacterAdded.
+--  Default game walkspeed is 16; we treat 16 as "no override" so
+--  the game can still vary it freely when we're disabled.
+-- ============================================================
+G.walkspeedValue  = 16   -- target walkspeed
+G.walkspeedActive = false
+local _wsConns = {}
+local function _wsClear()
+    for _, c in ipairs(_wsConns) do pcall(function() c:Disconnect() end) end
+    _wsConns = {}
+end
+local function _wsEnforce(hum)
+    if not hum then return end
+    pcall(function()
+        if hum.WalkSpeed ~= G.walkspeedValue then
+            hum.WalkSpeed = G.walkspeedValue
+        end
+    end)
+end
+local function _wsHookChar(char)
+    _wsClear()
+    local hum = char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    _wsEnforce(hum)
+    table.insert(_wsConns, hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if G.walkspeedActive then _wsEnforce(hum) end
+    end))
+end
+local function stopWalkspeed()
+    G.walkspeedActive = false
+    _wsClear()
+    if G._wsCharConn then G._wsCharConn:Disconnect(); G._wsCharConn = nil end
+    -- restore game default so the player isn't stuck at last override
+    local c = lplr.Character
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    if hum then pcall(function() hum.WalkSpeed = 16 end) end
+end
+local function startWalkspeed()
+    G.walkspeedActive = true
+    if G._wsCharConn then G._wsCharConn:Disconnect() end
+    G._wsCharConn = lplr.CharacterAdded:Connect(function(c)
+        if G.walkspeedActive then _wsHookChar(c) end
+    end)
+    if lplr.Character then _wsHookChar(lplr.Character) end
+end
+
+-- ============================================================
+--  JUMPPOWER  (real Humanoid.JumpPower override with anti-restore)
+-- ============================================================
+--  Same shape as walkspeed: writes to Humanoid.JumpPower (or
+--  JumpHeight if UseJumpPower is false) and re-asserts on every
+--  property change the game makes. Combine with Force Jump if
+--  the game also disables the jump state.
+-- ============================================================
+G.jumpPowerValue  = 50   -- target jump power
+G.jumpPowerActive = false
+local _jpConns = {}
+local function _jpClear()
+    for _, c in ipairs(_jpConns) do pcall(function() c:Disconnect() end) end
+    _jpConns = {}
+end
+local function _jpEnforce(hum)
+    if not hum then return end
+    pcall(function()
+        if hum.UseJumpPower then
+            if hum.JumpPower ~= G.jumpPowerValue then
+                hum.JumpPower = G.jumpPowerValue
+            end
+        else
+            -- JumpHeight is in studs, not power units; do a rough convert
+            -- (power 50 ~= height 7.2). We just mirror the slider value
+            -- divided by ~7 so the UI feels consistent.
+            local h = G.jumpPowerValue / 7
+            if math.abs(hum.JumpHeight - h) > 0.05 then
+                hum.JumpHeight = h
+            end
+        end
+    end)
+end
+local function _jpHookChar(char)
+    _jpClear()
+    local hum = char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    _jpEnforce(hum)
+    table.insert(_jpConns, hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
+        if G.jumpPowerActive then _jpEnforce(hum) end
+    end))
+    table.insert(_jpConns, hum:GetPropertyChangedSignal("JumpHeight"):Connect(function()
+        if G.jumpPowerActive then _jpEnforce(hum) end
+    end))
+    table.insert(_jpConns, hum:GetPropertyChangedSignal("UseJumpPower"):Connect(function()
+        if G.jumpPowerActive then _jpEnforce(hum) end
+    end))
+end
+local function stopJumpPower()
+    G.jumpPowerActive = false
+    _jpClear()
+    if G._jpCharConn then G._jpCharConn:Disconnect(); G._jpCharConn = nil end
+    local c = lplr.Character
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    if hum then
+        pcall(function()
+            if hum.UseJumpPower then hum.JumpPower = 50 else hum.JumpHeight = 7.2 end
+        end)
+    end
+end
+local function startJumpPower()
+    G.jumpPowerActive = true
+    if G._jpCharConn then G._jpCharConn:Disconnect() end
+    G._jpCharConn = lplr.CharacterAdded:Connect(function(c)
+        if G.jumpPowerActive then _jpHookChar(c) end
+    end)
+    if lplr.Character then _jpHookChar(lplr.Character) end
+end
+
+-- ============================================================
+--  CFRAME SPEED  (camera-WASD-driven CFrame nudge - "speed hack")
+-- ============================================================
+local function stopCframeSpeed()
     G.speedActive=false; if G.speedConn then G.speedConn:Disconnect(); G.speedConn=nil end
 end
-local function startSpeed(mult)
+local function startCframeSpeed(mult)
     local char=lplr.Character; if not char then return end
     local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
     G.speedActive=true; G.speedValue=mult or 2
     G.speedConn=RunService.Heartbeat:Connect(function(dt)
         char=lplr.Character; if UserInputService:GetFocusedTextBox() then return end
-        if not char then stopSpeed(); return end
-        hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then stopSpeed(); return end
+        if not char then stopCframeSpeed(); return end
+        hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then stopCframeSpeed(); return end
         local dir=Vector3.zero
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir+=workspace.CurrentCamera.CFrame.LookVector  end
         if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir-=workspace.CurrentCamera.CFrame.LookVector  end
@@ -1135,6 +1258,7 @@ end
 -- Walk to a waypoint: issue MoveTo, then wait until either we get close
 -- enough, the target/our character changes, or we time out (stuck on
 -- geometry). Returns true if we made it, false if the worker should stop.
+-- Polls per-Heartbeat (no task.wait) so close-enough detection is instant.
 local function _followWalkTo(hum, pos, isJump, timeout)
     if not hum or not hum.Parent then return false end
     pcall(function() hum:MoveTo(pos) end)
@@ -1144,9 +1268,9 @@ local function _followWalkTo(hum, pos, isJump, timeout)
     while _follow.target == target do
         local _, hrp = _followGetLocal()
         if not hrp then return false end
-        if (hrp.Position - pos).Magnitude < 3 then return true end
+        if (hrp.Position - pos).Magnitude < 4 then return true end
         if tick() - startT > timeout then return true end  -- give up, continue
-        task.wait(0.05)
+        RunService.Heartbeat:Wait()
     end
     return false
 end
@@ -1158,60 +1282,64 @@ local function followPlayer(plr)
     if not plr then return end
     _follow.target = plr
     _follow.path = _PathfindingService:CreatePath({
-        AgentRadius     = 2,
+        AgentRadius     = 1.5,
         AgentHeight     = 5,
         AgentCanJump    = true,
         AgentJumpHeight = 7.2,
         AgentMaxSlope   = 45,
     })
 
-    -- Worker task: recompute path, walk through every waypoint with
-    -- MoveTo + close-enough wait, then loop. Recomputes when the target
-    -- moves significantly between iterations.
+    -- Worker task: ONE tight loop that recomputes the path every tick
+    -- and steers toward the next waypoint. Keeps running until the
+    -- button is pressed again (which sets _follow.target = nil via
+    -- followStop()). No nested loops — every iteration gets a fresh
+    -- path so the follow tracks the target in real time.
     task.spawn(function()
         local target = plr
         while _follow.target == target do
             local hum, hrp = _followGetLocal()
             local thrp     = _followGetTargetHRP()
-            if not (hum and hrp and thrp) then task.wait(0.1); continue end
+            if not (hum and hrp and thrp) then
+                task.wait(0.1)
+                continue
+            end
 
-            -- compute
-            local ok, err = pcall(function()
+            local dToTarget = (hrp.Position - thrp.Position).Magnitude
+
+            -- Close enough: skip pathfinding, MoveTo directly.
+            if dToTarget < 6 then
+                pcall(function() hum:MoveTo(thrp.Position) end)
+                task.wait(0.1)
+                continue
+            end
+
+            -- Recompute path every iteration (cheap on small maps,
+            -- ~10-30ms on Hood Customs).
+            local ok = pcall(function()
                 _follow.path:ComputeAsync(hrp.Position, thrp.Position)
             end)
-            if not ok then warn("[follow] ComputeAsync error:", err) end
 
-            if _follow.path.Status == Enum.PathStatus.Success then
+            if ok and _follow.path.Status == Enum.PathStatus.Success then
                 _follow.waypoints = _follow.path:GetWaypoints()
                 _follow.idx = 2
                 vizRebuild()
 
-                -- walk each waypoint after the first (which is our pos)
-                local i = 2
-                while i <= #_follow.waypoints and _follow.target == target do
-                    _follow.idx = i
-                    vizRebuild()
-                    local wp = _follow.waypoints[i]
-                    local cont = _followWalkTo(
-                        hum, wp.Position,
-                        wp.Action == Enum.PathWaypointAction.Jump,
-                        2  -- per-waypoint timeout
-                    )
-                    if not cont then break end
-
-                    -- check if target wandered far enough to need a new path
-                    local newThrp = _followGetTargetHRP()
-                    if newThrp and (newThrp.Position - thrp.Position).Magnitude > 8 then
-                        break  -- recompute
+                -- Step toward waypoint 2 (waypoint 1 is our current pos).
+                local wp = _follow.waypoints[2]
+                if wp then
+                    pcall(function() hum:MoveTo(wp.Position) end)
+                    if wp.Action == Enum.PathWaypointAction.Jump then
+                        pcall(function() hum.Jump = true end)
                     end
-                    i = i + 1
                 end
             else
-                warn("[follow] path Status:", tostring(_follow.path.Status))
+                -- NoPath / failure: still move toward target so we don't freeze.
                 _follow.waypoints = {}
                 vizClear()
-                task.wait(0.3)
+                pcall(function() hum:MoveTo(thrp.Position) end)
             end
+
+            task.wait(0.15)  -- loop tick — recompute ~6-7x per second
         end
         vizClear()
     end)
@@ -2328,14 +2456,55 @@ F.fly = makeToggle(startFly, stopFly, "flyActive")
 F.fly.setSpeed   = function(n) FLY_SPEED = tonumber(n) or FLY_SPEED end
 F.fly.getSpeed   = function() return FLY_SPEED end
 
-F.speed = {
-    start  = function(mult) startSpeed(mult) end,
-    stop   = stopSpeed,
-    toggle = function(mult) if G.speedActive then stopSpeed() else startSpeed(mult) end end,
+-- Real Humanoid.WalkSpeed override w/ anti-restore. Setting the value
+-- while active applies it instantly; the loop re-asserts whenever the
+-- game writes a different value.
+F.walkspeed = {
+    start  = startWalkspeed,
+    stop   = stopWalkspeed,
+    toggle = function() if G.walkspeedActive then stopWalkspeed() else startWalkspeed() end end,
+    isActive = function() return G.walkspeedActive == true end,
+    setValue = function(n)
+        G.walkspeedValue = tonumber(n) or G.walkspeedValue
+        if G.walkspeedActive then
+            local c = lplr.Character
+            local hum = c and c:FindFirstChildOfClass("Humanoid")
+            if hum then _wsEnforce(hum) end
+        end
+    end,
+    getValue = function() return G.walkspeedValue end,
+}
+
+-- Real Humanoid.JumpPower override w/ anti-restore. Pair with Force
+-- Jump if the game ALSO disables the jump state.
+F.jumpPower = {
+    start  = startJumpPower,
+    stop   = stopJumpPower,
+    toggle = function() if G.jumpPowerActive then stopJumpPower() else startJumpPower() end end,
+    isActive = function() return G.jumpPowerActive == true end,
+    setValue = function(n)
+        G.jumpPowerValue = tonumber(n) or G.jumpPowerValue
+        if G.jumpPowerActive then
+            local c = lplr.Character
+            local hum = c and c:FindFirstChildOfClass("Humanoid")
+            if hum then _jpEnforce(hum) end
+        end
+    end,
+    getValue = function() return G.jumpPowerValue end,
+}
+
+-- CFrame-based "speed hack" (camera-WASD-driven HRP nudge).
+-- Doesn't touch Humanoid.WalkSpeed — use F.walkspeed for that.
+F.cframeSpeed = {
+    start  = function(mult) startCframeSpeed(mult) end,
+    stop   = stopCframeSpeed,
+    toggle = function(mult) if G.speedActive then stopCframeSpeed() else startCframeSpeed(mult) end end,
     isActive = function() return G.speedActive == true end,
     setMultiplier = function(n) G.speedValue = tonumber(n) or G.speedValue end,
     getMultiplier = function() return G.speedValue end,
 }
+-- legacy alias (old code referenced F.speed)
+F.speed = F.cframeSpeed
 
 F.bhop      = makeToggle(startBhop,      stopBhop,      "bhopActive")
 F.bhop.config = BHOP_CFG
@@ -4883,7 +5052,7 @@ end)()
 
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
-    stopFly(); stopSpeed(); stopBhop(); stopInfJump(); stopForceJump(); stopAntiAfk()
+    stopFly(); stopCframeSpeed(); stopWalkspeed(); stopJumpPower(); stopBhop(); stopInfJump(); stopForceJump(); stopAntiAfk()
     stopClickTp(); stopAutoRe(); F.autoEquip.stop()
     F.games.hoodCustoms.antiAfkTag.stop(); F.games.hoodCustoms.forceAfkTag.stop()
     F.games.hoodCustoms.autoStomp.stop()
