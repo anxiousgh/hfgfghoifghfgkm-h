@@ -2197,58 +2197,79 @@ if hookmetamethod and not getgenv()._F_RB_NAMECALL_HOOKED then
 end
 
 -- ============================================================
---  PELLET-CALIBRATION NAMECALL HOOK
---  Listens for real shotgun fires (MainEvent:FireServer("Shoot", payload))
---  that originate from the natural gun script -- not from us. Reads
---  #payload[1] which is the hits-array length == pellet count, and
---  stores it keyed by current Tool.Name on getgenv()._F_PELLET_LEARNED.
---  forceHit reads from that table FIRST before its hardcoded
---  SHOTGUN_PELLETS, so server-accepted counts win automatically.
+--  ANTI-KICK  (best-effort client-side kick interception)
 -- ============================================================
-getgenv()._F_PELLET_LEARNED = getgenv()._F_PELLET_LEARNED or {}
-getgenv()._F_PELLET_ACTIVE  = getgenv()._F_PELLET_ACTIVE  or false
-if hookmetamethod and not getgenv()._F_PC_NAMECALL_HOOKED then
-    getgenv()._F_PC_NAMECALL_HOOKED = true
-    local pcOldNamecall
-    pcOldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
-        -- early-exit: gated by the module's active flag
-        if not getgenv()._F_PELLET_ACTIVE then return pcOldNamecall(...) end
-        -- ignore our own calls (forceHit, blink, etc fire MainEvent too)
-        if checkcaller() then return pcOldNamecall(...) end
+--  Hooks __namecall to intercept and SILENTLY DROP:
+--    - Player:Kick(...)       on the LocalPlayer (client API)
+--    - DataModel:Shutdown()   game:Shutdown() / GuiService:Shutdown()
+--    - TeleportService:Teleport*(...)  on the LocalPlayer (soft-kick)
+--  Note: server-initiated disconnects (Player:Kick called server-side)
+--  still happen because they're a TCP-level disconnect packet -- there
+--  is no client interception point for those. This blocks the common
+--  pattern where the SERVER tells the CLIENT "self-disconnect", which
+--  many HC-style games use for cheat detection. The toggle is gated
+--  via getgenv()._F_ANTIKICK_ACTIVE so multi-script reloads stay safe.
+-- ============================================================
+getgenv()._F_ANTIKICK_ACTIVE = getgenv()._F_ANTIKICK_ACTIVE or false
+if hookmetamethod and not getgenv()._F_ANTIKICK_NAMECALL_HOOKED then
+    getgenv()._F_ANTIKICK_NAMECALL_HOOKED = true
+    local akOldNamecall
+    akOldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
+        if not getgenv()._F_ANTIKICK_ACTIVE then return akOldNamecall(...) end
         local method = getnamecallmethod()
-        if method ~= "FireServer" then return pcOldNamecall(...) end
+        -- fast-path early-out: only the methods we care about
+        if method ~= "Kick"
+            and method ~= "Shutdown"
+            and method ~= "Teleport"
+            and method ~= "TeleportToPlaceInstance"
+            and method ~= "TeleportToPrivateServer"
+            and method ~= "TeleportPartyAsync"
+            and method ~= "TeleportAsync" then
+            return akOldNamecall(...)
+        end
         local args = {...}
         local self = args[1]
-        if typeof(self) ~= "Instance" then return pcOldNamecall(...) end
-        if self.Name ~= "MainEvent" then return pcOldNamecall(...) end
-        if args[2] ~= "Shoot" then return pcOldNamecall(...) end
-        local payload = args[3]
-        if type(payload) ~= "table" then return pcOldNamecall(...) end
-        local hits = payload[1]
-        if type(hits) ~= "table" then return pcOldNamecall(...) end
-        -- count entries (works for both array and sparse forms)
-        local count = 0
-        for _ in pairs(hits) do count = count + 1 end
-        if count > 0 then
-            -- read currently equipped tool name
-            local c = lplr.Character
-            local tool = c and c:FindFirstChildOfClass("Tool")
-            if tool then
-                local name = tool.Name
-                local prev = getgenv()._F_PELLET_LEARNED[name] or 0
-                -- track max so a partial-hit shot doesn't lower a known count
-                if count > prev then
-                    getgenv()._F_PELLET_LEARNED[name] = count
-                    if getgenv()._F_PELLET_PERSIST then
-                        pcall(getgenv()._F_PELLET_PERSIST)
+        if method == "Kick" then
+            -- block Kick on our local player
+            if rawequal(self, lplr) or rawequal(self, game.Players.LocalPlayer) then
+                warn("[anti-kick] blocked Player:Kick(", args[2], ")")
+                return
+            end
+        elseif method == "Shutdown" then
+            -- block any Shutdown call from script
+            warn("[anti-kick] blocked Shutdown()")
+            return
+        elseif method:sub(1, 8) == "Teleport" then
+            -- block teleport calls that include the local player. Server-
+            -- initiated TeleportService:Teleport(placeId, player) is the
+            -- main soft-kick path; we look for our player in args.
+            for i = 2, #args do
+                if rawequal(args[i], lplr) then
+                    warn("[anti-kick] blocked ", method, "(... local player ...)")
+                    return
+                end
+                if type(args[i]) == "table" then
+                    for _, v in pairs(args[i]) do
+                        if rawequal(v, lplr) then
+                            warn("[anti-kick] blocked ", method, "(... {local player} ...)")
+                            return
+                        end
                     end
-                    print(("[pellet-cal] %q -> %d pellets"):format(name, count))
                 end
             end
         end
-        return pcOldNamecall(...)
+        return akOldNamecall(...)
     end))
 end
+
+F.antiKick = {
+    start  = function() getgenv()._F_ANTIKICK_ACTIVE = true end,
+    stop   = function() getgenv()._F_ANTIKICK_ACTIVE = false end,
+    toggle = function()
+        getgenv()._F_ANTIKICK_ACTIVE = not getgenv()._F_ANTIKICK_ACTIVE
+    end,
+    isActive = function() return getgenv()._F_ANTIKICK_ACTIVE == true end,
+}
 
 -- ragebot auto-shoot
 local _rbEquipTime = 0
@@ -4412,68 +4433,6 @@ end)()
 --  visually full and ready to click-fire.
 -- ============================================================
 
--- ============================================================
---  PELLET CALIBRATION  (public API)
---  Toggles the namecall listener that records server-accepted
---  pellet counts per tool name from real (non-our-code) shoot
---  payloads. forceHit's pellet lookup reads from this table
---  first, so once you fire your shotgun naturally once, forceHit
---  knows the exact pellet count to synthesize.
---  Persists to "_F_HC_pellets.json" across sessions.
--- ============================================================
-F.games.hoodCustoms.pelletCalibration = (function()
-    local FILE = "_F_HC_pellets.json"
-    local HS   = game:GetService("HttpService")
-
-    -- learned table lives on getgenv so the namecall hook (which is
-    -- pinned cross-script) can read/write it without an upvalue.
-    local learned = getgenv()._F_PELLET_LEARNED
-
-    -- load persisted snapshot if it exists
-    pcall(function()
-        if isfile and isfile(FILE) then
-            local raw = readfile(FILE)
-            local ok, data = pcall(function() return HS:JSONDecode(raw) end)
-            if ok and type(data) == "table" then
-                for k, v in pairs(data) do learned[k] = v end
-            end
-        end
-    end)
-
-    local function persist()
-        pcall(function()
-            if writefile then
-                writefile(FILE, HS:JSONEncode(learned))
-            end
-        end)
-    end
-    getgenv()._F_PELLET_PERSIST = persist  -- hook calls this on new learns
-
-    local active = false
-    local function start()
-        active = true
-        getgenv()._F_PELLET_ACTIVE = true
-    end
-    local function stop()
-        active = false
-        getgenv()._F_PELLET_ACTIVE = false
-    end
-    local function clear()
-        for k in pairs(learned) do learned[k] = nil end
-        persist()
-    end
-
-    return {
-        start    = start,
-        stop     = stop,
-        toggle   = function() if active then stop() else start() end end,
-        isActive = function() return active end,
-        get      = function(name) return learned[name] end,
-        getAll   = function() return learned end,
-        clear    = clear,
-    }
-end)()
-
 F.games.hoodCustoms.forceHit = (function()
     local SHOTGUN_NAMES = {
         ["[Shotgun]"]          = true,
@@ -4640,50 +4599,72 @@ F.games.hoodCustoms.forceHit = (function()
         end)
     end
 
-    -- shotgun synth path: 2 stacked clusters ~3 studs apart, sub-stud
-    -- anti-zero-spread jitter inside each. Section split matches the
-    -- natural 5-pellet gun pattern: 2 in section A, 3 in section B.
-    -- WIP - still trips HC's per-shot PRNG check most of the time.
+    -- shotgun synth path (v2): distribute pellets across REAL body parts
+    -- of the target -- 3 to Head, 1 to UpperTorso, 1 to LowerTorso (for a
+    -- 5-pellet shotgun). Each pellet's hit Position is a random offset
+    -- WITHIN that part's bounding box, and each pellet's direction is
+    -- computed from origin -> that hit position. This mimics how a real
+    -- close-range shotgun blast would land (multiple pellets, mostly head,
+    -- some torso), instead of the previous "all pellets within sub-stud
+    -- jitter of the same point" which trips most server-side spread checks.
     local function fireShotgunSynth(part, pelletCount)
         if not part then return false end
         local head = getHead(); if not head then return false end
         local origin = head.Position
 
-        local count1 = 2
-        local count2 = pelletCount - count1
-        if count2 < 1 then count2 = 1; count1 = pelletCount - 1 end
+        -- target character is part.Parent (Roblox guarantees body parts
+        -- are children of the Character model). Avoids a forward-ref
+        -- to currentTarget() which is declared later in this closure.
+        local char = part.Parent
+        if not char then return false end
 
-        local cf = part.CFrame
-        local right = cf.RightVector
-        local centerA = part.Position - right * 1.5  -- 3 studs apart total
-        local centerB = part.Position + right * 1.5
+        -- build the body-part pool. We weight Head heavily so most pellets
+        -- become headshots (1-hit damage), with a couple torso pellets for
+        -- a believable spread pattern. Falls back to repeating the same
+        -- part if some body parts don't exist (R6 / partial bodies).
+        local headPart = char:FindFirstChild("Head")
+        local upperT   = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+        local lowerT   = char:FindFirstChild("LowerTorso")
+        local hrp      = char:FindFirstChild("HumanoidRootPart")
 
-        local function jit()
-            return Vector3.new(
-                (math.random() - 0.5) * 0.04,
-                (math.random() - 0.5) * 0.04,
-                (math.random() - 0.5) * 0.04
-            )
+        local pool = {}
+        local function addParts(p, weight)
+            if not p then return end
+            for _ = 1, weight do table.insert(pool, p) end
+        end
+        addParts(headPart, 3)
+        addParts(upperT,   1)
+        addParts(lowerT,   1)
+        if #pool == 0 then addParts(hrp, 5) end
+        if #pool == 0 then addParts(part, 5) end
+
+        local function randInPart(bp)
+            local sz = bp.Size
+            local lx = (math.random() - 0.5) * sz.X * 0.7
+            local ly = (math.random() - 0.5) * sz.Y * 0.7
+            local lz = (math.random() - 0.5) * sz.Z * 0.7
+            -- transform local-space offset to world via the part's CFrame
+            local localOff = Vector3.new(lx, ly, lz)
+            local worldPos = bp.CFrame:PointToWorldSpace(localOff)
+            return worldPos, worldPos - bp.Position
         end
 
         local hits, targets = {}, {}
-        for i = 1, count1 do
-            local j   = jit()
-            local pos = centerA + j
-            hits[i]    = { Normal = (origin - pos).Unit, Instance = part, Position = pos }
-            targets[i] = { thePart = part, theOffset = j + (centerA - part.Position) }
-        end
-        for i = 1, count2 do
-            local idx = count1 + i
-            local j   = jit()
-            local pos = centerB + j
-            hits[idx]    = { Normal = (origin - pos).Unit, Instance = part, Position = pos }
-            targets[idx] = { thePart = part, theOffset = j + (centerB - part.Position) }
+        for i = 1, pelletCount do
+            local bp = pool[((i - 1) % #pool) + 1]
+            local worldPos, offsetFromCenter = randInPart(bp)
+            local normal = (origin - worldPos)
+            if normal.Magnitude > 0 then normal = normal.Unit else normal = Vector3.new(0, 1, 0) end
+            hits[i]    = { Normal = normal, Instance = bp, Position = worldPos }
+            targets[i] = { thePart = bp, theOffset = offsetFromCenter }
         end
 
-        local hitPos = part.Position
-        local dist   = (hitPos - origin).Magnitude
-        local aim    = origin + workspace.CurrentCamera.CFrame.LookVector * dist
+        -- aim point: average of all hit positions (looks more believable
+        -- than camera lookvector * dist when target is off-camera)
+        local avg = Vector3.zero
+        for _, h in ipairs(hits) do avg = avg + h.Position end
+        local aim = avg / #hits
+
         local payload = { hits, targets, origin, aim, tick() }
 
         local me = _RS:FindFirstChild("MainEvent")
@@ -4737,18 +4718,11 @@ F.games.hoodCustoms.forceHit = (function()
         local origin   = headPart and headPart.Position
         local shotgun  = isShotgun()
         local tool     = getEquippedTool()
-        -- pellet count lookup chain (most specific to least):
-        --   1) calibrated count from real-fire packet captures
-        --   2) hardcoded SHOTGUN_PELLETS for known HC weapons
-        --   3) substring-shotgun fallback default of 5
-        --   4) non-shotgun -> 1
+        -- pellet count: explicit table lookup, otherwise default to 5 for
+        -- anything substring-matched as a shotgun, otherwise 1
         local pellets
         if shotgun then
-            local learned = getgenv()._F_PELLET_LEARNED
-            local calibrated = (tool and learned and learned[tool.Name]) or nil
-            pellets = calibrated
-                  or (tool and SHOTGUN_PELLETS[tool.Name])
-                  or 5
+            pellets = (tool and SHOTGUN_PELLETS[tool.Name]) or 5
         else
             pellets = 1
         end
@@ -5353,9 +5327,6 @@ end)()
 F.disableAll = function()
     stopFly(); stopCframeSpeed(); stopWalkspeed(); stopJumpPower(); stopBhop(); stopInfJump(); stopForceJump(); stopAntiAfk()
     stopClickTp(); stopAutoRe(); F.autoEquip.stop(); F.autoWeaponSwitch.stop()
-    if F.games and F.games.hoodCustoms and F.games.hoodCustoms.pelletCalibration then
-        F.games.hoodCustoms.pelletCalibration.stop()
-    end
     F.games.hoodCustoms.antiAfkTag.stop(); F.games.hoodCustoms.forceAfkTag.stop()
     F.games.hoodCustoms.autoStomp.stop()
     F.games.hoodCustoms.autoReload.stop(); F.games.hoodCustoms.godmode.stop()

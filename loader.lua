@@ -1356,6 +1356,19 @@ do
         Callback = function(v) F.antiFling.setCap(v) end,
     })
 
+    -- =================== ANTI-KICK ===================
+    -- Intercepts and silently drops client-side Kick/Shutdown/Teleport
+    -- calls targeting the local player. Won't block true server-side
+    -- TCP disconnects (Player:Kick from server), but blocks the common
+    -- "server tells client to self-disconnect" pattern.
+    local AntiKick = Tabs.Misc:AddLeftGroupbox("Anti-kick")
+    AntiKick:AddToggle("AntiKick", { Text = "Block client kicks / teleports",
+        Default = false,
+        Callback = function(v)
+            if v then F.antiKick.start() else F.antiKick.stop() end
+        end,
+    })
+
     -- =================== FORCE CHAT ===================
     local ForceChat = Tabs.Misc:AddLeftGroupbox("Force chat")
     ForceChat:AddToggle("ForceChat", { Text = "Re-enable chat",
@@ -1659,35 +1672,6 @@ do
         Default  = 1, Min = 1, Max = 10, Rounding = 0,
         Callback = function(v) F.games.hoodCustoms.forceHit.setFireMultiplier(v) end,
     })
-
-    -- Pellet calibration: when on, listens for real shotgun fires (your
-    -- own clicks, not forceHit's) and learns the exact pellet count the
-    -- server accepts per tool. forceHit's synth mode then uses that count
-    -- instead of guessing 5. Persists across sessions in _F_HC_pellets.json.
-    HC:AddToggle("HCPelletCal", { Text = "Pellet calibration (learn pellet counts)",
-        Default = false,
-        Callback = function(v)
-            if v then F.games.hoodCustoms.pelletCalibration.start()
-            else      F.games.hoodCustoms.pelletCalibration.stop() end
-        end })
-    HC:AddButton({ Text = "Show learned pellets", Func = function()
-        local all = F.games.hoodCustoms.pelletCalibration.getAll()
-        local n = 0
-        for k, v in pairs(all) do
-            n = n + 1
-            print(("[pellet-cal] %q = %d"):format(k, v))
-        end
-        if n == 0 then
-            Library:Notify("No learned pellet counts yet", 3)
-        else
-            Library:Notify(("Printed %d learned counts to console"):format(n), 3)
-        end
-    end })
-    :AddButton({ Text = "Clear learned pellets", DoubleClick = true,
-        Func = function()
-            F.games.hoodCustoms.pelletCalibration.clear()
-            Library:Notify("Learned pellet counts cleared", 2)
-        end })
     -- Tracer + hit sound. FireServer doesn't render bullet visuals
     -- because we never go through the gun script, so we fake them
     -- locally for visual + audio feedback on each forced hit.
