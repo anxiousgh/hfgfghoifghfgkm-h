@@ -4600,71 +4600,98 @@ F.games.hoodCustoms.forceHit = (function()
         end)
     end
 
-    -- shotgun synth path (v2): distribute pellets across REAL body parts
-    -- of the target -- 3 to Head, 1 to UpperTorso, 1 to LowerTorso (for a
-    -- 5-pellet shotgun). Each pellet's hit Position is a random offset
-    -- WITHIN that part's bounding box, and each pellet's direction is
-    -- computed from origin -> that hit position. This mimics how a real
-    -- close-range shotgun blast would land (multiple pellets, mostly head,
-    -- some torso), instead of the previous "all pellets within sub-stud
-    -- jitter of the same point" which trips most server-side spread checks.
+    -- Resolve the gun's actual muzzle position. HC's anti-cheat compares
+    -- packet origin against the equipped tool's barrel position; using
+    -- our head's position made every shot look like a head-mounted gun.
+    -- Falls back to head if no tool / handle.
+    local function getMuzzlePos()
+        local c = lplr.Character
+        if not c then return nil end
+        local tool = c:FindFirstChildOfClass("Tool")
+        if tool then
+            local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart")
+            if handle then
+                -- attachments named Muzzle/Tip take precedence; some HC guns
+                -- have a "Muzzle" Attachment on the Handle
+                for _, a in ipairs(handle:GetChildren()) do
+                    if a:IsA("Attachment") and (a.Name == "Muzzle" or a.Name == "Tip") then
+                        return a.WorldPosition
+                    end
+                end
+                return handle.Position
+            end
+        end
+        local h = getHead(); return h and h.Position or nil
+    end
+
+    -- shotgun synth path (v3): RAYCAST-based. Generate pellet directions
+    -- as uniform-random within a tight cone aimed at the target body part,
+    -- raycast each one through the world, and use the actual physics hit
+    -- result. This produces a spread pattern indistinguishable from a real
+    -- gun's pellet pattern because we're literally doing what the gun
+    -- script does (cone-sampled directions + raycasts). Origin = gun
+    -- muzzle (not head) to match what HC's anti-cheat expects.
+    local SPREAD_DEG = 2.5  -- half-angle of the cone; small enough to keep
+                            -- all pellets on body at typical engagement ranges
     local function fireShotgunSynth(part, pelletCount)
         if not part then return false end
-        local head = getHead(); if not head then return false end
-        local origin = head.Position
+        local origin = getMuzzlePos(); if not origin then return false end
 
-        -- target character is part.Parent (Roblox guarantees body parts
-        -- are children of the Character model). Avoids a forward-ref
-        -- to currentTarget() which is declared later in this closure.
         local char = part.Parent
         if not char then return false end
 
-        -- build the body-part pool. We weight Head heavily so most pellets
-        -- become headshots (1-hit damage), with a couple torso pellets for
-        -- a believable spread pattern. Falls back to repeating the same
-        -- part if some body parts don't exist (R6 / partial bodies).
-        local headPart = char:FindFirstChild("Head")
-        local upperT   = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
-        local lowerT   = char:FindFirstChild("LowerTorso")
-        local hrp      = char:FindFirstChild("HumanoidRootPart")
+        -- aim direction toward the target body part picked by hitPartName
+        local aimDir = part.Position - origin
+        if aimDir.Magnitude < 0.01 then return false end
+        local distToTarget = aimDir.Magnitude
+        aimDir = aimDir.Unit
 
-        local pool = {}
-        local function addParts(p, weight)
-            if not p then return end
-            for _ = 1, weight do table.insert(pool, p) end
-        end
-        addParts(headPart, 3)
-        addParts(upperT,   1)
-        addParts(lowerT,   1)
-        if #pool == 0 then addParts(hrp, 5) end
-        if #pool == 0 then addParts(part, 5) end
+        -- perpendicular basis around aimDir for cone sampling
+        local upWorld = Vector3.new(0, 1, 0)
+        local right = aimDir:Cross(upWorld)
+        if right.Magnitude < 0.01 then right = Vector3.new(1, 0, 0) else right = right.Unit end
+        local upPerp = right:Cross(aimDir).Unit
 
-        local function randInPart(bp)
-            local sz = bp.Size
-            local lx = (math.random() - 0.5) * sz.X * 0.7
-            local ly = (math.random() - 0.5) * sz.Y * 0.7
-            local lz = (math.random() - 0.5) * sz.Z * 0.7
-            -- transform local-space offset to world via the part's CFrame
-            local localOff = Vector3.new(lx, ly, lz)
-            local worldPos = bp.CFrame:PointToWorldSpace(localOff)
-            return worldPos, worldPos - bp.Position
+        -- raycast params: exclude our own character so the first pellet
+        -- doesn't hit our arm/tool. Include everything else (target, walls).
+        local rp = RaycastParams.new()
+        rp.FilterDescendantsInstances = { lplr.Character }
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.RespectCanCollide = false
+
+        local function makePelletDir()
+            -- sqrt for uniform-disk sampling (avoids center bias)
+            local theta = math.rad(SPREAD_DEG) * math.sqrt(math.random())
+            local phi   = math.random() * math.pi * 2
+            local sideOffset = right  * math.cos(phi)
+                             + upPerp * math.sin(phi)
+            local dir = aimDir + sideOffset * math.tan(theta)
+            return dir.Unit
         end
 
         local hits, targets = {}, {}
         for i = 1, pelletCount do
-            local bp = pool[((i - 1) % #pool) + 1]
-            local worldPos, offsetFromCenter = randInPart(bp)
-            local normal = (origin - worldPos)
-            if normal.Magnitude > 0 then normal = normal.Unit else normal = Vector3.new(0, 1, 0) end
-            hits[i]    = { Normal = normal, Instance = bp, Position = worldPos }
-            targets[i] = { thePart = bp, theOffset = offsetFromCenter }
+            local pelletDir = makePelletDir()
+            local rayLen = math.max(distToTarget * 1.5, 50)
+            local result = workspace:Raycast(origin, pelletDir * rayLen, rp)
+            if result and result.Instance then
+                local hp = result.Position
+                local off = hp - result.Instance.Position
+                hits[i]    = { Normal = result.Normal, Instance = result.Instance, Position = hp }
+                targets[i] = { thePart = result.Instance, theOffset = off }
+            else
+                -- pellet went past everything (no hit). Provide a stub at
+                -- the end of the ray so the payload still has 5 entries.
+                local endPos = origin + pelletDir * rayLen
+                hits[i]    = { Normal = -pelletDir, Instance = nil, Position = endPos }
+                targets[i] = { thePart = nil, theOffset = Vector3.zero }
+            end
         end
 
-        -- aim point: average of all hit positions (looks more believable
-        -- than camera lookvector * dist when target is off-camera)
-        local avg = Vector3.zero
-        for _, h in ipairs(hits) do avg = avg + h.Position end
-        local aim = avg / #hits
+        -- aim point: where we actually intended to shoot (target part).
+        -- Matches the average pellet direction by construction since
+        -- pellets were sampled around aimDir.
+        local aim = part.Position
 
         local payload = { hits, targets, origin, aim, tick() }
 
