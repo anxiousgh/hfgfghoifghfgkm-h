@@ -4211,16 +4211,6 @@ F.games.hoodCustoms.forceHit = (function()
     -- routes the shot through fireDirect() which only sends 1 pellet -
     -- the server flags "shotgun fired with 1 pellet" and kicks.
     local SHOTGUN_SUBSTRINGS = { "shotgun", "barrel" }
-
-    -- Knife: completely different remote path. Fires "KnifeInteraction"
-    -- "Throw" first (with direction + position vectors + GUID), then
-    -- "KnifeInteraction" "Hit" with the target's Humanoid using the
-    -- SAME GUID. Server correlates the two via that GUID so we can't
-    -- skip Throw and just spam Hit.
-    local KNIFE_NAMES = {
-        ["[Knife]"] = true,
-    }
-    local KNIFE_SUBSTRINGS = { "knife" }
     local _loggedTools = {}  -- tools we've already logged Tool.Name for
 
     local target          = nil
@@ -4270,25 +4260,13 @@ F.games.hoodCustoms.forceHit = (function()
         return false
     end
 
-    local function isKnife()
-        local t = getEquippedTool()
-        if not t then return false end
-        if KNIFE_NAMES[t.Name] then return true end
-        local lower = t.Name:lower()
-        for _, key in ipairs(KNIFE_SUBSTRINGS) do
-            if lower:find(key, 1, true) then return true end
-        end
-        return false
-    end
-
     -- diagnostic: log Tool.Name once per unique tool so the user can see
-    -- what HC actually names guns and confirm shotgun/knife detection
+    -- what HC actually names guns and confirm shotgun detection
     local function logToolOnce()
         local t = getEquippedTool()
         if t and not _loggedTools[t.Name] then
             _loggedTools[t.Name] = true
-            print(("[forceHit] equipped: %q  isShotgun=%s  isKnife=%s")
-                :format(t.Name, tostring(isShotgun()), tostring(isKnife())))
+            print(("[forceHit] equipped: %q  isShotgun=%s"):format(t.Name, tostring(isShotgun())))
         end
     end
 
@@ -4382,57 +4360,6 @@ F.games.hoodCustoms.forceHit = (function()
         end)
     end
 
-    -- knife path: fires KnifeInteraction Throw + Hit on MainEvent.
-    -- Throw establishes a per-swing GUID with a direction unit vector
-    -- and an origin position vector; Hit then references the same GUID
-    -- with the target's Humanoid. Server correlates the two via the
-    -- GUID, so sending only Hit without a matching Throw is detected.
-    --
-    -- vector 1 (direction): unit vector from our head -> target part.
-    -- vector 2 (origin):    our head's world position.
-    -- These match the magnitudes in captured legitimate payloads
-    -- (direction ~unit length, origin = world-space coords).
-    local _HttpService = game:GetService("HttpService")
-    local function fireKnife(part)
-        if not part then return false end
-        local p = currentTarget()
-        if not p or not p.Character then return false end
-        local hum = p.Character:FindFirstChildOfClass("Humanoid")
-        if not hum then return false end
-        local head = getHead(); if not head then return false end
-
-        local origin = head.Position
-        local dir    = (part.Position - origin)
-        if dir.Magnitude < 0.01 then
-            dir = workspace.CurrentCamera.CFrame.LookVector
-        else
-            dir = dir.Unit
-        end
-
-        local guid = _HttpService:GenerateGUID(true)  -- "{XXXX-...}" form
-        local me   = _RS:FindFirstChild("MainEvent")
-        if not me then return false end
-
-        local okThrow = pcall(function()
-            me:FireServer(
-                "KnifeInteraction", "Throw",
-                { Vector3.new(dir.X, dir.Y, dir.Z),
-                  Vector3.new(origin.X, origin.Y, origin.Z) },
-                guid
-            )
-        end)
-        if not okThrow then return false end
-
-        local okHit = pcall(function()
-            me:FireServer(
-                "KnifeInteraction", "Hit",
-                { hum },
-                guid
-            )
-        end)
-        return okHit
-    end
-
     -- shotgun synth path: 2 stacked clusters ~3 studs apart, sub-stud
     -- anti-zero-spread jitter inside each. Section split matches the
     -- natural 5-pellet gun pattern: 2 in section A, 3 in section B.
@@ -4523,13 +4450,12 @@ F.games.hoodCustoms.forceHit = (function()
         if selfIsKnocked() then return end
         local part = getCurrentTargetPart(); if not part then return end
 
-        -- diagnostic so the user can see if tool-type detection matches
+        -- diagnostic so the user can see if shotgun detection actually matches
         logToolOnce()
 
         local headPart = getHead()
         local origin   = headPart and headPart.Position
-        local knife    = isKnife()
-        local shotgun  = (not knife) and isShotgun()
+        local shotgun  = isShotgun()
         local tool     = getEquippedTool()
         -- pellet count: explicit table lookup, otherwise default to 5 for
         -- anything substring-matched as a shotgun, otherwise 1
@@ -4542,11 +4468,7 @@ F.games.hoodCustoms.forceHit = (function()
 
         local fired = false
         for _ = 1, math.max(1, fireMultiplier) do
-            if knife then
-                -- Knife path: Throw + Hit on MainEvent with shared GUID.
-                -- Skip the "Shoot" remote entirely.
-                if fireKnife(part) then fired = true end
-            elseif shotgun then
+            if shotgun then
                 if shotgunMode == "synth" then
                     if fireShotgunSynth(part, pellets) then fired = true end
                 else
@@ -4560,10 +4482,9 @@ F.games.hoodCustoms.forceHit = (function()
 
         if fired then
             lastFire = tick()
-            -- skip the fake tracer for paths that already render a visual:
-            --   shotgun "click" - gun fires natively, draws its own tracers
-            --   knife            - melee, no projectile to trace anyway
-            local skipTracer = (shotgun and shotgunMode == "click") or knife
+            -- skip the fake tracer for the click-fire path: the gun renders
+            -- its own native tracers and ours would just be a duplicate
+            local skipTracer = shotgun and shotgunMode == "click"
             if origin and not skipTracer then
                 spawnTracer(origin, part.Position)
             end
