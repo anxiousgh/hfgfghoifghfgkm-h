@@ -2577,6 +2577,144 @@ F.players = {
     getFollowVisualize = function() return _follow.viz end,
 }
 
+-- ============================================================
+--  AUTO-TARGETER
+--  Persistent UserId->username list. When the toggle is on, any
+--  player in the list who's in the current server (or who joins
+--  later) is automatically added to the ragebot's target list.
+--  UserId is the persistent key since usernames can change.
+--  Stored in `cclosure_autotarget.json` via writefile/readfile.
+-- ============================================================
+F.autoTargeter = (function()
+    local SAVE_FILE = "cclosure_autotarget.json"
+    local HttpService = game:GetService("HttpService")
+
+    local entries = {}  -- [userId(number)] = username(string)
+    local enabled = false
+
+    local function save()
+        if not writefile then return end
+        local serializable = {}
+        for uid, name in pairs(entries) do
+            serializable[tostring(uid)] = name
+        end
+        pcall(function() writefile(SAVE_FILE, HttpService:JSONEncode(serializable)) end)
+    end
+
+    local function load()
+        if not (readfile and isfile) then return end
+        if not isfile(SAVE_FILE) then return end
+        local ok, content = pcall(readfile, SAVE_FILE)
+        if not ok or not content then return end
+        local ok2, data = pcall(HttpService.JSONDecode, HttpService, content)
+        if not ok2 or type(data) ~= "table" then return end
+        entries = {}
+        for k, v in pairs(data) do
+            local uid = tonumber(k)
+            if uid and type(v) == "string" then entries[uid] = v end
+        end
+    end
+
+    local function listAll()
+        local out = {}
+        for uid, name in pairs(entries) do
+            table.insert(out, { userId = uid, username = name })
+        end
+        table.sort(out, function(a, b) return a.username:lower() < b.username:lower() end)
+        return out
+    end
+
+    local function isInList(userId)
+        return entries[tonumber(userId)] ~= nil
+    end
+
+    local function addById(uid, username)
+        uid = tonumber(uid); if not uid then return false end
+        if not username then
+            local ok, n = pcall(plrs.GetNameFromUserIdAsync, plrs, uid)
+            username = ok and n or ("UserId " .. uid)
+        end
+        entries[uid] = username
+        save()
+        return true
+    end
+
+    local function addByName(name)
+        if not name or name == "" then return false end
+        -- if name matches a current player, use their UserId directly
+        for _, p in ipairs(plrs:GetPlayers()) do
+            if p.Name:lower() == name:lower() then
+                return addById(p.UserId, p.Name)
+            end
+        end
+        -- otherwise resolve via web API
+        local ok, uid = pcall(plrs.GetUserIdFromNameAsync, plrs, name)
+        if not ok or not uid then return false end
+        return addById(uid, name)
+    end
+
+    -- accepts a Player, UserId (number/numeric string), or username
+    local function add(x)
+        if typeof(x) == "Instance" and x:IsA("Player") then
+            return addById(x.UserId, x.Name)
+        elseif tonumber(x) then
+            return addById(tonumber(x))
+        else
+            return addByName(tostring(x))
+        end
+    end
+
+    local function remove(userId)
+        userId = tonumber(userId); if not userId then return false end
+        entries[userId] = nil
+        save()
+        return true
+    end
+
+    local function clear()
+        entries = {}
+        save()
+    end
+
+    -- push every in-server, in-list player to the ragebot target list
+    local function sweep()
+        if not enabled then return end
+        if not (F.ragebot and F.ragebot.addTarget) then return end
+        for _, p in ipairs(plrs:GetPlayers()) do
+            if p ~= lplr and entries[p.UserId] then
+                pcall(F.ragebot.addTarget, p)
+            end
+        end
+    end
+
+    -- watch new joins
+    plrs.PlayerAdded:Connect(function(p)
+        if not enabled then return end
+        if entries[p.UserId] and F.ragebot and F.ragebot.addTarget then
+            pcall(F.ragebot.addTarget, p)
+        end
+    end)
+
+    local function setEnabled(v)
+        enabled = v == true
+        G.autoTargeterActive = enabled
+        if enabled then sweep() end
+    end
+
+    load()
+
+    return {
+        add        = add,
+        remove     = remove,
+        clear      = clear,
+        list       = listAll,
+        isInList   = isInList,
+        setEnabled = setEnabled,
+        isEnabled  = function() return enabled end,
+        sweep      = sweep,
+    }
+end)()
+
 -- utility helpers (exposed for advanced users)
 F.utils = {
     isReallyVisible = isReallyVisible,

@@ -298,8 +298,6 @@ do
         Text    = "Target priority",
         Callback = F.ragebot.setPriority,
     })
-    Tgt:AddToggle("RageSwitchByMouse", { Text = "Switch by mouse (legacy)",
-        Default = F.ragebot.settings.SwitchByMouse, Callback = F.ragebot.setSwitchByMouse })
     Tgt:AddToggle("RageShowLine",      { Text = "Show target line",
         Default = F.ragebot.settings.ShowLine,    Callback = F.ragebot.setShowLine })
     Tgt:AddDropdown("RageLineOrigin", {
@@ -380,6 +378,98 @@ do
         F.ragebot.addTarget(attacker)
         Library:Notify("Auto-targeted " .. attacker.Name .. " (damaged you)", 3)
     end)
+
+    -- =================== AUTO-TARGETER (persistent list) ===================
+    Tgt:AddDivider()
+    Tgt:AddLabel("Auto-targeter (persistent UserId list)")
+    Tgt:AddToggle("AutoTargeterEnabled", { Text = "Enable",
+        Default = false,
+        Callback = function(v) F.autoTargeter.setEnabled(v) end,
+    })
+
+    local function labelForEntry(entry)
+        return entry.username .. " (" .. tostring(entry.userId) .. ")"
+    end
+    local labelToId = {}  -- ["Name (uid)"] -> uid
+
+    local function rebuildLists()
+        -- current-server players dropdown (excludes ourselves)
+        local playerNames = {}
+        for _, p in ipairs(LocalPlayer.Parent:GetPlayers()) do
+            if p ~= LocalPlayer then table.insert(playerNames, p.Name) end
+        end
+        table.sort(playerNames)
+        if #playerNames == 0 then playerNames = { "(no players)" } end
+        if Options.AutoTargetPick then Options.AutoTargetPick:SetValues(playerNames) end
+
+        -- saved list dropdown
+        labelToId = {}
+        local labels = {}
+        for _, e in ipairs(F.autoTargeter.list()) do
+            local lbl = labelForEntry(e)
+            labelToId[lbl] = e.userId
+            table.insert(labels, lbl)
+        end
+        if #labels == 0 then labels = { "(empty)" } end
+        if Options.AutoTargetSaved then Options.AutoTargetSaved:SetValues(labels) end
+    end
+
+    Tgt:AddDropdown("AutoTargetPick", {
+        Values = { "(no players)" }, Default = "(no players)",
+        Text = "Players in server",
+    })
+    Tgt:AddButton({ Text = "Add picked", Func = function()
+        local v = Options.AutoTargetPick and Options.AutoTargetPick.Value
+        if not v or v == "(no players)" then return end
+        if F.autoTargeter.add(v) then
+            Library:Notify("Saved " .. v, 2)
+            rebuildLists()
+        else
+            Library:Notify("Failed to save " .. v, 2)
+        end
+    end })
+    :AddButton({ Text = "Refresh", Func = rebuildLists })
+
+    Tgt:AddInput("AutoTargetInput", {
+        Default = "", Text = "Username or UserId",
+        Placeholder = "type and press add",
+        Finished = false,
+    })
+    Tgt:AddButton({ Text = "Add typed", Func = function()
+        local v = Options.AutoTargetInput and Options.AutoTargetInput.Value
+        if not v or v == "" then return end
+        task.spawn(function()
+            if F.autoTargeter.add(v) then
+                Library:Notify("Saved " .. v, 2)
+                rebuildLists()
+            else
+                Library:Notify("Couldn't resolve " .. v, 3)
+            end
+        end)
+    end })
+
+    Tgt:AddDropdown("AutoTargetSaved", {
+        Values = { "(empty)" }, Default = "(empty)",
+        Text = "Saved targets",
+    })
+    Tgt:AddButton({ Text = "Remove", Func = function()
+        local v = Options.AutoTargetSaved and Options.AutoTargetSaved.Value
+        local uid = labelToId[v]
+        if not uid then return end
+        F.autoTargeter.remove(uid)
+        Library:Notify("Removed " .. v, 2)
+        rebuildLists()
+    end })
+    :AddButton({ Text = "Clear all", Func = function()
+        F.autoTargeter.clear()
+        Library:Notify("Cleared auto-target list", 2)
+        rebuildLists()
+    end })
+
+    -- keep player dropdown fresh when players join/leave
+    LocalPlayer.Parent.PlayerAdded:Connect(function() task.defer(rebuildLists) end)
+    LocalPlayer.Parent.PlayerRemoving:Connect(function() task.defer(rebuildLists) end)
+    task.defer(rebuildLists)
 
     -- keep labels fresh on auto-switches and list changes
     task.spawn(function()
