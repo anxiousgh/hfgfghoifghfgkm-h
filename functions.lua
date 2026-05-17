@@ -124,7 +124,7 @@ local function isReallyVisible(fromPos, toPos, ignoreList)
         if not result then return true end
         if _visStrict then return false end
         local hit = result.Instance
-        if hit.Transparency >= 0.5 or not hit.CanCollide or hit.CastShadow == false then
+        if hit.Transparency >= 0.5 or not hit.CanCollide then
             local stepped = (result.Position - origin).Magnitude + 0.05
             origin = origin + unit * stepped
             remaining = remaining - stepped
