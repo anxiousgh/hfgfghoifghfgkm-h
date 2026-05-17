@@ -3699,23 +3699,64 @@ local getMainEvent = (function()
     end
 end)()
 
+-- HC: detect "grabbed" state. When player A picks up player B, the K.O
+-- value on B's BodyEffects flips OFF (so the regular K.O check thinks B
+-- is alive). Meanwhile, on A's BodyEffects, a "Grabbed" value is set to
+-- B's name / B's player ref. We scan every character's BodyEffects.Grabbed
+-- and treat plr as "being grabbed" if any other character points to them.
+-- Handles both StringValue (name) and ObjectValue (Player / Character)
+-- forms since we don't know which HC uses without inspecting in-game.
+local function _hcIsGrabbed(plr)
+    if not plr then return false end
+    local wsPlayers = workspace:FindFirstChild("Players")
+    local chars = wsPlayers and wsPlayers:FindFirstChild("Characters")
+    if not chars then return false end
+    local target = plr.Name
+    for _, mdl in ipairs(chars:GetChildren()) do
+        if mdl.Name ~= target then  -- skip own folder
+            local fx = mdl:FindFirstChild("BodyEffects")
+            if fx then
+                local g = fx:FindFirstChild("Grabbed")
+                if g then
+                    local v = g.Value
+                    if v == target then return true end
+                    if typeof(v) == "Instance" then
+                        if v == plr then return true end
+                        if v.Name == target then return true end
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
 -- HC-specific knocked check via workspace.Players.Characters.<name>.BodyEffects["K.O"].Value
+-- Treats "being grabbed by someone" as still knocked, since the K.O bool
+-- gets flipped off the instant a grabber starts carrying them. Without
+-- this every grabbed target would slip through SkipKnocked / IgnoreKnocked
+-- and we'd dump shots into people who are effectively still down.
 local function _hcIsKnocked(plr)
     if not plr then return false end
     local wsPlayers = workspace:FindFirstChild("Players")
     local chars = wsPlayers and wsPlayers:FindFirstChild("Characters")
     if not chars then return false end
     local mdl = chars:FindFirstChild(plr.Name)
-    if not mdl then return false end
-    local fx = mdl:FindFirstChild("BodyEffects")
-    if not fx then return false end
-    local ko = fx:FindFirstChild("K.O")
-    return ko ~= nil and ko.Value == true
+    if mdl then
+        local fx = mdl:FindFirstChild("BodyEffects")
+        if fx then
+            local ko = fx:FindFirstChild("K.O")
+            if ko ~= nil and ko.Value == true then return true end
+        end
+    end
+    -- Grabbed counts as knocked (K.O flips off when picked up)
+    return _hcIsGrabbed(plr)
 end
 
 F.games = F.games or {}
 F.games.hoodCustoms = F.games.hoodCustoms or {}
 F.games.hoodCustoms.isKnocked = _hcIsKnocked
+F.games.hoodCustoms.isGrabbed = _hcIsGrabbed
 
 F.games.hoodCustoms.autoStomp = (function()
     local conn
