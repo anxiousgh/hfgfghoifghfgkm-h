@@ -2470,10 +2470,12 @@ F.walkspeed = {
     isActive = function() return G.walkspeedActive == true end,
     setValue = function(n)
         G.walkspeedValue = tonumber(n) or G.walkspeedValue
+        -- Apply immediately so the slider feels responsive; the Heartbeat
+        -- loop in startWalkspeed will keep re-asserting from now on.
         if G.walkspeedActive then
             local c = lplr.Character
             local hum = c and c:FindFirstChildOfClass("Humanoid")
-            if hum then _wsEnforce(hum) end
+            if hum then pcall(function() hum.WalkSpeed = G.walkspeedValue end) end
         end
     end,
     getValue = function() return G.walkspeedValue end,
@@ -2491,7 +2493,15 @@ F.jumpPower = {
         if G.jumpPowerActive then
             local c = lplr.Character
             local hum = c and c:FindFirstChildOfClass("Humanoid")
-            if hum then _jpEnforce(hum) end
+            if hum then
+                pcall(function()
+                    if hum.UseJumpPower then
+                        hum.JumpPower = G.jumpPowerValue
+                    else
+                        hum.JumpHeight = G.jumpPowerValue / 7
+                    end
+                end)
+            end
         end
     end,
     getValue = function() return G.jumpPowerValue end,
