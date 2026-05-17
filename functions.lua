@@ -2563,17 +2563,23 @@ F.rocketJump = (function()
         end)
     end
 
-    -- hook Humanoid.Jump going true. Fires once per actual jump event;
-    -- holding Space doesn't repeat-trigger because the engine only flips
-    -- Jump=true on each new ground-jump (auto-resets to false). Re-hooks
-    -- on respawn via charConn.
+    -- Hook the Jumping state transition. We previously listened to
+    -- PropertyChangedSignal("Jump"), but Jump=true fires on EVERY Space
+    -- press -- including mid-air, during cooldown, while stunned, etc.
+    -- -- even when no actual jump occurs, which caused the rocket to fire
+    -- spuriously. StateChanged -> Jumping only fires when the humanoid
+    -- genuinely leaves the ground due to a jump action, so this matches
+    -- the user's expectation: "fire only when I actually jump."
+    -- Re-hooks on respawn via charConn.
     local function hook(char)
         local hum = char and char:WaitForChild("Humanoid", 5)
         if not hum then return end
         if jumpConn then jumpConn:Disconnect() end
-        jumpConn = hum:GetPropertyChangedSignal("Jump"):Connect(function()
+        jumpConn = hum.StateChanged:Connect(function(_old, new)
             if not G.rocketJumpActive then return end
-            if hum.Jump then fire() end
+            if new == Enum.HumanoidStateType.Jumping then
+                fire()
+            end
         end)
     end
 
