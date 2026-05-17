@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 02:20 synth-v5 raycast w/ SpecialParts whitelist"
+local SCRIPT_VERSION = "2026-05-19 02:55 synth-v6 elliptical cone + close-range aim bias"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4666,8 +4666,16 @@ F.games.hoodCustoms.forceHit = (function()
     --     compute theOffset via PointToObjectSpace.
     --   - If miss: stub at end of ray (won't damage but keeps array
     --     length, mimicking pellets that flew past at distance).
-    local SPREAD_HALF_DEG = 5.0  -- half-angle of the cone; matches the
-                                  -- spread observed in mid-range capture
+    -- Elliptical cone matching the captured DoubleBarrel spread.
+    -- Vertical span is much wider than horizontal (two barrels stacked
+    -- vertically). Calibrated from two captures:
+    --   close (3.8s): vert ~5.6deg, horiz ~0.3deg
+    --   mid   (16s):  vert ~2.0deg, horiz ~0.6deg
+    -- Use the average + a small safety margin so pellets don't sample
+    -- outside the gun's actual cone (which causes "unsynced" rejections
+    -- when the server raycasts in that direction and lands elsewhere).
+    local SPREAD_VERT_DEG  = 3.5  -- vertical half-angle
+    local SPREAD_HORIZ_DEG = 1.0  -- horizontal half-angle
     local function fireShotgunSynth(part, pelletCount)
         if not part then return false end
         local origin = getMuzzlePos(); if not origin then return false end
@@ -4694,11 +4702,25 @@ F.games.hoodCustoms.forceHit = (function()
         end
         if #whitelist == 0 then return false end
 
-        -- aim direction toward the chosen hit part (head, torso, etc.)
-        local aimDir = part.Position - origin
-        if aimDir.Magnitude < 0.01 then return false end
-        local distToTarget = aimDir.Magnitude
-        aimDir = aimDir.Unit
+        -- Aim direction. We point at the chosen hit part but BIAS DOWN
+        -- a bit when the target is close, so the elliptical cone covers
+        -- head + upper torso instead of all pellets landing on head.
+        -- Natural mid-range capture showed 2 head + 3 limb pellets =
+        -- 140 dmg, not 5 head = 200 dmg. The server probably caps
+        -- per-shot damage; landing all 5 on head will trip it.
+        local aimTarget = part.Position
+        local distToTarget = (aimTarget - origin).Magnitude
+        if distToTarget < 0.01 then return false end
+        -- If chosen part is small (e.g. Head, ~1.4 stud) AND close range,
+        -- drop the aim point ~0.5 stud so the cone covers head + neck +
+        -- upper torso. At long range the bias is negligible vs distance.
+        local CLOSE_BIAS_RANGE = 12     -- studs; below this, apply bias
+        local CLOSE_BIAS_DROP  = 0.55   -- studs; how far down to bias aim
+        if distToTarget < CLOSE_BIAS_RANGE then
+            local strength = 1 - (distToTarget / CLOSE_BIAS_RANGE)
+            aimTarget = aimTarget - Vector3.new(0, CLOSE_BIAS_DROP * strength, 0)
+        end
+        local aimDir = (aimTarget - origin).Unit
 
         -- perpendicular basis around aimDir for cone sampling
         local upWorld = Vector3.new(0, 1, 0)
@@ -4711,13 +4733,15 @@ F.games.hoodCustoms.forceHit = (function()
         rp.FilterDescendantsInstances = whitelist
         rp.RespectCanCollide = false
 
+        local vRad = math.rad(SPREAD_VERT_DEG)
+        local hRad = math.rad(SPREAD_HORIZ_DEG)
         local function makePelletDir()
-            -- sqrt for uniform-disk sampling on the cone cross-section
-            local theta = math.rad(SPREAD_HALF_DEG) * math.sqrt(math.random())
-            local phi   = math.random() * math.pi * 2
-            local sideOffset = right  * math.cos(phi)
-                             + upPerp * math.sin(phi)
-            local dir = aimDir + sideOffset * math.tan(theta)
+            -- Independent uniform samples on each axis -> elliptical cone.
+            -- right axis is horizontal, upPerp axis is vertical (since
+            -- right = aimDir x worldUp, upPerp = right x aimDir = ~worldUp).
+            local h = (math.random() - 0.5) * 2 * math.tan(hRad)
+            local v = (math.random() - 0.5) * 2 * math.tan(vRad)
+            local dir = aimDir + right * h + upPerp * v
             return dir.Unit
         end
 
