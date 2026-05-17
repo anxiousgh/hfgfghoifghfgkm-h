@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 02:55 synth-v6 elliptical cone + close-range aim bias"
+local SCRIPT_VERSION = "2026-05-19 03:25 synth-v7 two-part symmetric split"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4641,132 +4641,133 @@ F.games.hoodCustoms.forceHit = (function()
         local h = getHead(); return h and h.Position or nil
     end
 
-    -- shotgun synth path (v5): RAYCAST-AGAINST-SPECIALPARTS.
-    -- Built from two captured legit DoubleBarrel shots (point-blank
-    -- + mid-range). Key facts:
-    --   1. ALL hit Instances are inside Character.SpecialParts. Visible
-    --      body parts (Character.Head etc) are NEVER the Instance. v3's
-    --      raycast was hitting visible parts -> wrong Instance -> kick.
-    --   2. Per-part Normals are bit-identical across pellets on the same
-    --      part, but DIFFERENT parts (e.g. Head vs LeftUpperArm) have
-    --      different normals. Each is the real surface normal of the
-    --      face the pellet entered.
-    --   3. At close range pellets cluster on 1 part; at distance they
-    --      spread across multiple parts. Spread cone ~5deg half-angle.
-    --   4. Position == part.CFrame:PointToWorldSpace(theOffset) holds
-    --      to float precision -- offset is in the part's local frame.
+    -- shotgun synth path (v7): TWO-PART SPLIT.
+    -- User reported that a known-working shotgun cheat always lands
+    -- pellets on TWO different body parts (e.g. UpperTorso+LowerTorso,
+    -- or LeftUpperArm+RightUpperArm) per shot. This pattern defeats:
+    --   - "spread too tight on one part" detection (we're always on 2)
+    --   - "damage too high per shot" cap (mixing parts dilutes damage)
     --
-    -- Algorithm:
-    --   - Build a SpecialParts whitelist (BaseParts under target.Character.
-    --     SpecialParts) and put it in RaycastParams.Include.
-    --   - For each pellet, sample a direction in a cone around aim.
-    --   - Raycast that direction; the whitelist guarantees we hit a
-    --     SpecialPart or nothing.
-    --   - If hit: store the raycast's real Instance/Position/Normal,
-    --     compute theOffset via PointToObjectSpace.
-    --   - If miss: stub at end of ray (won't damage but keeps array
-    --     length, mimicking pellets that flew past at distance).
-    -- Elliptical cone matching the captured DoubleBarrel spread.
-    -- Vertical span is much wider than horizontal (two barrels stacked
-    -- vertically). Calibrated from two captures:
-    --   close (3.8s): vert ~5.6deg, horiz ~0.3deg
-    --   mid   (16s):  vert ~2.0deg, horiz ~0.6deg
-    -- Use the average + a small safety margin so pellets don't sample
-    -- outside the gun's actual cone (which causes "unsynced" rejections
-    -- when the server raycasts in that direction and lands elsewhere).
-    local SPREAD_VERT_DEG  = 3.5  -- vertical half-angle
-    local SPREAD_HORIZ_DEG = 1.0  -- horizontal half-angle
-    local function fireShotgunSynth(part, pelletCount)
-        if not part then return false end
+    -- Algorithm: pick a random symmetric pair of SpecialParts that BOTH
+    -- exist on the target. Split N pellets between them with a 3-2 or
+    -- 2-3 ratio (randomized). For each pellet, compute hit via face-
+    -- based local-offset calculation (NO raycast):
+    --   - determine which face of the part the shooter is on
+    --   - random offset within that face's plane
+    --   - theOffset = local offset (face-axis pinned at +-sz/2)
+    --   - Position   = part.CFrame:PointToWorldSpace(theOffset)
+    --   - Normal     = face's outward normal in world space
+    -- This makes the geometric consistency check PointToWorldSpace
+    -- (theOffset) == Position pass exactly, while keeping all hits on
+    -- valid SpecialParts (no raycast, no chance of hitting wrong stuff).
+    local PAIR_POOL = {
+        { "UpperTorso", "LowerTorso" },          -- vertical torso pair
+        { "LeftUpperArm", "RightUpperArm" },     -- shoulder pair
+        { "LeftLowerArm", "RightLowerArm" },     -- forearm pair
+        { "LeftUpperLeg", "RightUpperLeg" },     -- thigh pair
+        { "Head", "UpperTorso" },                -- head+chest (some damage)
+    }
+    local function fireShotgunSynth(_chosenPart, pelletCount)
         local origin = getMuzzlePos(); if not origin then return false end
 
-        -- find target's SpecialParts. `part` was returned by
-        -- getCurrentTargetPart() which already targets SpecialParts, so
-        -- part.Parent IS the SpecialParts folder. Build a whitelist of
-        -- ALL its children (so pellets can land on any limb / head /
-        -- torso, like the natural capture).
-        local spFolder = part.Parent
+        -- find target's SpecialParts folder. _chosenPart came from
+        -- getCurrentTargetPart() which targets the SpecialParts subfolder,
+        -- so its parent IS the SpecialParts folder.
+        local spFolder = _chosenPart and _chosenPart.Parent
         if not spFolder or spFolder.Name ~= "SpecialParts" then
-            -- fallback: try to locate SpecialParts via the character model
-            local char = spFolder
-            while char and not char:FindFirstChild("SpecialParts") do
-                char = char.Parent
-                if char == workspace or not char then break end
+            -- fallback: walk up to find SpecialParts
+            local cur = _chosenPart and _chosenPart.Parent
+            while cur and not cur:FindFirstChild("SpecialParts") do
+                cur = cur.Parent
+                if not cur or cur == workspace then break end
             end
-            spFolder = char and char:FindFirstChild("SpecialParts")
+            spFolder = cur and cur:FindFirstChild("SpecialParts")
             if not spFolder then return false end
         end
-        local whitelist = {}
-        for _, c in ipairs(spFolder:GetChildren()) do
-            if c:IsA("BasePart") then table.insert(whitelist, c) end
+
+        -- Pick a random pair where BOTH parts exist. Try a few times
+        -- to land on a valid one; fall back to any two SpecialParts.
+        local partA, partB
+        local shuffled = table.clone(PAIR_POOL)
+        for i = #shuffled, 2, -1 do
+            local j = math.random(1, i)
+            shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
         end
-        if #whitelist == 0 then return false end
-
-        -- Aim direction. We point at the chosen hit part but BIAS DOWN
-        -- a bit when the target is close, so the elliptical cone covers
-        -- head + upper torso instead of all pellets landing on head.
-        -- Natural mid-range capture showed 2 head + 3 limb pellets =
-        -- 140 dmg, not 5 head = 200 dmg. The server probably caps
-        -- per-shot damage; landing all 5 on head will trip it.
-        local aimTarget = part.Position
-        local distToTarget = (aimTarget - origin).Magnitude
-        if distToTarget < 0.01 then return false end
-        -- If chosen part is small (e.g. Head, ~1.4 stud) AND close range,
-        -- drop the aim point ~0.5 stud so the cone covers head + neck +
-        -- upper torso. At long range the bias is negligible vs distance.
-        local CLOSE_BIAS_RANGE = 12     -- studs; below this, apply bias
-        local CLOSE_BIAS_DROP  = 0.55   -- studs; how far down to bias aim
-        if distToTarget < CLOSE_BIAS_RANGE then
-            local strength = 1 - (distToTarget / CLOSE_BIAS_RANGE)
-            aimTarget = aimTarget - Vector3.new(0, CLOSE_BIAS_DROP * strength, 0)
+        for _, pair in ipairs(shuffled) do
+            local a = spFolder:FindFirstChild(pair[1])
+            local b = spFolder:FindFirstChild(pair[2])
+            if a and b and a:IsA("BasePart") and b:IsA("BasePart") then
+                partA, partB = a, b; break
+            end
         end
-        local aimDir = (aimTarget - origin).Unit
+        if not partA then
+            -- nothing matched - grab any two SpecialParts
+            local picks = {}
+            for _, c in ipairs(spFolder:GetChildren()) do
+                if c:IsA("BasePart") then table.insert(picks, c) end
+                if #picks >= 2 then break end
+            end
+            partA = picks[1]; partB = picks[2] or picks[1]
+        end
+        if not partA or not partB then return false end
 
-        -- perpendicular basis around aimDir for cone sampling
-        local upWorld = Vector3.new(0, 1, 0)
-        local right = aimDir:Cross(upWorld)
-        if right.Magnitude < 0.01 then right = Vector3.new(1, 0, 0) else right = right.Unit end
-        local upPerp = right:Cross(aimDir).Unit
+        -- split: nA + nB = pelletCount, with nA in {ceil(N/2), floor(N/2)}
+        local half = pelletCount * 0.5
+        local nA   = (math.random() < 0.5) and math.ceil(half) or math.floor(half)
+        local nB   = pelletCount - nA
 
-        local rp = RaycastParams.new()
-        rp.FilterType = Enum.RaycastFilterType.Include
-        rp.FilterDescendantsInstances = whitelist
-        rp.RespectCanCollide = false
-
-        local vRad = math.rad(SPREAD_VERT_DEG)
-        local hRad = math.rad(SPREAD_HORIZ_DEG)
-        local function makePelletDir()
-            -- Independent uniform samples on each axis -> elliptical cone.
-            -- right axis is horizontal, upPerp axis is vertical (since
-            -- right = aimDir x worldUp, upPerp = right x aimDir = ~worldUp).
-            local h = (math.random() - 0.5) * 2 * math.tan(hRad)
-            local v = (math.random() - 0.5) * 2 * math.tan(vRad)
-            local dir = aimDir + right * h + upPerp * v
-            return dir.Unit
+        -- Face-based hit generator: pick the face of `bp` that the
+        -- shooter is on, place pellet at random position on that face,
+        -- compute consistent Position / Normal / theOffset.
+        local function hitOnPart(bp)
+            local sz = bp.Size
+            local toLocal = bp.CFrame:VectorToObjectSpace(origin - bp.Position)
+            local ax, ay, az = math.abs(toLocal.X), math.abs(toLocal.Y), math.abs(toLocal.Z)
+            local idx, sign
+            if ax >= ay and ax >= az then
+                idx, sign = 1, (toLocal.X >= 0) and 1 or -1
+            elseif ay >= az then
+                idx, sign = 2, (toLocal.Y >= 0) and 1 or -1
+            else
+                idx, sign = 3, (toLocal.Z >= 0) and 1 or -1
+            end
+            local localN = (idx == 1) and Vector3.new(sign, 0, 0)
+                       or  (idx == 2) and Vector3.new(0, sign, 0)
+                       or                 Vector3.new(0, 0, sign)
+            local worldN = bp.CFrame:VectorToWorldSpace(localN)
+            local SPREAD = 0.6
+            local lx, ly, lz
+            if idx == 1 then
+                lx = (sz.X * 0.5) * sign
+                ly = (math.random() - 0.5) * sz.Y * SPREAD
+                lz = (math.random() - 0.5) * sz.Z * SPREAD
+            elseif idx == 2 then
+                lx = (math.random() - 0.5) * sz.X * SPREAD
+                ly = (sz.Y * 0.5) * sign
+                lz = (math.random() - 0.5) * sz.Z * SPREAD
+            else
+                lx = (math.random() - 0.5) * sz.X * SPREAD
+                ly = (math.random() - 0.5) * sz.Y * SPREAD
+                lz = (sz.Z * 0.5) * sign
+            end
+            local off = Vector3.new(lx, ly, lz)
+            local pos = bp.CFrame:PointToWorldSpace(off)
+            return { Normal = worldN, Instance = bp, Position = pos },
+                   { thePart = bp, theOffset = off }
         end
 
         local hits, targets = {}, {}
-        local rayLen = math.max(distToTarget * 1.5, 50)
-        for i = 1, pelletCount do
-            local pelletDir = makePelletDir()
-            local result = workspace:Raycast(origin, pelletDir * rayLen, rp)
-            if result and result.Instance then
-                local hp  = result.Position
-                local off = result.Instance.CFrame:PointToObjectSpace(hp)
-                hits[i]    = { Normal = result.Normal, Instance = result.Instance, Position = hp }
-                targets[i] = { thePart = result.Instance, theOffset = off }
-            else
-                -- pellet's direction missed all SpecialParts. Stub it at
-                -- the end of the ray with nil Instance (matches what HC
-                -- presumably sends when a pellet flies past the target).
-                local endPos = origin + pelletDir * rayLen
-                hits[i]    = { Normal = -pelletDir, Instance = nil, Position = endPos }
-                targets[i] = { thePart = nil, theOffset = Vector3.zero }
-            end
+        for i = 1, nA do
+            local h, t = hitOnPart(partA)
+            hits[i], targets[i] = h, t
+        end
+        for i = 1, nB do
+            local idx = nA + i
+            local h, t = hitOnPart(partB)
+            hits[idx], targets[idx] = h, t
         end
 
-        -- aim = centroid of pellet positions (matches capture: aim is
-        -- close to but not exactly the player's aim direction)
+        -- aim = centroid (matches capture)
         local sum = Vector3.zero
         for j = 1, pelletCount do sum = sum + hits[j].Position end
         local aim = sum / pelletCount
