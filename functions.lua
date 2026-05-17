@@ -2262,15 +2262,6 @@ if hookmetamethod and not getgenv()._F_ANTIKICK_NAMECALL_HOOKED then
     end))
 end
 
-F.antiKick = {
-    start  = function() getgenv()._F_ANTIKICK_ACTIVE = true end,
-    stop   = function() getgenv()._F_ANTIKICK_ACTIVE = false end,
-    toggle = function()
-        getgenv()._F_ANTIKICK_ACTIVE = not getgenv()._F_ANTIKICK_ACTIVE
-    end,
-    isActive = function() return getgenv()._F_ANTIKICK_ACTIVE == true end,
-}
-
 -- ragebot auto-shoot
 local _rbEquipTime = 0
 local function watchToolEquip(char)
@@ -2552,6 +2543,16 @@ F = {}  -- assigns the forward-declared local
 F.fly = makeToggle(startFly, stopFly, "flyActive")
 F.fly.setSpeed   = function(n) FLY_SPEED = tonumber(n) or FLY_SPEED end
 F.fly.getSpeed   = function() return FLY_SPEED end
+
+-- anti-kick: wraps the getgenv flag that the namecall hook reads
+F.antiKick = {
+    start  = function() getgenv()._F_ANTIKICK_ACTIVE = true end,
+    stop   = function() getgenv()._F_ANTIKICK_ACTIVE = false end,
+    toggle = function()
+        getgenv()._F_ANTIKICK_ACTIVE = not getgenv()._F_ANTIKICK_ACTIVE
+    end,
+    isActive = function() return getgenv()._F_ANTIKICK_ACTIVE == true end,
+}
 
 -- Real Humanoid.WalkSpeed override w/ anti-restore. Setting the value
 -- while active applies it instantly; the loop re-asserts whenever the
