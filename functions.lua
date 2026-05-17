@@ -191,51 +191,65 @@ end
 -- ============================================================
 --  WALKSPEED  (real Humanoid.WalkSpeed override with anti-restore)
 -- ============================================================
---  Forces Humanoid.WalkSpeed to a fixed value every Heartbeat. We
---  only write when the value actually differs so we don't flood
---  property writes, but we re-check every frame so the game can't
---  win a single-frame race (which caused visible stutter when we
---  only listened to PropertyChangedSignal).
+--  Forces Humanoid.WalkSpeed every frame. We write on BOTH
+--  Heartbeat AND BindToRenderStep at the lowest priority --
+--  RenderStep's "Last" priority runs after every Heartbeat /
+--  Stepped connection, immediately before the camera renders,
+--  so it's the absolute latest point in the frame we can write.
+--  This wins the race against game scripts that try to clamp
+--  WalkSpeed back to 16 on Heartbeat. Previously the game's
+--  Heartbeat connection often ran after ours and we'd lose the
+--  current frame's value -- on respawn the game's controller
+--  hadn't initialized yet so our value stuck, which is why the
+--  slider only "took effect" after a respawn.
 --  Default game walkspeed is 16; stop() restores 16.
 -- ============================================================
 G.walkspeedValue  = 16
 G.walkspeedActive = false
+local _WS_BIND_NAME = "_F_WalkspeedEnforce"
 local function _wsGetHum()
     local c = lplr.Character
     return c and c:FindFirstChildOfClass("Humanoid")
 end
+local function _wsEnforceOnce()
+    if not G.walkspeedActive then return end
+    local hum = _wsGetHum()
+    if not hum then return end
+    if hum.WalkSpeed ~= G.walkspeedValue then
+        pcall(function() hum.WalkSpeed = G.walkspeedValue end)
+    end
+end
 local function stopWalkspeed()
     G.walkspeedActive = false
     if G._wsHeartConn then G._wsHeartConn:Disconnect(); G._wsHeartConn = nil end
+    pcall(function() RunService:UnbindFromRenderStep(_WS_BIND_NAME) end)
     local hum = _wsGetHum()
     if hum then pcall(function() hum.WalkSpeed = 16 end) end
 end
 local function startWalkspeed()
     G.walkspeedActive = true
     if G._wsHeartConn then G._wsHeartConn:Disconnect() end
-    -- enforce every frame; cheap because writes only happen on diff
-    G._wsHeartConn = RunService.Heartbeat:Connect(function()
-        if not G.walkspeedActive then return end
-        local hum = _wsGetHum()
-        if not hum then return end
-        if hum.WalkSpeed ~= G.walkspeedValue then
-            pcall(function() hum.WalkSpeed = G.walkspeedValue end)
-        end
+    G._wsHeartConn = RunService.Heartbeat:Connect(_wsEnforceOnce)
+    -- BindToRenderStep at the latest possible priority (after every
+    -- Heartbeat/Stepped). Wrapped in pcall because the bind name
+    -- might already be taken if start() is called twice.
+    pcall(function() RunService:UnbindFromRenderStep(_WS_BIND_NAME) end)
+    pcall(function()
+        RunService:BindToRenderStep(_WS_BIND_NAME, Enum.RenderPriority.Last.Value + 1, _wsEnforceOnce)
     end)
 end
 
 -- ============================================================
 --  JUMPPOWER  (real Humanoid.JumpPower override with anti-restore)
 -- ============================================================
---  Same Heartbeat-based shape as walkspeed PLUS re-enables the
---  Jumping humanoid state every frame. Most games that "lock"
---  jump don't actually zero JumpPower — they call
---  SetStateEnabled(Jumping, false). Setting JumpPower alone
---  doesn't help in that case, so we flip the state back on every
---  tick. Together this lets you both jump AND control how high.
+--  Same dual-event enforcement as walkspeed (Heartbeat +
+--  RenderStep Last) PLUS re-enables the Jumping state every
+--  tick so games that block jumping via SetStateEnabled get
+--  overridden too.
 -- ============================================================
 G.jumpPowerValue  = 50
 G.jumpPowerActive = false
+local _JP_BIND_NAME = "_F_JumpPowerEnforce"
 local function _jpGetHum()
     local c = lplr.Character
     return c and c:FindFirstChildOfClass("Humanoid")
@@ -244,9 +258,28 @@ local function _jpDesiredHeight()
     -- power 50 ~= height 7.2; mirror the slider in JumpHeight units
     return G.jumpPowerValue / 7
 end
+local function _jpEnforceOnce()
+    if not G.jumpPowerActive then return end
+    local hum = _jpGetHum()
+    if not hum then return end
+    pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end)
+    pcall(function()
+        if hum.UseJumpPower then
+            if hum.JumpPower ~= G.jumpPowerValue then
+                hum.JumpPower = G.jumpPowerValue
+            end
+        else
+            local h = _jpDesiredHeight()
+            if math.abs(hum.JumpHeight - h) > 0.05 then
+                hum.JumpHeight = h
+            end
+        end
+    end)
+end
 local function stopJumpPower()
     G.jumpPowerActive = false
     if G._jpHeartConn then G._jpHeartConn:Disconnect(); G._jpHeartConn = nil end
+    pcall(function() RunService:UnbindFromRenderStep(_JP_BIND_NAME) end)
     local hum = _jpGetHum()
     if hum then
         pcall(function()
@@ -257,25 +290,10 @@ end
 local function startJumpPower()
     G.jumpPowerActive = true
     if G._jpHeartConn then G._jpHeartConn:Disconnect() end
-    G._jpHeartConn = RunService.Heartbeat:Connect(function()
-        if not G.jumpPowerActive then return end
-        local hum = _jpGetHum()
-        if not hum then return end
-        -- 1) keep the Jumping state enabled (cheap; idempotent)
-        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end)
-        -- 2) write JumpPower / JumpHeight only on diff
-        pcall(function()
-            if hum.UseJumpPower then
-                if hum.JumpPower ~= G.jumpPowerValue then
-                    hum.JumpPower = G.jumpPowerValue
-                end
-            else
-                local h = _jpDesiredHeight()
-                if math.abs(hum.JumpHeight - h) > 0.05 then
-                    hum.JumpHeight = h
-                end
-            end
-        end)
+    G._jpHeartConn = RunService.Heartbeat:Connect(_jpEnforceOnce)
+    pcall(function() RunService:UnbindFromRenderStep(_JP_BIND_NAME) end)
+    pcall(function()
+        RunService:BindToRenderStep(_JP_BIND_NAME, Enum.RenderPriority.Last.Value + 1, _jpEnforceOnce)
     end)
 end
 
@@ -2617,8 +2635,14 @@ F.rocketJump = (function()
         local c = lplr.Character
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
-        local cam = workspace.CurrentCamera
-        local fwd = cam.CFrame.LookVector
+        -- Use the CHARACTER's facing direction (HRP.LookVector), not the
+        -- camera's. The camera may be looking down at the player from
+        -- behind/above; we want to launch in the direction the body is
+        -- actually facing. Project to horizontal so a downward camera
+        -- doesn't yank you into the floor.
+        local fwd = hrp.CFrame.LookVector
+        fwd = Vector3.new(fwd.X, 0, fwd.Z)
+        if fwd.Magnitude > 0.01 then fwd = fwd.Unit else fwd = Vector3.zero end
         local dir = fwd * (1 - upBias) + Vector3.new(0, 1, 0) * upBias
         if dir.Magnitude < 0.01 then dir = Vector3.new(0, 1, 0) end
         dir = dir.Unit
