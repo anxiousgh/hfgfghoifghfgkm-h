@@ -1208,8 +1208,13 @@ local function followStop()
     vizClear()
     local c = lplr.Character
     local hum = c and c:FindFirstChildOfClass("Humanoid")
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if hum and hrp then pcall(function() hum:MoveTo(hrp.Position) end) end
+    if hum then
+        -- Move(0) halts the continuous direction set by the worker.
+        -- MoveTo(self) is a belt-and-suspenders stop for any legacy path.
+        pcall(function() hum:Move(Vector3.zero, false) end)
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if hrp then pcall(function() hum:MoveTo(hrp.Position) end) end
+    end
 end
 
 -- helpers for follow worker
@@ -1261,26 +1266,41 @@ local function followPlayer(plr)
     })
 
     -- Worker task: ONE tight loop that recomputes the path every tick
-    -- and steers toward the next waypoint. Keeps running until the
-    -- button is pressed again (which sets _follow.target = nil via
-    -- followStop()). No nested loops — every iteration gets a fresh
-    -- path so the follow tracks the target in real time.
+    -- and steers via Humanoid:Move(direction). Move() applies a
+    -- continuous direction vector that DOESN'T stop on its own (unlike
+    -- MoveTo, which halts the instant a waypoint is reached — that
+    -- was causing the "walk, stop, walk, stop" stutter between ticks).
+    -- The character keeps moving in the last-set direction between
+    -- loop iterations, so the motion is smooth.
     task.spawn(function()
         local target = plr
         while _follow.target == target do
             local hum, hrp = _followGetLocal()
             local thrp     = _followGetTargetHRP()
             if not (hum and hrp and thrp) then
+                if hum then pcall(function() hum:Move(Vector3.zero, false) end) end
                 task.wait(0.1)
                 continue
             end
 
+            local function steerTo(pos, doJump)
+                local dx = pos.X - hrp.Position.X
+                local dz = pos.Z - hrp.Position.Z
+                local flat = Vector3.new(dx, 0, dz)
+                if flat.Magnitude > 0.1 then
+                    pcall(function() hum:Move(flat.Unit, false) end)
+                else
+                    pcall(function() hum:Move(Vector3.zero, false) end)
+                end
+                if doJump then pcall(function() hum.Jump = true end) end
+            end
+
             local dToTarget = (hrp.Position - thrp.Position).Magnitude
 
-            -- Close enough: skip pathfinding, MoveTo directly.
+            -- Close enough: skip pathfinding, steer straight to target.
             if dToTarget < 6 then
-                pcall(function() hum:MoveTo(thrp.Position) end)
-                task.wait(0.1)
+                steerTo(thrp.Position, false)
+                task.wait(0.08)
                 continue
             end
 
@@ -1295,23 +1315,36 @@ local function followPlayer(plr)
                 _follow.idx = 2
                 vizRebuild()
 
-                -- Step toward waypoint 2 (waypoint 1 is our current pos).
-                local wp = _follow.waypoints[2]
-                if wp then
-                    pcall(function() hum:MoveTo(wp.Position) end)
-                    if wp.Action == Enum.PathWaypointAction.Jump then
-                        pcall(function() hum.Jump = true end)
+                -- Steer toward the first waypoint that's >2 studs away
+                -- (skip waypoints we're already standing in, which would
+                -- otherwise produce a near-zero direction vector and a
+                -- visible stutter).
+                local chosen, chosenIdx
+                for i = 2, #_follow.waypoints do
+                    local wp = _follow.waypoints[i]
+                    local dx = wp.Position.X - hrp.Position.X
+                    local dz = wp.Position.Z - hrp.Position.Z
+                    if (dx * dx + dz * dz) > 4 then  -- 2 studs squared
+                        chosen, chosenIdx = wp, i
+                        break
                     end
                 end
+                if chosen then
+                    _follow.idx = chosenIdx
+                    steerTo(chosen.Position, chosen.Action == Enum.PathWaypointAction.Jump)
+                end
             else
-                -- NoPath / failure: still move toward target so we don't freeze.
+                -- NoPath / failure: still steer toward target so we don't freeze.
                 _follow.waypoints = {}
                 vizClear()
-                pcall(function() hum:MoveTo(thrp.Position) end)
+                steerTo(thrp.Position, false)
             end
 
-            task.wait(0.15)  -- loop tick — recompute ~6-7x per second
+            task.wait(0.1)  -- loop tick — recompute ~10x per second
         end
+        -- on exit, halt movement
+        local hum = _followGetLocal()
+        if hum then pcall(function() hum:Move(Vector3.zero, false) end) end
         vizClear()
     end)
 end
