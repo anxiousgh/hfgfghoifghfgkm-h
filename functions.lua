@@ -1060,7 +1060,7 @@ local function vizLine(a, b, color)
     p.Material = Enum.Material.Neon
     p.Color = color
     p.Transparency = 0.4
-    p.Size = Vector3.new(0.15, 0.15, dist)
+    p.Size = Vector3.new(0.3, 0.3, dist)
     p.CFrame = CFrame.new((a + b) * 0.5, b)
     p.Parent = _follow.vizFolder
 end
@@ -1080,7 +1080,7 @@ local function vizRebuild()
         local isJump = wp.Action == Enum.PathWaypointAction.Jump
         local isNext = i == _follow.idx
         local col = isNext and nextCol or (isJump and jumpCol or walkCol)
-        vizDot(wp.Position, col, isNext and 0.9 or 0.55)
+        vizDot(wp.Position, col, isNext and 1.5 or 1.0)
         if i > 1 then
             vizLine(_follow.waypoints[i - 1].Position, wp.Position, col)
         end
@@ -1088,8 +1088,7 @@ local function vizRebuild()
 end
 
 local function followStop()
-    if _follow.conn then _follow.conn:Disconnect(); _follow.conn = nil end
-    _follow.target = nil
+    _follow.target = nil  -- the worker task exits on its next yield
     _follow.waypoints = {}
     _follow.idx = 1
     vizClear()
@@ -1099,9 +1098,41 @@ local function followStop()
     if hum and hrp then pcall(function() hum:MoveTo(hrp.Position) end) end
 end
 
+-- helpers for follow worker
+local function _followGetLocal()
+    local c = lplr.Character
+    if not c then return nil, nil end
+    return c:FindFirstChildOfClass("Humanoid"), c:FindFirstChild("HumanoidRootPart")
+end
+
+local function _followGetTargetHRP()
+    local t = _follow.target
+    if not t or not t.Parent then return nil end
+    local tc = t.Character
+    return tc and tc:FindFirstChild("HumanoidRootPart")
+end
+
+-- Walk to a waypoint: issue MoveTo, then wait until either we get close
+-- enough, the target/our character changes, or we time out (stuck on
+-- geometry). Returns true if we made it, false if the worker should stop.
+local function _followWalkTo(hum, pos, isJump, timeout)
+    if not hum or not hum.Parent then return false end
+    pcall(function() hum:MoveTo(pos) end)
+    if isJump then pcall(function() hum.Jump = true end) end
+    local target = _follow.target
+    local startT = tick()
+    while _follow.target == target do
+        local _, hrp = _followGetLocal()
+        if not hrp then return false end
+        if (hrp.Position - pos).Magnitude < 3 then return true end
+        if tick() - startT > timeout then return true end  -- give up, continue
+        task.wait(0.05)
+    end
+    return false
+end
+
 local function followPlayer(plr)
     if typeof(plr) == "string" then plr = findPlayerByName(plr) end
-    -- clicking follow on the currently-followed player stops it
     if _follow.target == plr then followStop(); return end
     followStop()
     if not plr then return end
@@ -1110,47 +1141,59 @@ local function followPlayer(plr)
         AgentRadius     = 2,
         AgentHeight     = 5,
         AgentCanJump    = true,
-        WaypointSpacing = 4,
+        AgentJumpHeight = 7.2,
+        AgentMaxSlope   = 45,
     })
-    _follow.lastCompute = 0
-    _follow.conn = RunService.Heartbeat:Connect(function()
-        if not _follow.target or not _follow.target.Parent then followStop(); return end
-        local c   = lplr.Character
-        local hum = c and c:FindFirstChildOfClass("Humanoid")
-        local hrp = c and c:FindFirstChild("HumanoidRootPart")
-        local tc  = _follow.target.Character
-        local thrp = tc and tc:FindFirstChild("HumanoidRootPart")
-        if not (hum and hrp and thrp) then return end
 
-        -- recompute path every ~0.6s, or sooner if we've consumed all
-        -- waypoints we had
-        if tick() - _follow.lastCompute > 0.6 or _follow.idx > #_follow.waypoints then
-            _follow.lastCompute = tick()
-            local ok = pcall(function()
+    -- Worker task: recompute path, walk through every waypoint with
+    -- MoveTo + close-enough wait, then loop. Recomputes when the target
+    -- moves significantly between iterations.
+    task.spawn(function()
+        local target = plr
+        while _follow.target == target do
+            local hum, hrp = _followGetLocal()
+            local thrp     = _followGetTargetHRP()
+            if not (hum and hrp and thrp) then task.wait(0.1); continue end
+
+            -- compute
+            local ok, err = pcall(function()
                 _follow.path:ComputeAsync(hrp.Position, thrp.Position)
             end)
-            if ok and _follow.path.Status == Enum.PathStatus.Success then
+            if not ok then warn("[follow] ComputeAsync error:", err) end
+
+            if _follow.path.Status == Enum.PathStatus.Success then
                 _follow.waypoints = _follow.path:GetWaypoints()
                 _follow.idx = 2
-            else
-                _follow.waypoints = {}
-            end
-            vizRebuild()
-        end
+                vizRebuild()
 
-        if _follow.idx <= #_follow.waypoints then
-            local wp = _follow.waypoints[_follow.idx]
-            pcall(function() hum:MoveTo(wp.Position) end)
-            if wp.Action == Enum.PathWaypointAction.Jump then
-                pcall(function() hum.Jump = true end)
+                -- walk each waypoint after the first (which is our pos)
+                local i = 2
+                while i <= #_follow.waypoints and _follow.target == target do
+                    _follow.idx = i
+                    vizRebuild()
+                    local wp = _follow.waypoints[i]
+                    local cont = _followWalkTo(
+                        hum, wp.Position,
+                        wp.Action == Enum.PathWaypointAction.Jump,
+                        2  -- per-waypoint timeout
+                    )
+                    if not cont then break end
+
+                    -- check if target wandered far enough to need a new path
+                    local newThrp = _followGetTargetHRP()
+                    if newThrp and (newThrp.Position - thrp.Position).Magnitude > 8 then
+                        break  -- recompute
+                    end
+                    i = i + 1
+                end
+            else
+                warn("[follow] path Status:", tostring(_follow.path.Status))
+                _follow.waypoints = {}
+                vizClear()
+                task.wait(0.3)
             end
-            if (hrp.Position - wp.Position).Magnitude < 4 then
-                _follow.idx = _follow.idx + 1
-                vizRebuild()  -- update "current waypoint" highlight
-            end
-        else
-            pcall(function() hum:MoveTo(thrp.Position) end)
         end
+        vizClear()
     end)
 end
 
