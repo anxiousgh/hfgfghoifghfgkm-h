@@ -191,108 +191,63 @@ end
 -- ============================================================
 --  WALKSPEED  (real Humanoid.WalkSpeed override with anti-restore)
 -- ============================================================
---  Sets Humanoid.WalkSpeed to a fixed value and re-applies it
---  whenever the game writes a different value to the property
---  (via PropertyChangedSignal). Also re-hooks on CharacterAdded.
---  Default game walkspeed is 16; we treat 16 as "no override" so
---  the game can still vary it freely when we're disabled.
+--  Forces Humanoid.WalkSpeed to a fixed value every Heartbeat. We
+--  only write when the value actually differs so we don't flood
+--  property writes, but we re-check every frame so the game can't
+--  win a single-frame race (which caused visible stutter when we
+--  only listened to PropertyChangedSignal).
+--  Default game walkspeed is 16; stop() restores 16.
 -- ============================================================
-G.walkspeedValue  = 16   -- target walkspeed
+G.walkspeedValue  = 16
 G.walkspeedActive = false
-local _wsConns = {}
-local function _wsClear()
-    for _, c in ipairs(_wsConns) do pcall(function() c:Disconnect() end) end
-    _wsConns = {}
-end
-local function _wsEnforce(hum)
-    if not hum then return end
-    pcall(function()
-        if hum.WalkSpeed ~= G.walkspeedValue then
-            hum.WalkSpeed = G.walkspeedValue
-        end
-    end)
-end
-local function _wsHookChar(char)
-    _wsClear()
-    local hum = char:WaitForChild("Humanoid", 5)
-    if not hum then return end
-    _wsEnforce(hum)
-    table.insert(_wsConns, hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
-        if G.walkspeedActive then _wsEnforce(hum) end
-    end))
+local function _wsGetHum()
+    local c = lplr.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
 end
 local function stopWalkspeed()
     G.walkspeedActive = false
-    _wsClear()
-    if G._wsCharConn then G._wsCharConn:Disconnect(); G._wsCharConn = nil end
-    -- restore game default so the player isn't stuck at last override
-    local c = lplr.Character
-    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    if G._wsHeartConn then G._wsHeartConn:Disconnect(); G._wsHeartConn = nil end
+    local hum = _wsGetHum()
     if hum then pcall(function() hum.WalkSpeed = 16 end) end
 end
 local function startWalkspeed()
     G.walkspeedActive = true
-    if G._wsCharConn then G._wsCharConn:Disconnect() end
-    G._wsCharConn = lplr.CharacterAdded:Connect(function(c)
-        if G.walkspeedActive then _wsHookChar(c) end
+    if G._wsHeartConn then G._wsHeartConn:Disconnect() end
+    -- enforce every frame; cheap because writes only happen on diff
+    G._wsHeartConn = RunService.Heartbeat:Connect(function()
+        if not G.walkspeedActive then return end
+        local hum = _wsGetHum()
+        if not hum then return end
+        if hum.WalkSpeed ~= G.walkspeedValue then
+            pcall(function() hum.WalkSpeed = G.walkspeedValue end)
+        end
     end)
-    if lplr.Character then _wsHookChar(lplr.Character) end
 end
 
 -- ============================================================
 --  JUMPPOWER  (real Humanoid.JumpPower override with anti-restore)
 -- ============================================================
---  Same shape as walkspeed: writes to Humanoid.JumpPower (or
---  JumpHeight if UseJumpPower is false) and re-asserts on every
---  property change the game makes. Combine with Force Jump if
---  the game also disables the jump state.
+--  Same Heartbeat-based shape as walkspeed PLUS re-enables the
+--  Jumping humanoid state every frame. Most games that "lock"
+--  jump don't actually zero JumpPower — they call
+--  SetStateEnabled(Jumping, false). Setting JumpPower alone
+--  doesn't help in that case, so we flip the state back on every
+--  tick. Together this lets you both jump AND control how high.
 -- ============================================================
-G.jumpPowerValue  = 50   -- target jump power
+G.jumpPowerValue  = 50
 G.jumpPowerActive = false
-local _jpConns = {}
-local function _jpClear()
-    for _, c in ipairs(_jpConns) do pcall(function() c:Disconnect() end) end
-    _jpConns = {}
+local function _jpGetHum()
+    local c = lplr.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
 end
-local function _jpEnforce(hum)
-    if not hum then return end
-    pcall(function()
-        if hum.UseJumpPower then
-            if hum.JumpPower ~= G.jumpPowerValue then
-                hum.JumpPower = G.jumpPowerValue
-            end
-        else
-            -- JumpHeight is in studs, not power units; do a rough convert
-            -- (power 50 ~= height 7.2). We just mirror the slider value
-            -- divided by ~7 so the UI feels consistent.
-            local h = G.jumpPowerValue / 7
-            if math.abs(hum.JumpHeight - h) > 0.05 then
-                hum.JumpHeight = h
-            end
-        end
-    end)
-end
-local function _jpHookChar(char)
-    _jpClear()
-    local hum = char:WaitForChild("Humanoid", 5)
-    if not hum then return end
-    _jpEnforce(hum)
-    table.insert(_jpConns, hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
-        if G.jumpPowerActive then _jpEnforce(hum) end
-    end))
-    table.insert(_jpConns, hum:GetPropertyChangedSignal("JumpHeight"):Connect(function()
-        if G.jumpPowerActive then _jpEnforce(hum) end
-    end))
-    table.insert(_jpConns, hum:GetPropertyChangedSignal("UseJumpPower"):Connect(function()
-        if G.jumpPowerActive then _jpEnforce(hum) end
-    end))
+local function _jpDesiredHeight()
+    -- power 50 ~= height 7.2; mirror the slider in JumpHeight units
+    return G.jumpPowerValue / 7
 end
 local function stopJumpPower()
     G.jumpPowerActive = false
-    _jpClear()
-    if G._jpCharConn then G._jpCharConn:Disconnect(); G._jpCharConn = nil end
-    local c = lplr.Character
-    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    if G._jpHeartConn then G._jpHeartConn:Disconnect(); G._jpHeartConn = nil end
+    local hum = _jpGetHum()
     if hum then
         pcall(function()
             if hum.UseJumpPower then hum.JumpPower = 50 else hum.JumpHeight = 7.2 end
@@ -301,11 +256,27 @@ local function stopJumpPower()
 end
 local function startJumpPower()
     G.jumpPowerActive = true
-    if G._jpCharConn then G._jpCharConn:Disconnect() end
-    G._jpCharConn = lplr.CharacterAdded:Connect(function(c)
-        if G.jumpPowerActive then _jpHookChar(c) end
+    if G._jpHeartConn then G._jpHeartConn:Disconnect() end
+    G._jpHeartConn = RunService.Heartbeat:Connect(function()
+        if not G.jumpPowerActive then return end
+        local hum = _jpGetHum()
+        if not hum then return end
+        -- 1) keep the Jumping state enabled (cheap; idempotent)
+        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end)
+        -- 2) write JumpPower / JumpHeight only on diff
+        pcall(function()
+            if hum.UseJumpPower then
+                if hum.JumpPower ~= G.jumpPowerValue then
+                    hum.JumpPower = G.jumpPowerValue
+                end
+            else
+                local h = _jpDesiredHeight()
+                if math.abs(hum.JumpHeight - h) > 0.05 then
+                    hum.JumpHeight = h
+                end
+            end
+        end)
     end)
-    if lplr.Character then _jpHookChar(lplr.Character) end
 end
 
 -- ============================================================
