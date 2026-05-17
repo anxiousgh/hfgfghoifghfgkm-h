@@ -111,10 +111,6 @@ do
         Callback = F.aimbot.setVisibleCheck })
     Aim:AddToggle("StrictVisCheck", { Text = "Strict visible check (block see-through)",
         Default = false,
-        Tooltip = "Affects aimbot, triggerbot, and camlock. When ON, ANY "
-            .. "wall blocks the visible check - including transparent / "
-            .. "see-through / no-collide / no-shadow parts. Default (OFF) "
-            .. "skips those so decorative geometry doesn't count as cover.",
         Callback = F.utils.setStrictVisibleCheck })
     Aim:AddToggle("AimClosestPart", { Text = "Closest bodypart", Default = F.aimbot.settings.ClosestPart,
         Callback = F.aimbot.setClosestPart })
@@ -287,16 +283,9 @@ do
         Values  = { "Closest", "Mouse", "Camera", "LowestHP", "HighestThreat" },
         Default = "Closest",
         Text    = "Target priority",
-        Tooltip = "How rbGetTarget scores candidates:\n"
-            .. "Closest = world distance from your HRP\n"
-            .. "Mouse = screen distance from cursor\n"
-            .. "Camera = smallest angle from camera lookvector\n"
-            .. "LowestHP = lowest HP first (finish off weak)\n"
-            .. "HighestThreat = close + holding a tool",
         Callback = F.ragebot.setPriority,
     })
     Tgt:AddToggle("RageSwitchByMouse", { Text = "Switch by mouse (legacy)",
-        Tooltip = "Equivalent to Priority=Mouse when on. Kept for old configs.",
         Default = F.ragebot.settings.SwitchByMouse, Callback = F.ragebot.setSwitchByMouse })
     Tgt:AddToggle("RageShowLine",      { Text = "Show target line",
         Default = F.ragebot.settings.ShowLine,    Callback = F.ragebot.setShowLine })
@@ -749,11 +738,6 @@ do
     Move:AddToggle("InfJump",    { Text = "Infinite jump", Default = false,
         Callback = function(v) if v then F.infJump.start() else F.infJump.stop() end end })
     Move:AddToggle("ForceJump",  { Text = "Force enable jump", Default = false,
-        Tooltip = "Defeats games that limit or disable jumping (3-jumps-"
-            .. "then-cooldown, jump-disabled-while-tagged, etc.). On Space "
-            .. "press: re-enables the Humanoid Jumping state, restores "
-            .. "JumpPower/JumpHeight if zeroed, then writes Humanoid.Jump "
-            .. "= true directly - bypassing any client-side counter.",
         Callback = function(v) if v then F.forceJump.start() else F.forceJump.stop() end end })
     Move:AddToggle("AntiAfk",    { Text = "Anti-AFK",      Default = false,
         Callback = function(v) if v then F.antiAfk.start() else F.antiAfk.stop() end end })
@@ -778,9 +762,6 @@ do
     -- button + tuning sliders are over in the right Extras groupbox.
     Move:AddToggle("RocketJump", {
         Text = "Rocket jump (on jump)",
-        Tooltip = "While on, every actual JUMP gets a forward+up velocity "
-            .. "blast on top of the normal jump impulse. Holding Space "
-            .. "doesn't repeat - fires once per Humanoid.Jump event.",
         Default = false,
         Callback = function(v)
             if v then F.rocketJump.start() else F.rocketJump.stop() end
@@ -810,23 +791,18 @@ do
 
     Extras:AddToggle("Flip", { Text = "Upside down (180° X)",
         Default = false,
-        Tooltip = "Server sees HRP rotated 180° on X (head down). Locally upright.",
         Callback = function(v)
             if v then selectOrient("Flip"); F.flip.start() else F.flip.stop() end
         end,
     })
     Extras:AddToggle("Tilt", { Text = "Tilt sideways (90° Z)",
         Default = false,
-        Tooltip = "Server sees HRP tilted 90° on Z (lying sideways). Locally upright.",
         Callback = function(v)
             if v then selectOrient("Tilt"); F.tilt.start() else F.tilt.stop() end
         end,
     })
     Extras:AddToggle("Backwards", { Text = "Face backwards (180° Y)",
         Default = false,
-        Tooltip = "Server sees HRP yaw flipped 180°. Acts as anti-aim: "
-            .. "enemies' aimbot points at the back of our head while "
-            .. "locally we face the other way.",
         Callback = function(v)
             if v then selectOrient("Backwards"); F.backwards.start() else F.backwards.stop() end
         end,
@@ -848,14 +824,11 @@ do
     Extras:AddButton({ Text = "Rocket jump", Func = F.rocketJump.fire })
     Extras:AddSlider("RocketJumpForce", {
         Text = "Rocket force",
-        Tooltip = "Impulse magnitude (studs/sec) added to HRP velocity.",
         Default = 200, Min = 50, Max = 2000, Rounding = 0,
         Callback = function(v) F.rocketJump.setForce(v) end,
     })
     Extras:AddSlider("RocketJumpUpBias", {
         Text = "Rocket up bias",
-        Tooltip = "0 = pure forward (camera direction), 1 = straight up. "
-            .. "Default 0.4 = mostly forward with some lift.",
         Default = 0.4, Min = 0, Max = 1, Rounding = 2,
         Callback = function(v) F.rocketJump.setUpBias(v) end,
     })
@@ -886,9 +859,6 @@ do
 
     Desync:AddToggle("DesyncVoid", { Text = "Void desync",
         Default = false,
-        Tooltip = "HRP teleports to a random point in the configured "
-            .. "stud range every Heartbeat. Server can't hit you. "
-            .. "Locally restored before render so view stays normal.",
         Callback = function(v)
             if v then selectMode("DesyncVoid"); F.desync.startVoid()
             else      F.desync.stop() end
@@ -896,10 +866,6 @@ do
     })
     Desync:AddToggle("DesyncSky", { Text = "Sky desync",
         Default = false,
-        Tooltip = "Pushes HRP up by Sky height each Heartbeat (X/Z and "
-            .. "rotation preserved). Server sees us floating above our "
-            .. "real position. Locally restored before render. Pair this "
-            .. "with the Sky height slider to tune how far up.",
         Callback = function(v)
             if v then selectMode("DesyncSky"); F.desync.startSky()
             else      F.desync.stop() end
@@ -907,9 +873,6 @@ do
     })
     Desync:AddToggle("DesyncSpin", { Text = "Spin desync",
         Default = false,
-        Tooltip = "HRP rotation churns wildly each Heartbeat (random "
-            .. "Euler). Position untouched. Confuses server-side aim "
-            .. "prediction without a void jump.",
         Callback = function(v)
             if v then selectMode("DesyncSpin"); F.desync.startSpin()
             else      F.desync.stop() end
@@ -917,10 +880,6 @@ do
     })
     Desync:AddToggle("DesyncVelocity", { Text = "Velocity desync",
         Default = false,
-        Tooltip = "Sets HRP AssemblyLinearVelocity to ~16384 each "
-            .. "Heartbeat, restored locally. Server thinks we're moving "
-            .. "at impossible speed -> backtrack rejection on shooters "
-            .. "trying to lead us. CFrame stays put so we don't fly.",
         Callback = function(v)
             if v then selectMode("DesyncVelocity"); F.desync.startVelocity()
             else      F.desync.stop() end
@@ -932,11 +891,6 @@ do
     -- on toggle-on (some executors expose raknet after script load).
     Desync:AddToggle("DesyncRaknet", { Text = "Raknet desync",
         Default = false,
-        Tooltip = "Hooks outbound physics packet 0x1B and corrupts the "
-            .. "timestamp/sequence field. Server can't reconcile our "
-            .. "position. Pure network-layer trick - no local CFrame "
-            .. "writes, no Heartbeat loop, no freeze risk. Requires "
-            .. "the executor to expose the `raknet` API.",
         Callback = function(v)
             if v then
                 selectMode("DesyncRaknet")
@@ -972,23 +926,16 @@ do
 
     Desync:AddSlider("DesyncSpinSpeed", {
         Text     = "Spin speed (deg/frame)",
-        Tooltip  = "Spin desync only - how many degrees the angle "
-            .. "increments each Heartbeat. Higher = faster rotation churn.",
         Default  = 47, Min = 1, Max = 360, Rounding = 0,
         Callback = function(v) F.desync.setSpinSpeed(v) end,
     })
     Desync:AddSlider("DesyncVelocityMag", {
         Text     = "Velocity magnitude",
-        Tooltip  = "Velocity desync only - magnitude of the spoofed "
-            .. "AssemblyLinearVelocity. 16384 is the classic backtrack-"
-            .. "trip value; lower = subtler, higher = more aggressive.",
         Default  = 16384, Min = 100, Max = 100000, Rounding = 0,
         Callback = function(v) F.desync.setVelocityMag(v) end,
     })
     Desync:AddSlider("DesyncSkyHeight", {
         Text     = "Sky height",
-        Tooltip  = "Sky desync only - studs above the real position to "
-            .. "push HRP server-side.",
         Default  = 5000, Min = 50, Max = 100000, Rounding = 0,
         Callback = function(v) F.desync.setSkyHeight(v) end,
     })
@@ -1053,9 +1000,6 @@ do
 
     P:AddToggle("FollowVisualize", { Text = "Visualize follow path",
         Default = true,
-        Tooltip = "Spawns neon spheres at each pathfinding waypoint + "
-            .. "lines connecting them. Blue = walk, orange = jump, green "
-            .. "= current next waypoint.",
         Callback = function(v) F.players.setFollowVisualize(v) end,
     })
 
@@ -1200,11 +1144,6 @@ do
     local AntiFling = Tabs.Misc:AddLeftGroupbox("Anti-fling")
     AntiFling:AddToggle("AntiFling", { Text = "Enable",
         Default = false,
-        Tooltip = "Caps HRP + torso/head linear+angular velocity each "
-            .. "Heartbeat. Real flings push velocity to 1e6+ stud/sec; "
-            .. "anything above the cap gets reset to zero before physics "
-            .. "applies it. Default cap (5000) is generous enough not to "
-            .. "fight fly/speed/blink.",
         Callback = function(v)
             if v then F.antiFling.start() else F.antiFling.stop() end
         end,
@@ -1219,11 +1158,6 @@ do
     local ForceChat = Tabs.Misc:AddLeftGroupbox("Force chat")
     ForceChat:AddToggle("ForceChat", { Text = "Re-enable chat",
         Default = false,
-        Tooltip = "Force Roblox's chat back on for games that hide it. "
-            .. "Sets CoreGuiType.Chat = true and re-enables every "
-            .. "ChatWindowConfiguration / ChatInputBarConfiguration / "
-            .. "BubbleChatConfiguration under TextChatService. Re-applies "
-            .. "every 2s so the game can't sneakily disable it again.",
         Callback = function(v)
             if v then F.forceChat.start() else F.forceChat.stop() end
         end,
@@ -1233,8 +1167,6 @@ do
     local Prompts = Tabs.Misc:AddLeftGroupbox("Proximity prompts")
     Prompts:AddToggle("PromptInstantActivation", { Text = "Instant activation",
         Default = false,
-        Tooltip = "Sets HoldDuration=0 on every ProximityPrompt. Press "
-            .. "the prompt key once and it fires - no holding required.",
         Callback = function(v)
             if v then F.prompts.instantActivation.start()
             else      F.prompts.instantActivation.stop() end
@@ -1242,10 +1174,6 @@ do
     })
     Prompts:AddToggle("PromptUnlimitedRange", { Text = "Unlimited range",
         Default = false,
-        Tooltip = "Sets MaxActivationDistance=huge on every "
-            .. "ProximityPrompt. Original distance is restored when "
-            .. "the toggle turns off (stashed as an attribute on the "
-            .. "prompt the first time we see it).",
         Callback = function(v)
             if v then F.prompts.unlimitedRange.start()
             else      F.prompts.unlimitedRange.stop() end
@@ -1253,9 +1181,6 @@ do
     })
     Prompts:AddToggle("PromptThroughWalls", { Text = "Through walls",
         Default = false,
-        Tooltip = "Sets RequiresLineOfSight=false on every "
-            .. "ProximityPrompt so it triggers even if there's "
-            .. "geometry in the way. Original value restored on stop.",
         Callback = function(v)
             if v then F.prompts.throughWalls.start()
             else      F.prompts.throughWalls.stop() end
@@ -1263,9 +1188,6 @@ do
     })
     Prompts:AddToggle("PromptAutoFire", { Text = "Auto-fire",
         Default = false,
-        Tooltip = "Fires every ProximityPrompt the moment it becomes "
-            .. "visible - no input needed. Requires the executor to "
-            .. "expose fireproximityprompt.",
         Callback = function(v)
             if v then F.prompts.autoFire.start()
             else      F.prompts.autoFire.stop() end
@@ -1367,18 +1289,11 @@ do
     HC:AddLabel("Ragebot")
     HC:AddToggle("RageSkipKnocked", {
         Text = "Skip knocked targets",
-        Tooltip = "Auto-shoot won't fire at K.O'd targets, but the "
-            .. "ragebot still keeps them locked / visualized.",
         Default = false,
         Callback = F.ragebot.setSkipKnocked,
     })
     HC:AddToggle("RageIgnoreKnocked", {
         Text = "Ignore knocked targets",
-        Tooltip = "Stronger than Skip knocked: knocked players are "
-            .. "filtered out of target SELECTION entirely. The ragebot "
-            .. "never locks onto them in the first place - useful so the "
-            .. "lock auto-switches to the next live target instead of "
-            .. "sticking on someone who's down.",
         Default = false,
         Callback = F.ragebot.setIgnoreKnocked,
     })
@@ -1515,10 +1430,6 @@ do
     HC:AddLabel("Force Hit (shotgun support WIP)")
     HC:AddToggle("HCForceHit", { Text = "Enable",
         Default = false,
-        Tooltip = "Hooks the ragebot's auto-shoot. While AutoShoot is on and "
-            .. "the ragebot has a target locked, every fire goes through a "
-            .. "synthetic Shoot remote instead of a click. Single-fire = forced "
-            .. "hit. Shotguns fall back to click (silent aim handles redirect).",
         Callback = function(v)
             if v then F.games.hoodCustoms.forceHit.start()
             else      F.games.hoodCustoms.forceHit.stop() end
@@ -1537,19 +1448,12 @@ do
     })
     HC:AddDropdown("HCForceHitShotgunMode", {
         Text     = "Shotgun mode",
-        Tooltip  = "click = fire the gun natively (silent aim handles aim, "
-            .. "no PRNG kick). synth = synthesize a 2-section payload at "
-            .. "the target (still WIP, often kicks for pattern spoof).",
         Values   = { "click", "synth" },
         Default  = "click",
         Callback = function(v) F.games.hoodCustoms.forceHit.setShotgunMode(v) end,
     })
     HC:AddSlider("HCForceHitFireMult", {
         Text     = "Shoot count (per fire)",
-        Tooltip  = "How many times to fire the shoot payload back-to-back "
-            .. "per autoshoot tick. 1 = normal. 3 means a 5-pellet shotgun "
-            .. "blast counts as 15 hits if the server doesn't dedupe. "
-            .. "Higher values can trip rate-limit anti-cheat - tune carefully.",
         Default  = 1, Min = 1, Max = 10, Rounding = 0,
         Callback = function(v) F.games.hoodCustoms.forceHit.setFireMultiplier(v) end,
     })
@@ -1613,11 +1517,6 @@ do
     HC:AddLabel("Voidspam (HC-only desync)")
     HC:AddToggle("HCVoidspam", { Text = "Voidspam (sync on shoot)",
         Default = false,
-        Tooltip = "Server-side void desync that releases the spoof for "
-            .. "~100ms when your MainEvent('Shoot') fires - so shots "
-            .. "land at your real position. HC-specific because it hooks "
-            .. "that remote. Mutually exclusive with the Movement-tab "
-            .. "desync modes.",
         Callback = function(v)
             if v then
                 local sel = getgenv()._F_DESYNC_SELECT
