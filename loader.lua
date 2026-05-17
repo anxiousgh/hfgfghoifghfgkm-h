@@ -283,7 +283,28 @@ do
         Callback = F.ragebot.setSilentMethod,
     })
 
-    Tgt:AddToggle("RageSwitchByMouse", { Text = "Switch by mouse",
+    Tgt:AddDropdown("RagePriority", {
+        Values  = { "Closest", "Mouse", "Camera", "LowestHP", "HighestThreat", "RecentDamager" },
+        Default = "Closest",
+        Text    = "Target priority",
+        Tooltip = "How rbGetTarget scores candidates:\n"
+            .. "Closest = world distance from your HRP\n"
+            .. "Mouse = screen distance from cursor\n"
+            .. "Camera = smallest angle from camera lookvector\n"
+            .. "LowestHP = lowest HP first (finish off weak)\n"
+            .. "HighestThreat = close + holding a tool\n"
+            .. "RecentDamager = whoever hit you most recently",
+        Callback = F.ragebot.setPriority,
+    })
+    Tgt:AddSlider("RageDamagerWindow", {
+        Text    = "Recent damager window (s)",
+        Tooltip = "Only used by the RecentDamager priority - how far back "
+            .. "to remember damagers.",
+        Default = 10, Min = 1, Max = 120, Rounding = 0,
+        Callback = F.ragebot.setRecentDamagerWindow,
+    })
+    Tgt:AddToggle("RageSwitchByMouse", { Text = "Switch by mouse (legacy)",
+        Tooltip = "Equivalent to Priority=Mouse when on. Kept for old configs.",
         Default = F.ragebot.settings.SwitchByMouse, Callback = F.ragebot.setSwitchByMouse })
     Tgt:AddToggle("RageShowLine",      { Text = "Show target line",
         Default = F.ragebot.settings.ShowLine,    Callback = F.ragebot.setShowLine })
@@ -448,17 +469,11 @@ do
             if v then F.autoEquip.start() else F.autoEquip.stop() end
         end })
 
-    -- auto-refresh tool list when backpack changes / on respawn
-    local function hookBackpack(bp)
-        if not bp then return end
-        bp.ChildAdded:Connect(function() task.defer(refreshToolList) end)
-        bp.ChildRemoved:Connect(function() task.defer(refreshToolList) end)
-    end
-    hookBackpack(LocalPlayer:FindFirstChildOfClass("Backpack"))
-    LocalPlayer.ChildAdded:Connect(function(c)
-        if c:IsA("Backpack") then hookBackpack(c) end
-    end)
-    LocalPlayer.CharacterAdded:Connect(function() task.wait(0.5); pcall(refreshToolList) end)
+    -- One-shot initial population only. We DO NOT auto-refresh on
+    -- backpack changes or respawn anymore - that was clobbering the
+    -- user's pick every death (tools clear and re-add to Backpack,
+    -- the dropdown would reset to the first alphabetical tool).
+    -- User has to press "Refresh tool list" to update.
     task.defer(refreshToolList)
 end
 

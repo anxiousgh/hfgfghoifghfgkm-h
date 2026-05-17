@@ -87,6 +87,15 @@ local RageSettings = {
     CamSnap=false, CamSmoothing=0.15,
     AutoSwitch=true, NotifyTarget=true,
     SwitchByMouse=false,
+    -- Priority mode for rbGetTarget. One of:
+    --   "Closest"         - world distance from local HRP (default)
+    --   "Mouse"           - screen distance from cursor
+    --   "Camera"          - smallest angle from camera lookvector
+    --   "LowestHP"        - lowest Humanoid.Health first
+    --   "HighestThreat"   - close + holding a tool first
+    --   "RecentDamager"   - whoever damaged you most recently
+    Priority="Closest",
+    RecentDamagerWindow=10,  -- seconds; damagers older than this aren't considered
 }
 
 local EspSettings = {
@@ -1519,14 +1528,51 @@ local function rbIgnoreByKnocked(plr)
     return ok and knocked
 end
 
+-- recent-damagers table, populated by F.damage.onDamaged hook below
+-- {[userId] = tick() when last damaged}
+local _rbRecentDamagers = {}
+
+-- score a candidate target for a priority mode. lower = better.
+-- returns math.huge to exclude the candidate from selection.
+local function rbScoreTarget(plr, char, hrp, hum, lhrp, cam, mousePos, camPos, camLook)
+    local mode = RageSettings.Priority or "Closest"
+    if RageSettings.SwitchByMouse and mode == "Closest" then mode = "Mouse" end
+    if mode == "Mouse" then
+        local sp, onScreen = cam:WorldToViewportPoint(hrp.Position)
+        if not onScreen then return math.huge end
+        return (mousePos - Vector2.new(sp.X, sp.Y)).Magnitude
+    elseif mode == "Camera" then
+        local toTarget = (hrp.Position - camPos).Unit
+        local dotV = toTarget:Dot(camLook)
+        if dotV <= 0 then return math.huge end  -- behind us
+        return 1 - dotV  -- closer to 0 = more directly in front
+    elseif mode == "LowestHP" then
+        return hum.Health
+    elseif mode == "HighestThreat" then
+        -- threat = closeness + tool drawn. lower distance + tool out = best.
+        local d = lhrp and (lhrp.Position - hrp.Position).Magnitude or math.huge
+        local hasTool = char:FindFirstChildOfClass("Tool") ~= nil
+        return d + (hasTool and 0 or 1000)
+    elseif mode == "RecentDamager" then
+        local t = _rbRecentDamagers[plr.UserId]
+        if not t then return math.huge end
+        local age = tick() - t
+        if age > (RageSettings.RecentDamagerWindow or 10) then return math.huge end
+        return age  -- more recent = lower score
+    end
+    -- Closest (default fallback)
+    return lhrp and (lhrp.Position - hrp.Position).Magnitude or math.huge
+end
+
 local function rbGetTarget()
     if #_rbTargetList > 0 then
         local lchar=lplr.Character
         local lhrp=lchar and lchar:FindFirstChild("HumanoidRootPart")
-        local useMouse=RageSettings.SwitchByMouse
-        local cam=useMouse and workspace.CurrentCamera or nil
-        local mousePos=useMouse and UserInputService:GetMouseLocation() or nil
-        local best,bestDist=nil,math.huge
+        local cam = workspace.CurrentCamera
+        local mousePos = UserInputService:GetMouseLocation()
+        local camCF = cam.CFrame
+        local camPos, camLook = camCF.Position, camCF.LookVector
+        local best, bestScore = nil, math.huge
         for _,entry in ipairs(_rbTargetList) do
             if not entry.plr or not entry.plr.Parent then
                 for _,p in ipairs(plrs:GetPlayers()) do
@@ -1538,15 +1584,8 @@ local function rbGetTarget()
             if not hrp then continue end
             local hum=char:FindFirstChildOfClass("Humanoid"); if not hum or hum.Health<=0 then continue end
             if rbIgnoreByKnocked(plr) then continue end
-            local dist
-            if useMouse then
-                local sp,onScreen=cam:WorldToViewportPoint(hrp.Position)
-                if not onScreen then continue end
-                dist=(mousePos-Vector2.new(sp.X,sp.Y)).Magnitude
-            else
-                dist=lhrp and (lhrp.Position-hrp.Position).Magnitude or math.huge
-            end
-            if dist<bestDist then bestDist=dist; best=plr end
+            local score = rbScoreTarget(plr, char, hrp, hum, lhrp, cam, mousePos, camPos, camLook)
+            if score < bestScore then bestScore = score; best = plr end
         end
         if best then RageSettings.TargetPlayer=best; RageSettings.TargetUserId=best.UserId; return best end
     end
@@ -2280,6 +2319,15 @@ F.ragebot = {
     setCamSmoothing  = function(n) RageSettings.CamSmoothing = math.clamp(tonumber(n) or 0.15, 0.01, 0.99) end,
     setSpeedPanic    = function(b) RageSettings.SpeedPanic = b == true end,
     setSwitchByMouse = function(b) RageSettings.SwitchByMouse = b == true end,
+    setPriority = function(s)
+        local valid = { Closest=true, Mouse=true, Camera=true,
+                        LowestHP=true, HighestThreat=true, RecentDamager=true }
+        if valid[s] then RageSettings.Priority = s end
+    end,
+    getPriority = function() return RageSettings.Priority end,
+    setRecentDamagerWindow = function(n)
+        RageSettings.RecentDamagerWindow = math.clamp(tonumber(n) or 10, 1, 120)
+    end,
     getTarget        = function() return RageSettings.TargetPlayer end,
     getTargetList    = function()
         local out = {}
@@ -2820,6 +2868,13 @@ lplr.CharacterAdded:Connect(_watchDamage)
 F.damage = {
     onDamaged = function(fn) table.insert(_damageCallbacks, fn) end,
 }
+
+-- feed the ragebot's RecentDamager priority list
+table.insert(_damageCallbacks, function(attacker)
+    if attacker and attacker.UserId then
+        _rbRecentDamagers[attacker.UserId] = tick()
+    end
+end)
 
 -- ============================================================
 --  RAGEBOT: TP-SHOOT
