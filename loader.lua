@@ -284,7 +284,7 @@ do
     })
 
     Tgt:AddDropdown("RagePriority", {
-        Values  = { "Closest", "Mouse", "Camera", "LowestHP", "HighestThreat", "RecentDamager" },
+        Values  = { "Closest", "Mouse", "Camera", "LowestHP", "HighestThreat" },
         Default = "Closest",
         Text    = "Target priority",
         Tooltip = "How rbGetTarget scores candidates:\n"
@@ -292,16 +292,8 @@ do
             .. "Mouse = screen distance from cursor\n"
             .. "Camera = smallest angle from camera lookvector\n"
             .. "LowestHP = lowest HP first (finish off weak)\n"
-            .. "HighestThreat = close + holding a tool\n"
-            .. "RecentDamager = whoever hit you most recently",
+            .. "HighestThreat = close + holding a tool",
         Callback = F.ragebot.setPriority,
-    })
-    Tgt:AddSlider("RageDamagerWindow", {
-        Text    = "Recent damager window (s)",
-        Tooltip = "Only used by the RecentDamager priority - how far back "
-            .. "to remember damagers.",
-        Default = 10, Min = 1, Max = 120, Rounding = 0,
-        Callback = F.ragebot.setRecentDamagerWindow,
     })
     Tgt:AddToggle("RageSwitchByMouse", { Text = "Switch by mouse (legacy)",
         Tooltip = "Equivalent to Priority=Mouse when on. Kept for old configs.",
@@ -1047,6 +1039,16 @@ do
         if not _selected then Library:Notify("No player selected", 2); return end
         F.players.fling(_selected)
         Library:Notify("Flinging " .. _selected.Name, 3)
+    end })
+    :AddButton({ Text = "Follow", Func = function()
+        if not _selected then Library:Notify("No player selected", 2); return end
+        local already = F.players.isFollowing()
+        F.players.follow(_selected)
+        if already == _selected then
+            Library:Notify("Stopped following " .. _selected.Name, 2)
+        else
+            Library:Notify("Following " .. _selected.Name, 2)
+        end
     end })
 
     P:AddDivider()

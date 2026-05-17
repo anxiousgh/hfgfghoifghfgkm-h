@@ -93,9 +93,7 @@ local RageSettings = {
     --   "Camera"          - smallest angle from camera lookvector
     --   "LowestHP"        - lowest Humanoid.Health first
     --   "HighestThreat"   - close + holding a tool first
-    --   "RecentDamager"   - whoever damaged you most recently
     Priority="Closest",
-    RecentDamagerWindow=10,  -- seconds; damagers older than this aren't considered
 }
 
 local EspSettings = {
@@ -1021,6 +1019,82 @@ local function flingPlayer(plr)
 end
 
 -- ============================================================
+--  FOLLOW PLAYER (pathfinding)
+--  Continuously walks toward the target using PathfindingService.
+--  Click to start, click again on the same target to stop.
+-- ============================================================
+local _PathfindingService = game:GetService("PathfindingService")
+local _follow = { target = nil, conn = nil, path = nil, waypoints = {}, idx = 1, lastCompute = 0 }
+
+local function followStop()
+    if _follow.conn then _follow.conn:Disconnect(); _follow.conn = nil end
+    _follow.target = nil
+    _follow.waypoints = {}
+    _follow.idx = 1
+    local c = lplr.Character
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    -- park the humanoid where it stands so it stops sliding toward the
+    -- last waypoint after we disconnect.
+    if hum and hrp then pcall(function() hum:MoveTo(hrp.Position) end) end
+end
+
+local function followPlayer(plr)
+    if typeof(plr) == "string" then plr = findPlayerByName(plr) end
+    -- clicking follow on the currently-followed player stops it
+    if _follow.target == plr then followStop(); return end
+    followStop()
+    if not plr then return end
+    _follow.target = plr
+    _follow.path = _PathfindingService:CreatePath({
+        AgentRadius     = 2,
+        AgentHeight     = 5,
+        AgentCanJump    = true,
+        WaypointSpacing = 4,
+    })
+    _follow.lastCompute = 0
+    _follow.conn = RunService.Heartbeat:Connect(function()
+        if not _follow.target or not _follow.target.Parent then followStop(); return end
+        local c   = lplr.Character
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        local tc  = _follow.target.Character
+        local thrp = tc and tc:FindFirstChild("HumanoidRootPart")
+        if not (hum and hrp and thrp) then return end
+
+        -- recompute path every ~0.6s, or sooner if we've consumed all
+        -- waypoints we had
+        if tick() - _follow.lastCompute > 0.6 or _follow.idx > #_follow.waypoints then
+            _follow.lastCompute = tick()
+            local ok = pcall(function()
+                _follow.path:ComputeAsync(hrp.Position, thrp.Position)
+            end)
+            if ok and _follow.path.Status == Enum.PathStatus.Success then
+                _follow.waypoints = _follow.path:GetWaypoints()
+                _follow.idx = 2  -- skip waypoint[1] = current position
+            else
+                _follow.waypoints = {}
+            end
+        end
+
+        if _follow.idx <= #_follow.waypoints then
+            local wp = _follow.waypoints[_follow.idx]
+            pcall(function() hum:MoveTo(wp.Position) end)
+            if wp.Action == Enum.PathWaypointAction.Jump then
+                pcall(function() hum.Jump = true end)
+            end
+            if (hrp.Position - wp.Position).Magnitude < 4 then
+                _follow.idx = _follow.idx + 1
+            end
+        else
+            -- no path computed (e.g. target unreachable). Walk straight at
+            -- them as a fallback so we at least try.
+            pcall(function() hum:MoveTo(thrp.Position) end)
+        end
+    end)
+end
+
+-- ============================================================
 --  AIMBOT CORE (drawing + closest target finder + namecall hook)
 -- ============================================================
 local A_fovCircle, A_targetBox
@@ -1528,10 +1602,6 @@ local function rbIgnoreByKnocked(plr)
     return ok and knocked
 end
 
--- recent-damagers table, populated by F.damage.onDamaged hook below
--- {[userId] = tick() when last damaged}
-local _rbRecentDamagers = {}
-
 -- score a candidate target for a priority mode. lower = better.
 -- returns math.huge to exclude the candidate from selection.
 local function rbScoreTarget(plr, char, hrp, hum, lhrp, cam, mousePos, camPos, camLook)
@@ -1553,12 +1623,6 @@ local function rbScoreTarget(plr, char, hrp, hum, lhrp, cam, mousePos, camPos, c
         local d = lhrp and (lhrp.Position - hrp.Position).Magnitude or math.huge
         local hasTool = char:FindFirstChildOfClass("Tool") ~= nil
         return d + (hasTool and 0 or 1000)
-    elseif mode == "RecentDamager" then
-        local t = _rbRecentDamagers[plr.UserId]
-        if not t then return math.huge end
-        local age = tick() - t
-        if age > (RageSettings.RecentDamagerWindow or 10) then return math.huge end
-        return age  -- more recent = lower score
     end
     -- Closest (default fallback)
     return lhrp and (lhrp.Position - hrp.Position).Magnitude or math.huge
@@ -2321,13 +2385,10 @@ F.ragebot = {
     setSwitchByMouse = function(b) RageSettings.SwitchByMouse = b == true end,
     setPriority = function(s)
         local valid = { Closest=true, Mouse=true, Camera=true,
-                        LowestHP=true, HighestThreat=true, RecentDamager=true }
+                        LowestHP=true, HighestThreat=true }
         if valid[s] then RageSettings.Priority = s end
     end,
     getPriority = function() return RageSettings.Priority end,
-    setRecentDamagerWindow = function(n)
-        RageSettings.RecentDamagerWindow = math.clamp(tonumber(n) or 10, 1, 120)
-    end,
     getTarget        = function() return RageSettings.TargetPlayer end,
     getTargetList    = function()
         local out = {}
@@ -2376,11 +2437,14 @@ F.esp = {
 
 -- players
 F.players = {
-    list  = function() return plrs:GetPlayers() end,
-    find  = findPlayerByName,
-    goto  = gotoPlayer,
-    view  = viewPlayer,
-    fling = flingPlayer,
+    list   = function() return plrs:GetPlayers() end,
+    find   = findPlayerByName,
+    goto   = gotoPlayer,
+    view   = viewPlayer,
+    fling  = flingPlayer,
+    follow = followPlayer,
+    followStop = followStop,
+    isFollowing = function() return _follow.target end,
 }
 
 -- utility helpers (exposed for advanced users)
@@ -2868,13 +2932,6 @@ lplr.CharacterAdded:Connect(_watchDamage)
 F.damage = {
     onDamaged = function(fn) table.insert(_damageCallbacks, fn) end,
 }
-
--- feed the ragebot's RecentDamager priority list
-table.insert(_damageCallbacks, function(attacker)
-    if attacker and attacker.UserId then
-        _rbRecentDamagers[attacker.UserId] = tick()
-    end
-end)
 
 -- ============================================================
 --  RAGEBOT: TP-SHOOT
