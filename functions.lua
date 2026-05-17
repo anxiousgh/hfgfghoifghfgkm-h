@@ -106,6 +106,10 @@ local rawRaycast = workspace.Raycast
 local _visParams = RaycastParams.new()
 _visParams.FilterType = Enum.RaycastFilterType.Exclude
 
+-- when strict, any raycast hit blocks visibility (even see-through /
+-- no-collide / no-shadow parts). Default false matches the old "smart"
+-- behavior that ignored decorative geometry.
+local _visStrict = false
 local function isReallyVisible(fromPos, toPos, ignoreList)
     local dir = toPos - fromPos
     local dist = dir.Magnitude
@@ -118,6 +122,7 @@ local function isReallyVisible(fromPos, toPos, ignoreList)
         if remaining <= 0 then break end
         local result = rawRaycast(workspace, origin, unit * remaining, _visParams)
         if not result then return true end
+        if _visStrict then return false end
         local hit = result.Instance
         if hit.Transparency >= 0.5 or not hit.CanCollide or hit.CastShadow == false then
             local stepped = (result.Position - origin).Magnitude + 0.05
@@ -2333,6 +2338,8 @@ F.players = {
 -- utility helpers (exposed for advanced users)
 F.utils = {
     isReallyVisible = isReallyVisible,
+    setStrictVisibleCheck = function(v) _visStrict = v == true end,
+    getStrictVisibleCheck = function() return _visStrict end,
     findClosestPlayer = function(opts)
         opts = opts or {}
         local cam = workspace.CurrentCamera

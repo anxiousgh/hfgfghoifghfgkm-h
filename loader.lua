@@ -109,6 +109,13 @@ do
         Callback = F.aimbot.setTeamCheck })
     Aim:AddToggle("AimVisCheck", { Text = "Visible check", Default = F.aimbot.settings.VisibleCheck,
         Callback = F.aimbot.setVisibleCheck })
+    Aim:AddToggle("StrictVisCheck", { Text = "Strict visible check (block see-through)",
+        Default = false,
+        Tooltip = "Affects aimbot, triggerbot, and camlock. When ON, ANY "
+            .. "wall blocks the visible check - including transparent / "
+            .. "see-through / no-collide / no-shadow parts. Default (OFF) "
+            .. "skips those so decorative geometry doesn't count as cover.",
+        Callback = F.utils.setStrictVisibleCheck })
     Aim:AddToggle("AimClosestPart", { Text = "Closest bodypart", Default = F.aimbot.settings.ClosestPart,
         Callback = F.aimbot.setClosestPart })
 
