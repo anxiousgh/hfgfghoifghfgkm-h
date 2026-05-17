@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 00:40 pellet-redirect intercept mode"
+local SCRIPT_VERSION = "2026-05-19 01:05 pellet-redirect non-mutating + pcall"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -2316,13 +2316,16 @@ if hookmetamethod and not getgenv()._F_PR_NAMECALL_HOOKED then
         return out
     end
 
+    -- re-entry guard. If anything inside the hook somehow triggers another
+    -- FireServer (it shouldn't, but just in case), we don't recurse.
+    local prInside = false
+
     local prOldNamecall
     prOldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
-        -- fast early-out
+        if prInside then return prOldNamecall(...) end
+        -- fast early-outs
         if not getgenv()._F_PR_ACTIVE then return prOldNamecall(...) end
-        -- ignore our own fires (forceHit etc) - we don't want to redirect
-        -- a redirect, and forceHit's synth payloads aren't natural anyway.
-        if checkcaller() then return prOldNamecall(...) end
+        if checkcaller() then return prOldNamecall(...) end  -- our own forceHit etc
         local method = getnamecallmethod()
         if method ~= "FireServer" then return prOldNamecall(...) end
         local args = {...}
@@ -2332,67 +2335,106 @@ if hookmetamethod and not getgenv()._F_PR_NAMECALL_HOOKED then
         if args[2] ~= "Shoot" then return prOldNamecall(...) end
         local payload = args[3]
         if type(payload) ~= "table" then return prOldNamecall(...) end
-        local hits    = payload[1]
-        local targets = payload[2]
-        local origin  = payload[3]
-        if type(hits) ~= "table" or type(targets) ~= "table" then
+        local origHits    = payload[1]
+        local origTargets = payload[2]
+        local origin      = payload[3]
+        if type(origHits) ~= "table" or type(origTargets) ~= "table" then
             return prOldNamecall(...)
         end
         if typeof(origin) ~= "Vector3" then return prOldNamecall(...) end
 
-        local plr = _prGetTarget()
-        if not plr then return prOldNamecall(...) end
-        local char = plr.Character
-        if not char then return prOldNamecall(...) end
-        local parts = _prBodyParts(char)
-        if #parts == 0 then return prOldNamecall(...) end
+        prInside = true
+        -- Build a NEW payload with rewritten hits/targets. Never mutate
+        -- the gun's tables -- the gun script may read them after the
+        -- FireServer call for tracer rendering / VFX / sounds and we
+        -- don't want to break those.
+        local ok, redirected, totalPellets, newPayload, plr = pcall(function()
+            local plr = _prGetTarget()
+            if not plr then return 0, #origHits end
+            local char = plr.Character
+            if not char then return 0, #origHits end
+            local parts = _prBodyParts(char)
+            if #parts == 0 then return 0, #origHits end
 
-        local maxRad = math.rad(tonumber(getgenv()._F_PR_MAX_ANGLE) or 15)
-        local cosThr = math.cos(maxRad)
-        local redirected = 0
-        local totalPellets = #hits
+            local maxRad = math.rad(tonumber(getgenv()._F_PR_MAX_ANGLE) or 15)
+            local cosThr = math.cos(maxRad)
+            local redirected = 0
+            local total = #origHits
+            local newHits    = table.create(total)
+            local newTargets = table.create(total)
 
-        for i = 1, totalPellets do
-            local h = hits[i]
-            if h and typeof(h.Position) == "Vector3" then
-                local natDir = h.Position - origin
-                if natDir.Magnitude > 0.1 then
-                    natDir = natDir.Unit
+            for i = 1, total do
+                local h = origHits[i]
+                local kept = true
+                if h and typeof(h.Position) == "Vector3" then
+                    local natDir = h.Position - origin
+                    if natDir.Magnitude > 0.1 then
+                        natDir = natDir.Unit
 
-                    -- pick the body part whose center is closest to natural
-                    -- hit, then check whether redirecting to that part keeps
-                    -- direction within the tolerance cone.
-                    local bestPart, bestDist
-                    for _, bp in ipairs(parts) do
-                        local d = (bp.Position - h.Position).Magnitude
-                        if not bestDist or d < bestDist then
-                            bestPart, bestDist = bp, d
+                        -- nearest body part to natural hit
+                        local bestPart, bestDist
+                        for _, bp in ipairs(parts) do
+                            local d = (bp.Position - h.Position).Magnitude
+                            if not bestDist or d < bestDist then
+                                bestPart, bestDist = bp, d
+                            end
                         end
-                    end
-                    if bestPart then
-                        local newPos = bestPart.Position
-                        local newDir = newPos - origin
-                        if newDir.Magnitude > 0.1 then
-                            newDir = newDir.Unit
-                            local cosAng = natDir:Dot(newDir)
-                            if cosAng >= cosThr then
-                                -- safe to redirect: angle small enough
-                                local localOff = bestPart.CFrame:PointToObjectSpace(newPos)
-                                h.Instance = bestPart
-                                h.Position = newPos
-                                h.Normal   = -newDir  -- face the hit back at origin
-                                targets[i] = { thePart = bestPart, theOffset = localOff }
-                                redirected = redirected + 1
+                        if bestPart then
+                            local newPos = bestPart.Position
+                            local newDir = newPos - origin
+                            if newDir.Magnitude > 0.1 then
+                                newDir = newDir.Unit
+                                if natDir:Dot(newDir) >= cosThr then
+                                    -- in-cone redirect: build NEW entries
+                                    local localOff = bestPart.CFrame:PointToObjectSpace(newPos)
+                                    newHits[i] = {
+                                        Normal   = -newDir,
+                                        Instance = bestPart,
+                                        Position = newPos,
+                                    }
+                                    newTargets[i] = {
+                                        thePart   = bestPart,
+                                        theOffset = localOff,
+                                    }
+                                    redirected = redirected + 1
+                                    kept = false
+                                end
                             end
                         end
                     end
                 end
+                if kept then
+                    -- keep original entry by reference (don't deep-copy --
+                    -- we never write to it from here on)
+                    newHits[i]    = h
+                    newTargets[i] = origTargets[i]
+                end
             end
+
+            local np = {
+                newHits, newTargets,
+                payload[3], payload[4], payload[5],
+            }
+            return redirected, total, np, plr
+        end)
+        prInside = false
+
+        if not ok then
+            -- pcall failed (string returned in `redirected` position
+            -- because of how multi-return-from-pcall packs values).
+            -- Don't break the user's shot -- forward original args.
+            if getgenv()._F_PR_DEBUG then
+                warn("[pellet-redirect] hook errored, passing through:", redirected)
+            end
+            return prOldNamecall(...)
         end
 
-        if getgenv()._F_PR_DEBUG and totalPellets > 1 then
-            print(("[pellet-redirect] %d/%d pellets redirected to %s"):format(
-                redirected, totalPellets, plr.Name))
+        if newPayload then
+            args[3] = newPayload
+            if getgenv()._F_PR_DEBUG and totalPellets and totalPellets > 1 then
+                print(("[pellet-redirect] %d/%d pellets redirected to %s"):format(
+                    redirected, totalPellets, plr and plr.Name or "?"))
+            end
         end
 
         return prOldNamecall(unpack(args))
