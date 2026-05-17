@@ -2178,6 +2178,60 @@ if hookmetamethod and not getgenv()._F_RB_NAMECALL_HOOKED then
     end))
 end
 
+-- ============================================================
+--  PELLET-CALIBRATION NAMECALL HOOK
+--  Listens for real shotgun fires (MainEvent:FireServer("Shoot", payload))
+--  that originate from the natural gun script -- not from us. Reads
+--  #payload[1] which is the hits-array length == pellet count, and
+--  stores it keyed by current Tool.Name on getgenv()._F_PELLET_LEARNED.
+--  forceHit reads from that table FIRST before its hardcoded
+--  SHOTGUN_PELLETS, so server-accepted counts win automatically.
+-- ============================================================
+getgenv()._F_PELLET_LEARNED = getgenv()._F_PELLET_LEARNED or {}
+getgenv()._F_PELLET_ACTIVE  = getgenv()._F_PELLET_ACTIVE  or false
+if hookmetamethod and not getgenv()._F_PC_NAMECALL_HOOKED then
+    getgenv()._F_PC_NAMECALL_HOOKED = true
+    local pcOldNamecall
+    pcOldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
+        -- early-exit: gated by the module's active flag
+        if not getgenv()._F_PELLET_ACTIVE then return pcOldNamecall(...) end
+        -- ignore our own calls (forceHit, blink, etc fire MainEvent too)
+        if checkcaller() then return pcOldNamecall(...) end
+        local method = getnamecallmethod()
+        if method ~= "FireServer" then return pcOldNamecall(...) end
+        local args = {...}
+        local self = args[1]
+        if typeof(self) ~= "Instance" then return pcOldNamecall(...) end
+        if self.Name ~= "MainEvent" then return pcOldNamecall(...) end
+        if args[2] ~= "Shoot" then return pcOldNamecall(...) end
+        local payload = args[3]
+        if type(payload) ~= "table" then return pcOldNamecall(...) end
+        local hits = payload[1]
+        if type(hits) ~= "table" then return pcOldNamecall(...) end
+        -- count entries (works for both array and sparse forms)
+        local count = 0
+        for _ in pairs(hits) do count = count + 1 end
+        if count > 0 then
+            -- read currently equipped tool name
+            local c = lplr.Character
+            local tool = c and c:FindFirstChildOfClass("Tool")
+            if tool then
+                local name = tool.Name
+                local prev = getgenv()._F_PELLET_LEARNED[name] or 0
+                -- track max so a partial-hit shot doesn't lower a known count
+                if count > prev then
+                    getgenv()._F_PELLET_LEARNED[name] = count
+                    if getgenv()._F_PELLET_PERSIST then
+                        pcall(getgenv()._F_PELLET_PERSIST)
+                    end
+                    print(("[pellet-cal] %q -> %d pellets"):format(name, count))
+                end
+            end
+        end
+        return pcOldNamecall(...)
+    end))
+end
+
 -- ragebot auto-shoot
 local _rbEquipTime = 0
 local function watchToolEquip(char)
@@ -3683,6 +3737,96 @@ F.autoEquip = (function()
     return t
 end)()
 
+-- ============================================================
+--  AUTO WEAPON SWITCH
+--  Switches the equipped tool based on distance to the current
+--  ragebot target. Three configurable slots:
+--    close  : equipped when dist < closeMax
+--    medium : equipped when closeMax <= dist < mediumMax
+--    long   : equipped when dist >= mediumMax
+--  Empty / "(none)" slots are skipped (so leaving 'medium' empty
+--  means close-range tool stays equipped until past mediumMax).
+--  Cooldown between switches stops oscillation at boundaries.
+-- ============================================================
+F.autoWeaponSwitch = (function()
+    local active = false
+    local closeName, mediumName, longName = "", "", ""
+    local closeMax, mediumMax = 30, 100
+    local switchCooldown = 0.5  -- seconds; cap switches at 2/sec
+    local lastSwitch = 0
+    local conn
+
+    local function currentEquippedName()
+        local c = lplr.Character
+        local t = c and c:FindFirstChildOfClass("Tool")
+        return t and t.Name or nil
+    end
+
+    local function chooseFor(dist)
+        if dist < closeMax  and closeName  ~= "" and closeName  ~= "(none)" then return closeName  end
+        if dist < mediumMax and mediumName ~= "" and mediumName ~= "(none)" then return mediumName end
+        if longName ~= "" and longName ~= "(none)" then return longName end
+        -- nothing configured for this bucket - try walk-up to populated slots
+        if mediumName ~= "" and mediumName ~= "(none)" then return mediumName end
+        if closeName  ~= "" and closeName  ~= "(none)" then return closeName  end
+        return nil
+    end
+
+    local function tick()
+        if not active then return end
+        if (os.clock() - lastSwitch) < switchCooldown then return end
+        local plr = (rbGetTarget and rbGetTarget()) or nil
+        if not plr or not plr.Character then return end
+        local thrp = plr.Character:FindFirstChild("HumanoidRootPart")
+        if not thrp then return end
+        local c = lplr.Character
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local d = (thrp.Position - hrp.Position).Magnitude
+        local want = chooseFor(d)
+        if not want then return end
+        if currentEquippedName() == want then return end
+        if F.autoEquip and F.autoEquip.equip(want) then
+            lastSwitch = os.clock()
+        end
+    end
+
+    -- throttle: tick @ ~5x/sec (heartbeat is 60hz, so every 12 frames)
+    local function start()
+        active = true
+        if conn then conn:Disconnect() end
+        local frame = 0
+        conn = RunService.Heartbeat:Connect(function()
+            frame = frame + 1
+            if frame < 12 then return end
+            frame = 0
+            tick()
+        end)
+    end
+    local function stop()
+        active = false
+        if conn then conn:Disconnect(); conn = nil end
+    end
+
+    return {
+        start    = start,
+        stop     = stop,
+        toggle   = function() if active then stop() else start() end end,
+        isActive = function() return active end,
+        setClose      = function(n) closeName  = n or "" end,
+        setMedium     = function(n) mediumName = n or "" end,
+        setLong       = function(n) longName   = n or "" end,
+        setCloseMax   = function(n) closeMax   = tonumber(n) or closeMax end,
+        setMediumMax  = function(n) mediumMax  = tonumber(n) or mediumMax end,
+        setCooldown   = function(n) switchCooldown = math.max(0, tonumber(n) or 0.5) end,
+        getClose      = function() return closeName  end,
+        getMedium     = function() return mediumName end,
+        getLong       = function() return longName   end,
+        getCloseMax   = function() return closeMax   end,
+        getMediumMax  = function() return mediumMax  end,
+    }
+end)()
+
 F.servers = {
     list = function(maxPages)
         maxPages = maxPages or 2
@@ -4243,6 +4387,69 @@ end)()
 --  observed max each Heartbeat (cclosure-style), keeps the gun
 --  visually full and ready to click-fire.
 -- ============================================================
+
+-- ============================================================
+--  PELLET CALIBRATION  (public API)
+--  Toggles the namecall listener that records server-accepted
+--  pellet counts per tool name from real (non-our-code) shoot
+--  payloads. forceHit's pellet lookup reads from this table
+--  first, so once you fire your shotgun naturally once, forceHit
+--  knows the exact pellet count to synthesize.
+--  Persists to "_F_HC_pellets.json" across sessions.
+-- ============================================================
+F.games.hoodCustoms.pelletCalibration = (function()
+    local FILE = "_F_HC_pellets.json"
+    local HS   = game:GetService("HttpService")
+
+    -- learned table lives on getgenv so the namecall hook (which is
+    -- pinned cross-script) can read/write it without an upvalue.
+    local learned = getgenv()._F_PELLET_LEARNED
+
+    -- load persisted snapshot if it exists
+    pcall(function()
+        if isfile and isfile(FILE) then
+            local raw = readfile(FILE)
+            local ok, data = pcall(function() return HS:JSONDecode(raw) end)
+            if ok and type(data) == "table" then
+                for k, v in pairs(data) do learned[k] = v end
+            end
+        end
+    end)
+
+    local function persist()
+        pcall(function()
+            if writefile then
+                writefile(FILE, HS:JSONEncode(learned))
+            end
+        end)
+    end
+    getgenv()._F_PELLET_PERSIST = persist  -- hook calls this on new learns
+
+    local active = false
+    local function start()
+        active = true
+        getgenv()._F_PELLET_ACTIVE = true
+    end
+    local function stop()
+        active = false
+        getgenv()._F_PELLET_ACTIVE = false
+    end
+    local function clear()
+        for k in pairs(learned) do learned[k] = nil end
+        persist()
+    end
+
+    return {
+        start    = start,
+        stop     = stop,
+        toggle   = function() if active then stop() else start() end end,
+        isActive = function() return active end,
+        get      = function(name) return learned[name] end,
+        getAll   = function() return learned end,
+        clear    = clear,
+    }
+end)()
+
 F.games.hoodCustoms.forceHit = (function()
     local SHOTGUN_NAMES = {
         ["[Shotgun]"]          = true,
@@ -4506,11 +4713,18 @@ F.games.hoodCustoms.forceHit = (function()
         local origin   = headPart and headPart.Position
         local shotgun  = isShotgun()
         local tool     = getEquippedTool()
-        -- pellet count: explicit table lookup, otherwise default to 5 for
-        -- anything substring-matched as a shotgun, otherwise 1
+        -- pellet count lookup chain (most specific to least):
+        --   1) calibrated count from real-fire packet captures
+        --   2) hardcoded SHOTGUN_PELLETS for known HC weapons
+        --   3) substring-shotgun fallback default of 5
+        --   4) non-shotgun -> 1
         local pellets
         if shotgun then
-            pellets = (tool and SHOTGUN_PELLETS[tool.Name]) or 5
+            local learned = getgenv()._F_PELLET_LEARNED
+            local calibrated = (tool and learned and learned[tool.Name]) or nil
+            pellets = calibrated
+                  or (tool and SHOTGUN_PELLETS[tool.Name])
+                  or 5
         else
             pellets = 1
         end
@@ -5114,7 +5328,10 @@ end)()
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopCframeSpeed(); stopWalkspeed(); stopJumpPower(); stopBhop(); stopInfJump(); stopForceJump(); stopAntiAfk()
-    stopClickTp(); stopAutoRe(); F.autoEquip.stop()
+    stopClickTp(); stopAutoRe(); F.autoEquip.stop(); F.autoWeaponSwitch.stop()
+    if F.games and F.games.hoodCustoms and F.games.hoodCustoms.pelletCalibration then
+        F.games.hoodCustoms.pelletCalibration.stop()
+    end
     F.games.hoodCustoms.antiAfkTag.stop(); F.games.hoodCustoms.forceAfkTag.stop()
     F.games.hoodCustoms.autoStomp.stop()
     F.games.hoodCustoms.autoReload.stop(); F.games.hoodCustoms.godmode.stop()

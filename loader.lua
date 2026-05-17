@@ -498,19 +498,37 @@ do
 
     -- Preserve current selection on refresh — equipping moves a tool from the
     -- backpack into the character, so the list rebuilds and the user's pick
-    -- would otherwise jump to whatever ends up alphabetically first.
+    -- would otherwise jump to whatever ends up alphabetically first. Also
+    -- repopulates the auto-weapon-switch dropdowns (close/medium/long) with
+    -- a "(none)"-prefixed variant of the list. Dropdowns that don't exist
+    -- yet (first call before they're added) are silently skipped.
     local function refreshToolList()
         local list = F.autoEquip.list()
         if #list == 0 then list = { "(no tools)" } end
-        local current = Options.AutoEquipTool and Options.AutoEquipTool.Value
-        Options.AutoEquipTool:SetValues(list)
-        local keep = false
-        for _, n in ipairs(list) do if n == current then keep = true; break end end
-        if keep then
-            Options.AutoEquipTool:SetValue(current)
-        else
-            Options.AutoEquipTool:SetValue(list[1])
+
+        if Options.AutoEquipTool then
+            local current = Options.AutoEquipTool.Value
+            Options.AutoEquipTool:SetValues(list)
+            local keep = false
+            for _, n in ipairs(list) do if n == current then keep = true; break end end
+            Options.AutoEquipTool:SetValue(keep and current or list[1])
         end
+
+        -- list with leading "(none)" sentinel for the weapon-switch slots
+        local listWithNone = { "(none)" }
+        for _, n in ipairs(list) do table.insert(listWithNone, n) end
+
+        local function setWithNone(opt)
+            if not opt then return end
+            local cur = opt.Value
+            opt:SetValues(listWithNone)
+            local keep = false
+            for _, n in ipairs(listWithNone) do if n == cur then keep = true; break end end
+            opt:SetValue(keep and cur or "(none)")
+        end
+        setWithNone(Options.AutoWSClose)
+        setWithNone(Options.AutoWSMedium)
+        setWithNone(Options.AutoWSLong)
     end
 
     AutoT:AddButton({ Text = "Refresh tool list", Func = refreshToolList })
@@ -528,6 +546,59 @@ do
         Callback = function(v)
             if v then F.autoEquip.start() else F.autoEquip.stop() end
         end })
+
+    AutoT:AddDivider()
+    AutoT:AddLabel("Auto weapon switch")
+
+    -- Three tool-name dropdowns + two distance thresholds. The dropdowns
+    -- share their value-list with the AutoEquipTool dropdown so the
+    -- "Refresh tool list" button repopulates all four at once. Tools
+    -- not currently in your inventory still equip if you have them
+    -- (the dropdown just shows current snapshot for convenience).
+    AutoT:AddToggle("AutoWeaponSwitch", { Text = "Enable",
+        Default = false,
+        Callback = function(v)
+            if v then F.autoWeaponSwitch.start() else F.autoWeaponSwitch.stop() end
+        end })
+
+    AutoT:AddDropdown("AutoWSClose", {
+        Values   = { "(none)" },
+        Default  = "(none)",
+        Text     = "Close-range tool",
+        Callback = function(v) F.autoWeaponSwitch.setClose(v == "(none)" and "" or v) end,
+    })
+    AutoT:AddSlider("AutoWSCloseMax", {
+        Text     = "Close max distance",
+        Default  = F.autoWeaponSwitch.getCloseMax(),
+        Min = 1, Max = 500, Rounding = 0,
+        Callback = F.autoWeaponSwitch.setCloseMax,
+    })
+
+    AutoT:AddDropdown("AutoWSMedium", {
+        Values   = { "(none)" },
+        Default  = "(none)",
+        Text     = "Medium-range tool",
+        Callback = function(v) F.autoWeaponSwitch.setMedium(v == "(none)" and "" or v) end,
+    })
+    AutoT:AddSlider("AutoWSMediumMax", {
+        Text     = "Medium max distance",
+        Default  = F.autoWeaponSwitch.getMediumMax(),
+        Min = 1, Max = 1000, Rounding = 0,
+        Callback = F.autoWeaponSwitch.setMediumMax,
+    })
+
+    AutoT:AddDropdown("AutoWSLong", {
+        Values   = { "(none)" },
+        Default  = "(none)",
+        Text     = "Long-range tool",
+        Callback = function(v) F.autoWeaponSwitch.setLong(v == "(none)" and "" or v) end,
+    })
+
+    AutoT:AddSlider("AutoWSCooldown", {
+        Text     = "Switch cooldown",
+        Default  = 0.5, Min = 0.05, Max = 3, Rounding = 2, Suffix = " s",
+        Callback = F.autoWeaponSwitch.setCooldown,
+    })
 
     -- One-shot initial population only. We DO NOT auto-refresh on
     -- backpack changes or respawn anymore - that was clobbering the
@@ -1588,6 +1659,35 @@ do
         Default  = 1, Min = 1, Max = 10, Rounding = 0,
         Callback = function(v) F.games.hoodCustoms.forceHit.setFireMultiplier(v) end,
     })
+
+    -- Pellet calibration: when on, listens for real shotgun fires (your
+    -- own clicks, not forceHit's) and learns the exact pellet count the
+    -- server accepts per tool. forceHit's synth mode then uses that count
+    -- instead of guessing 5. Persists across sessions in _F_HC_pellets.json.
+    HC:AddToggle("HCPelletCal", { Text = "Pellet calibration (learn pellet counts)",
+        Default = false,
+        Callback = function(v)
+            if v then F.games.hoodCustoms.pelletCalibration.start()
+            else      F.games.hoodCustoms.pelletCalibration.stop() end
+        end })
+    HC:AddButton({ Text = "Show learned pellets", Func = function()
+        local all = F.games.hoodCustoms.pelletCalibration.getAll()
+        local n = 0
+        for k, v in pairs(all) do
+            n = n + 1
+            print(("[pellet-cal] %q = %d"):format(k, v))
+        end
+        if n == 0 then
+            Library:Notify("No learned pellet counts yet", 3)
+        else
+            Library:Notify(("Printed %d learned counts to console"):format(n), 3)
+        end
+    end })
+    :AddButton({ Text = "Clear learned pellets", DoubleClick = true,
+        Func = function()
+            F.games.hoodCustoms.pelletCalibration.clear()
+            Library:Notify("Learned pellet counts cleared", 2)
+        end })
     -- Tracer + hit sound. FireServer doesn't render bullet visuals
     -- because we never go through the gun script, so we fake them
     -- locally for visual + audio feedback on each forced hit.
