@@ -1051,6 +1051,14 @@ do
         end
     end })
 
+    P:AddToggle("FollowVisualize", { Text = "Visualize follow path",
+        Default = true,
+        Tooltip = "Spawns neon spheres at each pathfinding waypoint + "
+            .. "lines connecting them. Blue = walk, orange = jump, green "
+            .. "= current next waypoint.",
+        Callback = function(v) F.players.setFollowVisualize(v) end,
+    })
+
     P:AddDivider()
 
     P:AddButton({ Text = "Reset camera view", Func = function()

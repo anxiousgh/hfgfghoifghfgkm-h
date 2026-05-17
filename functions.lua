@@ -1024,18 +1024,78 @@ end
 --  Click to start, click again on the same target to stop.
 -- ============================================================
 local _PathfindingService = game:GetService("PathfindingService")
-local _follow = { target = nil, conn = nil, path = nil, waypoints = {}, idx = 1, lastCompute = 0 }
+local _follow = {
+    target = nil, conn = nil, path = nil, waypoints = {}, idx = 1,
+    lastCompute = 0, viz = true, vizFolder = nil,
+}
+
+-- ---- pathfinding visualization ----
+-- Spawns small neon spheres at each waypoint and thin neon parts
+-- as line segments between consecutive waypoints. Jump waypoints
+-- get a distinct color. The "current" waypoint (the one we're
+-- walking toward this tick) is highlighted brighter.
+local function vizClear()
+    if _follow.vizFolder then _follow.vizFolder:Destroy(); _follow.vizFolder = nil end
+end
+
+local function vizDot(pos, color, size)
+    local p = Instance.new("Part")
+    p.Anchored = true; p.CanCollide = false
+    p.CanTouch = false; p.CanQuery = false; p.CastShadow = false
+    p.Shape = Enum.PartType.Ball
+    p.Material = Enum.Material.Neon
+    p.Color = color
+    p.Size = Vector3.new(size, size, size)
+    p.CFrame = CFrame.new(pos)
+    p.Parent = _follow.vizFolder
+    return p
+end
+
+local function vizLine(a, b, color)
+    local dist = (b - a).Magnitude
+    if dist < 0.1 then return end
+    local p = Instance.new("Part")
+    p.Anchored = true; p.CanCollide = false
+    p.CanTouch = false; p.CanQuery = false; p.CastShadow = false
+    p.Material = Enum.Material.Neon
+    p.Color = color
+    p.Transparency = 0.4
+    p.Size = Vector3.new(0.15, 0.15, dist)
+    p.CFrame = CFrame.new((a + b) * 0.5, b)
+    p.Parent = _follow.vizFolder
+end
+
+local function vizRebuild()
+    vizClear()
+    if not _follow.viz then return end
+    if #_follow.waypoints < 2 then return end
+    _follow.vizFolder = Instance.new("Folder")
+    _follow.vizFolder.Name = "_follow_path_viz"
+    _follow.vizFolder.Parent = workspace
+    local walkCol = Color3.fromRGB(80, 200, 255)
+    local jumpCol = Color3.fromRGB(255, 180, 60)
+    local nextCol = Color3.fromRGB(120, 255, 120)
+    for i = 1, #_follow.waypoints do
+        local wp = _follow.waypoints[i]
+        local isJump = wp.Action == Enum.PathWaypointAction.Jump
+        local isNext = i == _follow.idx
+        local col = isNext and nextCol or (isJump and jumpCol or walkCol)
+        vizDot(wp.Position, col, isNext and 0.9 or 0.55)
+        if i > 1 then
+            vizLine(_follow.waypoints[i - 1].Position, wp.Position, col)
+        end
+    end
+end
 
 local function followStop()
     if _follow.conn then _follow.conn:Disconnect(); _follow.conn = nil end
     _follow.target = nil
     _follow.waypoints = {}
     _follow.idx = 1
+    vizClear()
     local c = lplr.Character
     local hum = c and c:FindFirstChildOfClass("Humanoid")
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    -- park the humanoid where it stands so it stops sliding toward the
-    -- last waypoint after we disconnect.
     if hum and hrp then pcall(function() hum:MoveTo(hrp.Position) end) end
 end
 
@@ -1071,10 +1131,11 @@ local function followPlayer(plr)
             end)
             if ok and _follow.path.Status == Enum.PathStatus.Success then
                 _follow.waypoints = _follow.path:GetWaypoints()
-                _follow.idx = 2  -- skip waypoint[1] = current position
+                _follow.idx = 2
             else
                 _follow.waypoints = {}
             end
+            vizRebuild()
         end
 
         if _follow.idx <= #_follow.waypoints then
@@ -1085,13 +1146,17 @@ local function followPlayer(plr)
             end
             if (hrp.Position - wp.Position).Magnitude < 4 then
                 _follow.idx = _follow.idx + 1
+                vizRebuild()  -- update "current waypoint" highlight
             end
         else
-            -- no path computed (e.g. target unreachable). Walk straight at
-            -- them as a fallback so we at least try.
             pcall(function() hum:MoveTo(thrp.Position) end)
         end
     end)
+end
+
+local function followSetVisualize(v)
+    _follow.viz = v == true
+    if not _follow.viz then vizClear() else vizRebuild() end
 end
 
 -- ============================================================
@@ -2445,6 +2510,8 @@ F.players = {
     follow = followPlayer,
     followStop = followStop,
     isFollowing = function() return _follow.target end,
+    setFollowVisualize = followSetVisualize,
+    getFollowVisualize = function() return _follow.viz end,
 }
 
 -- utility helpers (exposed for advanced users)
