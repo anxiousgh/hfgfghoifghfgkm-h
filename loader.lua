@@ -107,8 +107,6 @@ do
 
     Aim:AddToggle("AimTeamCheck", { Text = "Team check", Default = F.aimbot.settings.TeamCheck,
         Callback = F.aimbot.setTeamCheck })
-    Aim:AddToggle("AimVisCheck", { Text = "Visible check", Default = F.aimbot.settings.VisibleCheck,
-        Callback = F.aimbot.setVisibleCheck })
     Aim:AddToggle("AimClosestPart", { Text = "Closest bodypart", Default = F.aimbot.settings.ClosestPart,
         Callback = F.aimbot.setClosestPart })
 
@@ -151,8 +149,6 @@ do
 
     Trig:AddToggle("TrigTeamCheck", { Text = "Team check",
         Default = F.triggerbot.settings.TeamCheck, Callback = F.triggerbot.setTeamCheck })
-    Trig:AddToggle("TrigVisCheck",  { Text = "Visible check",
-        Default = F.triggerbot.settings.VisibleCheck, Callback = F.triggerbot.setVisibleCheck })
 
     Trig:AddDropdown("TrigHitPart", {
         Values = {
@@ -197,8 +193,6 @@ do
 
     Cam:AddToggle("CamTeamCheck", { Text = "Team check",    Default = F.camLock.settings.TeamCheck,
         Callback = F.camLock.setTeamCheck })
-    Cam:AddToggle("CamVisCheck",  { Text = "Visible check", Default = F.camLock.settings.VisibleCheck,
-        Callback = F.camLock.setVisibleCheck })
     Cam:AddToggle("CamSticky",    { Text = "Sticky target", Default = F.camLock.settings.Sticky,
         Callback = F.camLock.setSticky })
     Cam:AddToggle("CamClosestPart",{ Text = "Closest bodypart", Default = F.camLock.settings.ClosestPart,
@@ -227,22 +221,6 @@ do
     Cam:AddSlider("CamPredictionAmt", { Text = "Prediction amount",
         Default = F.camLock.settings.PredictionAmount, Min = 0, Max = 2, Rounding = 3,
         Callback = F.camLock.setPredictionAmount })
-
-    -- =================== VISIBLE CHECK (shared) ===================
-    -- Settings here affect every feature that uses isReallyVisible
-    -- (aimbot, triggerbot, camlock, ragebot autoshoot).
-    local Vis = CombatLeft:AddTab("Visible Check")
-
-    Vis:AddToggle("StrictVisCheck", { Text = "Strict (block see-through walls)",
-        Default = false,
-        Callback = F.utils.setStrictVisibleCheck })
-
-    Vis:AddDropdown("VisOrigin", {
-        Values  = { "Camera", "Head", "Tool" },
-        Default = "Camera",
-        Text    = "Origin",
-        Callback = F.utils.setVisibleOrigin,
-    })
 
     -- =================== RAGEBOT (target + auto/orbit) ===================
     local Tgt = CombatRight:AddTab("Ragebot")
@@ -494,8 +472,6 @@ do
     AutoT:AddLabel("Auto shoot")
     AutoT:AddToggle("RageAutoShoot",        { Text = "Auto shoot",
         Default = F.ragebot.settings.AutoShoot, Callback = F.ragebot.setAutoShoot })
-    AutoT:AddToggle("RageAutoShootVis",     { Text = "Require visible",
-        Default = F.ragebot.settings.AutoShootVis, Callback = F.ragebot.setAutoShootVis })
     AutoT:AddToggle("RageAutoShootReqTool", { Text = "Require tool",
         Default = F.ragebot.settings.AutoShootRequireTool, Callback = F.ragebot.setAutoShootRequireTool })
     AutoT:AddToggle("RageFFCheck",          { Text = "Forcefield check",
@@ -559,6 +535,32 @@ do
     -- the dropdown would reset to the first alphabetical tool).
     -- User has to press "Refresh tool list" to update.
     task.defer(refreshToolList)
+
+    -- =================== VISIBLE CHECK (global, below tabboxes) ===================
+    -- One master toggle that flips visibility-gating on ALL four
+    -- features (aimbot, triggerbot, camlock, ragebot autoshoot).
+    -- Strict + Origin live here too since both apply globally.
+    local Vis = Tabs.Combat:AddLeftGroupbox("Visible Check")
+
+    local function setAllVisible(v)
+        F.aimbot.setVisibleCheck(v)
+        F.triggerbot.setVisibleCheck(v)
+        F.camLock.setVisibleCheck(v)
+        F.ragebot.setAutoShootVis(v)
+    end
+
+    Vis:AddToggle("VisibleCheckMaster", { Text = "Enable visible check",
+        Default = false,
+        Callback = setAllVisible })
+    Vis:AddToggle("StrictVisCheck", { Text = "Strict (block see-through walls)",
+        Default = false,
+        Callback = F.utils.setStrictVisibleCheck })
+    Vis:AddDropdown("VisOrigin", {
+        Values  = { "Camera", "Head", "Tool" },
+        Default = "Camera",
+        Text    = "Origin",
+        Callback = F.utils.setVisibleOrigin,
+    })
 end
 
 -- ============================================================
