@@ -827,7 +827,7 @@ do
         Default = "Z", Mode = "Toggle", Text = "Fly key", SyncToggleState = true,
     })
     Move:AddSlider("FlySpeed", { Text = "Fly speed", Default = F.fly.getSpeed(),
-        Min = 5, Max = 500, Rounding = 0, Callback = F.fly.setSpeed })
+        Min = 5, Max = 3000, Rounding = 0, Callback = F.fly.setSpeed })
 
     -- Walkspeed: real Humanoid.WalkSpeed override with anti-restore.
     -- The loop re-asserts every time the game writes a different value,
@@ -839,7 +839,7 @@ do
         Default = "C", Mode = "Toggle", Text = "Walkspeed key", SyncToggleState = true,
     })
     Move:AddSlider("WalkspeedVal", { Text = "Walkspeed value",
-        Default = F.walkspeed.getValue(), Min = 8, Max = 200, Rounding = 0,
+        Default = F.walkspeed.getValue(), Min = 8, Max = 1000, Rounding = 0,
         Callback = F.walkspeed.setValue })
 
     -- Jump power: real Humanoid.JumpPower override with anti-restore.
@@ -850,7 +850,7 @@ do
         Default = "V", Mode = "Toggle", Text = "Jump power key", SyncToggleState = true,
     })
     Move:AddSlider("JumpPowerVal", { Text = "Jump power value",
-        Default = F.jumpPower.getValue(), Min = 0, Max = 500, Rounding = 0,
+        Default = F.jumpPower.getValue(), Min = 0, Max = 2000, Rounding = 0,
         Callback = F.jumpPower.setValue })
 
     -- CFrame speed: legacy speedhack that pushes HRP every frame based on
@@ -861,7 +861,7 @@ do
         Default = "X", Mode = "Toggle", Text = "CFrame speed key", SyncToggleState = true,
     })
     Move:AddSlider("SpeedMult", { Text = "CFrame speed multiplier", Default = F.cframeSpeed.getMultiplier(),
-        Min = 1, Max = 20, Rounding = 1, Suffix = "x", Callback = F.cframeSpeed.setMultiplier })
+        Min = 1, Max = 100, Rounding = 1, Suffix = "x", Callback = F.cframeSpeed.setMultiplier })
 
     Move:AddToggle("Bhop", { Text = "Bunnyhop", Default = false,
         Callback = function(v) if v then F.bhop.start() else F.bhop.stop() end end })
@@ -905,7 +905,7 @@ do
     Extras:AddToggle("Spin", { Text = "Spin", Default = false,
         Callback = function(v) if v then F.spin.start() else F.spin.stop() end end })
     Extras:AddSlider("SpinSpeed", { Text = "Spin speed", Default = 50,
-        Min = 1, Max = 200, Rounding = 0, Callback = F.spin.setSpeed })
+        Min = 1, Max = 1000, Rounding = 0, Callback = F.spin.setSpeed })
 
     -- orientation spoofs (flip / tilt / backwards) - mutually exclusive
     -- so the spoofs don't compound. Each writes a different rotation to
@@ -948,14 +948,14 @@ do
 
     Extras:AddButton({ Text = "Blink forward", Func = F.blink.fire })
     Extras:AddSlider("BlinkDist", { Text = "Blink distance", Default = F.blink.getDistance(),
-        Min = 1, Max = 200, Rounding = 0, Callback = F.blink.setDistance })
+        Min = 1, Max = 1000, Rounding = 0, Callback = F.blink.setDistance })
 
     -- Rocket jump - manual fire button + force/bias sliders.
     -- The KeyPicker for it is up in the Move (left) groupbox.
     Extras:AddButton({ Text = "Rocket jump", Func = F.rocketJump.fire })
     Extras:AddSlider("RocketJumpForce", {
         Text = "Rocket force",
-        Default = 200, Min = 50, Max = 2000, Rounding = 0,
+        Default = 200, Min = 50, Max = 10000, Rounding = 0,
         Callback = function(v) F.rocketJump.setForce(v) end,
     })
     Extras:AddSlider("RocketJumpUpBias", {
