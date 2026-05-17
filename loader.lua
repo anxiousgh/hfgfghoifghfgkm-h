@@ -109,9 +109,6 @@ do
         Callback = F.aimbot.setTeamCheck })
     Aim:AddToggle("AimVisCheck", { Text = "Visible check", Default = F.aimbot.settings.VisibleCheck,
         Callback = F.aimbot.setVisibleCheck })
-    Aim:AddToggle("StrictVisCheck", { Text = "Strict visible check (block see-through)",
-        Default = false,
-        Callback = F.utils.setStrictVisibleCheck })
     Aim:AddToggle("AimClosestPart", { Text = "Closest bodypart", Default = F.aimbot.settings.ClosestPart,
         Callback = F.aimbot.setClosestPart })
 
@@ -230,6 +227,22 @@ do
     Cam:AddSlider("CamPredictionAmt", { Text = "Prediction amount",
         Default = F.camLock.settings.PredictionAmount, Min = 0, Max = 2, Rounding = 3,
         Callback = F.camLock.setPredictionAmount })
+
+    -- =================== VISIBLE CHECK (shared) ===================
+    -- Settings here affect every feature that uses isReallyVisible
+    -- (aimbot, triggerbot, camlock, ragebot autoshoot).
+    local Vis = CombatLeft:AddTab("Visible Check")
+
+    Vis:AddToggle("StrictVisCheck", { Text = "Strict (block see-through walls)",
+        Default = false,
+        Callback = F.utils.setStrictVisibleCheck })
+
+    Vis:AddDropdown("VisOrigin", {
+        Values  = { "Camera", "Head", "Tool" },
+        Default = "Camera",
+        Text    = "Origin",
+        Callback = F.utils.setVisibleOrigin,
+    })
 
     -- =================== RAGEBOT (target + auto/orbit) ===================
     local Tgt = CombatRight:AddTab("Ragebot")

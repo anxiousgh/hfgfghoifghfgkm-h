@@ -117,6 +117,26 @@ _visParams.FilterType = Enum.RaycastFilterType.Exclude
 -- no-collide / no-shadow parts). Default false matches the old "smart"
 -- behavior that ignored decorative geometry.
 local _visStrict = false
+-- which point the visibility raycast STARTS from. One of:
+--   "Camera" - workspace.CurrentCamera.CFrame.Position (default, classic)
+--   "Head"   - lplr.Character.Head.Position
+--   "Tool"   - currently-equipped Tool's Handle.Position, falls back to Head
+local _visOrigin = "Camera"
+local function _visGetOrigin()
+    local mode = _visOrigin
+    local c = lplr.Character
+    if mode == "Tool" and c then
+        local tool = c:FindFirstChildOfClass("Tool")
+        local handle = tool and tool:FindFirstChild("Handle")
+        if handle then return handle.Position end
+        mode = "Head"  -- fall through if no tool equipped
+    end
+    if mode == "Head" and c then
+        local head = c:FindFirstChild("Head")
+        if head then return head.Position end
+    end
+    return workspace.CurrentCamera.CFrame.Position
+end
 local function isReallyVisible(fromPos, toPos, ignoreList)
     local dir = toPos - fromPos
     local dist = dir.Magnitude
@@ -1223,7 +1243,7 @@ local function aimIsVisible(plr)
     if not char or not lchar then return false end
     local root=char:FindFirstChild(AimbotSettings.TargetPart) or char:FindFirstChild("HumanoidRootPart")
     if not root then return false end
-    local camPos=workspace.CurrentCamera.CFrame.Position
+    local camPos=_visGetOrigin()
     local ignore={lchar,char}
     for _,p in ipairs(_cachedPlayers) do
         if p.Character and p.Character~=char and p.Character~=lchar then
@@ -1430,7 +1450,7 @@ local function clIsVisible(plr)
     if not char or not lchar then return false end
     local root=char:FindFirstChild(CamLockSettings.TargetPart) or char:FindFirstChild("HumanoidRootPart")
     if not root then return false end
-    local camPos=workspace.CurrentCamera.CFrame.Position
+    local camPos=_visGetOrigin()
     local ignore={lchar,char}
     for _,p in ipairs(_cachedPlayers) do
         if p.Character and p.Character~=char and p.Character~=lchar then table.insert(ignore,p.Character) end
@@ -1560,7 +1580,7 @@ local function trigIsVisible(plr)
     local char=plr.Character; local lchar=lplr.Character
     if not char or not lchar then return false end
     local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then return false end
-    local camPos=workspace.CurrentCamera.CFrame.Position
+    local camPos=_visGetOrigin()
     local ignore={lchar,char}
     for _,p in ipairs(_cachedPlayers) do
         if p.Character and p.Character~=char and p.Character~=lchar then table.insert(ignore,p.Character) end
@@ -1691,7 +1711,7 @@ local function rbIsVisible(plr)
     local char = plr.Character; local lchar = lplr.Character
     if not char or not lchar then return false end
     local root = char:FindFirstChild("HumanoidRootPart"); if not root then return false end
-    local camPos = workspace.CurrentCamera.CFrame.Position
+    local camPos = _visGetOrigin()
     local ignore = {lchar, char}
     for _, p in ipairs(plrs:GetPlayers()) do
         if p.Character and p.Character ~= char and p.Character ~= lchar then table.insert(ignore, p.Character) end
@@ -2562,6 +2582,11 @@ F.utils = {
     isReallyVisible = isReallyVisible,
     setStrictVisibleCheck = function(v) _visStrict = v == true end,
     getStrictVisibleCheck = function() return _visStrict end,
+    setVisibleOrigin = function(s)
+        local valid = { Camera = true, Head = true, Tool = true }
+        if valid[s] then _visOrigin = s end
+    end,
+    getVisibleOrigin = function() return _visOrigin end,
     findClosestPlayer = function(opts)
         opts = opts or {}
         local cam = workspace.CurrentCamera
