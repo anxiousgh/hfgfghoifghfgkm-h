@@ -7,6 +7,14 @@
 --   F.esp.toggle(); F.esp.setBox(true)
 -- See bottom of file for the full API table.
 
+-- ============================================================
+--  VERSION  (bumped on every push so you can verify which build
+--           is actually running). Look at the watermark + load
+--           notification to compare against the latest commit
+--           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
+-- ============================================================
+local SCRIPT_VERSION = "2026-05-18 23:55 shotgun-synth local-offset fix"
+
 --// services
 local HttpService         = game:GetService("HttpService")
 local TweenService        = game:GetService("TweenService")
@@ -2539,6 +2547,12 @@ local function makeToggle(startFn, stopFn, isActiveKey)
 end
 
 F = {}  -- assigns the forward-declared local
+
+-- Version string baked at push time. Use F.getVersion() from the loader
+-- to display it in the watermark / on-load notification so you can see
+-- at a glance whether the GitHub raw URL served the latest commit.
+F.SCRIPT_VERSION = SCRIPT_VERSION
+F.getVersion = function() return SCRIPT_VERSION end
 
 F.fly = makeToggle(startFly, stopFly, "flyActive")
 F.fly.setSpeed   = function(n) FLY_SPEED = tonumber(n) or FLY_SPEED end

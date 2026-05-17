@@ -1768,7 +1768,8 @@ local WatermarkConn = RunService.RenderStepped:Connect(function()
         pcall(function()
             ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())
         end)
-        Library:SetWatermark(("cclosure.vip | %d fps | %d ms"):format(math.floor(FPS), ping))
+        Library:SetWatermark(("cclosure.vip v[%s] | %d fps | %d ms"):format(
+            (F.getVersion and F.getVersion() or "?"):sub(1, 16), math.floor(FPS), ping))
     end
 end)
 
@@ -1827,3 +1828,10 @@ ThemeManager:ApplyToTab(Tabs.Config)
 SaveManager:LoadAutoloadConfig()
 
 Library:Notify("cclosure.vip loaded — press End to toggle the menu", 4)
+-- Version-stamp notification: bumped on every push so you can see at a
+-- glance whether the GitHub raw URL served the latest commit.
+do
+    local v = (F.getVersion and F.getVersion()) or "unknown"
+    Library:Notify(("Version: %s"):format(v), 8)
+    print(("[cclosure.vip] version: %s"):format(v))
+end
