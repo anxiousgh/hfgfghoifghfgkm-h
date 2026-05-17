@@ -4676,7 +4676,14 @@ F.games.hoodCustoms.forceHit = (function()
             local result = workspace:Raycast(origin, pelletDir * rayLen, rp)
             if result and result.Instance then
                 local hp = result.Position
-                local off = hp - result.Instance.Position
+                -- CRITICAL: theOffset is in the part's LOCAL coordinate
+                -- frame, NOT world-space (hp - part.Position). The server
+                -- validates that PointToWorldSpace(theOffset) == Position,
+                -- which only passes for local-space offsets. Captured
+                -- shotgun packets confirm: theOffset.X stays constant
+                -- across all pellets hitting one wall because all hits
+                -- are at the same depth in the wall's LOCAL X axis.
+                local off = result.Instance.CFrame:PointToObjectSpace(hp)
                 hits[i]    = { Normal = result.Normal, Instance = result.Instance, Position = hp }
                 targets[i] = { thePart = result.Instance, theOffset = off }
             else
