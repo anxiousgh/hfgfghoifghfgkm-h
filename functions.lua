@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 05:30 shotguns always target torso"
+local SCRIPT_VERSION = "2026-05-19 05:55 synth-v11 two-part V-shape"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4636,33 +4636,30 @@ F.games.hoodCustoms.forceHit = (function()
         local h = getHead(); return h and h.Position or nil
     end
 
-    -- shotgun synth path (v10): SINGLE-PART, HORIZONTAL LINE SPREAD.
-    -- User confirmed the working pattern is a STRAIGHT HORIZONTAL LINE
-    -- of pellets in world space (e.g. "  .   . .   . . " -- 5 dots
-    -- spread horizontally with irregular spacing).
+    -- shotgun synth path (v11): TWO-PART V-SHAPE.
+    -- User wants pellets spread across TWO body parts forming a V:
+    --   - partA (UpperTorso) pellets on a line angled +30deg from horiz
+    --   - partB (LowerTorso) pellets on a line angled -30deg from horiz
+    -- Together they form a chevron / V pattern when viewed from camera.
+    -- partA is the `part` passed in (already UpperTorso, set by fireOnce);
+    -- partB is sibling LowerTorso (falls back to HumanoidRootPart if
+    -- LowerTorso doesn't exist on the rig).
     --
-    -- The line must be horizontal IN WORLD SPACE regardless of how the
-    -- target's body part is rotated. To achieve this, we project world
-    -- horizontal onto the face plane:
-    --   1. Pick the face the shooter is on (which determines the 2D
-    --      in-plane local axes).
-    --   2. Of those two in-plane axes, find whichever has the smaller
-    --      |worldY| -- that's the most horizontal one. Use it as the
-    --      line direction.
-    --   3. Sample N points along that axis with random spacing, sorted.
-    --   4. Tiny perpendicular jitter (~5%) for slight natural variation.
-    local LINE_HALF_LEN = 0.32   -- 0.64 stud total, matches close-range capture span
-    local LINE_PERP_JIT = 0.025  -- ~5% perpendicular jitter
-    local function fireShotgunSynth(part, pelletCount)
-        if not part then return false end
-        local origin = getMuzzlePos(); if not origin then return false end
-        if (part.Position - origin).Magnitude < 0.01 then return false end
+    -- The line on each part is in WORLD-horizontal direction, rotated
+    -- by +-LINE_ANGLE around the face's outward normal. Each line has
+    -- its own LINE_HALF_LEN range; per-pellet position is random along
+    -- the line + tiny perpendicular jitter.
+    local LINE_HALF_LEN = 0.28   -- shorter than v10 so 2 lines fit cleanly
+    local LINE_PERP_JIT = 0.02
+    local LINE_ANGLE_DEG = 30    -- arms of the V at +-30deg from horiz
 
-        -- pick face the shooter is on
-        local sz = part.Size
-        local toLocal = part.CFrame:VectorToObjectSpace(origin - part.Position)
+    -- helper: generate `count` pellet entries on `bp` at line angle `angDeg`.
+    -- Appends into `hits` and `targets` starting at index `baseIdx + 1`.
+    local function _vGenOnPart(bp, count, angDeg, origin, hits, targets, baseIdx)
+        local sz = bp.Size
+        local toLocal = bp.CFrame:VectorToObjectSpace(origin - bp.Position)
         local ax, ay, az = math.abs(toLocal.X), math.abs(toLocal.Y), math.abs(toLocal.Z)
-        local faceIdx, faceSign  -- 1=X face, 2=Y face, 3=Z face
+        local faceIdx, faceSign
         if ax >= ay and ax >= az then
             faceIdx, faceSign = 1, (toLocal.X >= 0) and 1 or -1
         elseif ay >= az then
@@ -4671,57 +4668,83 @@ F.games.hoodCustoms.forceHit = (function()
             faceIdx, faceSign = 3, (toLocal.Z >= 0) and 1 or -1
         end
 
-        -- world-space outward normal of the chosen face
         local LOCAL_AXES = {
             Vector3.new(1, 0, 0),
             Vector3.new(0, 1, 0),
             Vector3.new(0, 0, 1),
         }
-        local worldN = part.CFrame:VectorToWorldSpace(
-            LOCAL_AXES[faceIdx] * faceSign
-        )
-
-        -- the two in-plane local axis indices for this face
         local FACE_INPLANE = {
-            [1] = { 2, 3 },  -- X face: in-plane = Y, Z
-            [2] = { 1, 3 },  -- Y face: in-plane = X, Z
-            [3] = { 1, 2 },  -- Z face: in-plane = X, Y
+            [1] = { 2, 3 },
+            [2] = { 1, 3 },
+            [3] = { 1, 2 },
         }
         local axA, axB = FACE_INPLANE[faceIdx][1], FACE_INPLANE[faceIdx][2]
-
-        -- Choose which in-plane axis is the LINE direction (most
-        -- horizontal in world) and which is the PERPENDICULAR (most
-        -- vertical, used only for tiny jitter).
-        local worldAxA = part.CFrame:VectorToWorldSpace(LOCAL_AXES[axA])
-        local worldAxB = part.CFrame:VectorToWorldSpace(LOCAL_AXES[axB])
-        local lineAxIdx, perpAxIdx
+        local worldAxA = bp.CFrame:VectorToWorldSpace(LOCAL_AXES[axA])
+        local worldAxB = bp.CFrame:VectorToWorldSpace(LOCAL_AXES[axB])
+        -- horiz = smaller |Y|, vert = larger |Y|
+        local horizIdx, vertIdx
         if math.abs(worldAxA.Y) <= math.abs(worldAxB.Y) then
-            lineAxIdx, perpAxIdx = axA, axB
+            horizIdx, vertIdx = axA, axB
         else
-            lineAxIdx, perpAxIdx = axB, axA
+            horizIdx, vertIdx = axB, axA
         end
+        local horizVec = LOCAL_AXES[horizIdx]
+        local vertVec  = LOCAL_AXES[vertIdx]
 
-        -- sample sorted along-line t values + small perp jitter per pellet
-        local ts = table.create(pelletCount)
-        for i = 1, pelletCount do
+        -- line direction in (horiz, vert) plane, rotated by angDeg
+        local rad = math.rad(angDeg)
+        local lineH, lineV = math.cos(rad), math.sin(rad)
+        local perpH, perpV = -lineV, lineH
+
+        local faceSize = ({sz.X, sz.Y, sz.Z})[faceIdx]
+        local faceOff  = LOCAL_AXES[faceIdx] * (faceSize * 0.5 * faceSign)
+        local worldN   = bp.CFrame:VectorToWorldSpace(LOCAL_AXES[faceIdx] * faceSign)
+
+        local ts = table.create(count)
+        for i = 1, count do
             ts[i] = (math.random() * 2 - 1) * LINE_HALF_LEN
         end
         table.sort(ts)
-
-        local hits, targets = {}, {}
-        for i = 1, pelletCount do
+        for i = 1, count do
             local t = ts[i]
             local p = (math.random() * 2 - 1) * LINE_PERP_JIT
-
-            -- assemble local offset: face axis pinned at +-sz/2,
-            -- line axis = t, perpendicular axis = p
-            local off = LOCAL_AXES[faceIdx] * ({sz.X, sz.Y, sz.Z})[faceIdx] * 0.5 * faceSign
-                     + LOCAL_AXES[lineAxIdx] * t
-                     + LOCAL_AXES[perpAxIdx] * p
-            local pos = part.CFrame:PointToWorldSpace(off)
-            hits[i]    = { Normal = worldN, Instance = part, Position = pos }
-            targets[i] = { thePart = part, theOffset = off }
+            local h = t * lineH + p * perpH
+            local v = t * lineV + p * perpV
+            local off = faceOff + horizVec * h + vertVec * v
+            local pos = bp.CFrame:PointToWorldSpace(off)
+            local idx = baseIdx + i
+            hits[idx]    = { Normal = worldN, Instance = bp, Position = pos }
+            targets[idx] = { thePart = bp, theOffset = off }
         end
+    end
+
+    local function fireShotgunSynth(part, pelletCount)
+        if not part then return false end
+        local origin = getMuzzlePos(); if not origin then return false end
+
+        -- `part` is UpperTorso (set by fireOnce override). Get LowerTorso
+        -- (or HumanoidRootPart fallback) as the second part.
+        local sp = part.Parent
+        if not sp then return false end
+        local partA = part
+        local partB = sp:FindFirstChild("LowerTorso")
+                   or sp:FindFirstChild("HumanoidRootPart")
+                   or sp:FindFirstChild("Torso")
+        if not partB or partB == partA then
+            -- only one torso part available -> degrade to single-part
+            -- (kept simple; if this happens repeatedly we should switch
+            -- to a different pair)
+            partB = partA
+        end
+
+        -- split: 3 on top arm of V, 2 on bottom arm (randomized which is which)
+        local nA = (math.random() < 0.5) and math.ceil(pelletCount / 2) or math.floor(pelletCount / 2)
+        local nB = pelletCount - nA
+
+        local hits, targets = {}, {}
+        -- top arm goes /, bottom arm goes \ -- together = V (point down at vertex)
+        _vGenOnPart(partA, nA,  LINE_ANGLE_DEG, origin, hits, targets, 0)
+        _vGenOnPart(partB, nB, -LINE_ANGLE_DEG, origin, hits, targets, nA)
 
         -- aim = centroid (matches capture)
         local sum = Vector3.zero
