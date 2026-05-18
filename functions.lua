@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 04:50 synth-v9 1D line spread"
+local SCRIPT_VERSION = "2026-05-19 05:10 synth-v10 horizontal line"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4636,21 +4636,23 @@ F.games.hoodCustoms.forceHit = (function()
         local h = getHead(); return h and h.Position or nil
     end
 
-    -- shotgun synth path (v9): SINGLE-PART, 1D LINE SPREAD.
-    -- v8 (rectangle spread) was wrong shape. Re-examining the close-
-    -- range capture's theOffsets shows pellets are CORRELATED along
-    -- one axis: dY/dX is consistently ~-3.8 across all 5 pellets,
-    -- meaning they lie on a near-vertical line (~15deg tilt), not in
-    -- a rectangle. User confirms "spread is only in 1 axis." Example
-    -- images show diagonal lines, horizontal lines, near-vertical lines
-    -- -- the LINE ORIENTATION varies shot-to-shot.
+    -- shotgun synth path (v10): SINGLE-PART, HORIZONTAL LINE SPREAD.
+    -- User confirmed the working pattern is a STRAIGHT HORIZONTAL LINE
+    -- of pellets in world space (e.g. "  .   . .   . . " -- 5 dots
+    -- spread horizontally with irregular spacing).
     --
-    -- Algorithm: for each shot, pick a random angle for the line
-    -- direction in the face's 2D plane. Sample N positions along that
-    -- line with tiny perpendicular jitter (matches the natural pattern's
-    -- 10:1 correlation: pellets stay on the line, not scattered).
-    local LINE_HALF_LEN   = 0.32   -- half length along the line (~0.64 total)
-    local LINE_PERP_JIT   = 0.025  -- half-jitter perpendicular to line (~5%)
+    -- The line must be horizontal IN WORLD SPACE regardless of how the
+    -- target's body part is rotated. To achieve this, we project world
+    -- horizontal onto the face plane:
+    --   1. Pick the face the shooter is on (which determines the 2D
+    --      in-plane local axes).
+    --   2. Of those two in-plane axes, find whichever has the smaller
+    --      |worldY| -- that's the most horizontal one. Use it as the
+    --      line direction.
+    --   3. Sample N points along that axis with random spacing, sorted.
+    --   4. Tiny perpendicular jitter (~5%) for slight natural variation.
+    local LINE_HALF_LEN = 0.32   -- 0.64 stud total, matches close-range capture span
+    local LINE_PERP_JIT = 0.025  -- ~5% perpendicular jitter
     local function fireShotgunSynth(part, pelletCount)
         if not part then return false end
         local origin = getMuzzlePos(); if not origin then return false end
@@ -4660,31 +4662,46 @@ F.games.hoodCustoms.forceHit = (function()
         local sz = part.Size
         local toLocal = part.CFrame:VectorToObjectSpace(origin - part.Position)
         local ax, ay, az = math.abs(toLocal.X), math.abs(toLocal.Y), math.abs(toLocal.Z)
-        local idx, sign
+        local faceIdx, faceSign  -- 1=X face, 2=Y face, 3=Z face
         if ax >= ay and ax >= az then
-            idx, sign = 1, (toLocal.X >= 0) and 1 or -1
+            faceIdx, faceSign = 1, (toLocal.X >= 0) and 1 or -1
         elseif ay >= az then
-            idx, sign = 2, (toLocal.Y >= 0) and 1 or -1
+            faceIdx, faceSign = 2, (toLocal.Y >= 0) and 1 or -1
         else
-            idx, sign = 3, (toLocal.Z >= 0) and 1 or -1
+            faceIdx, faceSign = 3, (toLocal.Z >= 0) and 1 or -1
         end
-        local localN = (idx == 1) and Vector3.new(sign, 0, 0)
-                   or  (idx == 2) and Vector3.new(0, sign, 0)
-                   or                 Vector3.new(0, 0, sign)
-        local worldN = part.CFrame:VectorToWorldSpace(localN)
 
-        -- Pick a random angle for the spread line within the face plane.
-        -- Captures showed angles vary shot-to-shot (one near-vertical at
-        -- -75deg, others diagonal). Just uniformly random over [0, 2pi).
-        local theta = math.random() * 2 * math.pi
-        local lineU = math.cos(theta)  -- along-line direction (u component)
-        local lineV = math.sin(theta)  -- along-line direction (v component)
-        -- perpendicular = (-sin, cos) (90deg CCW rotation)
-        local perpU = -lineV
-        local perpV =  lineU
+        -- world-space outward normal of the chosen face
+        local LOCAL_AXES = {
+            Vector3.new(1, 0, 0),
+            Vector3.new(0, 1, 0),
+            Vector3.new(0, 0, 1),
+        }
+        local worldN = part.CFrame:VectorToWorldSpace(
+            LOCAL_AXES[faceIdx] * faceSign
+        )
 
-        -- generate t values along the line, sorted (captures showed
-        -- pellets are ordered by their along-line position)
+        -- the two in-plane local axis indices for this face
+        local FACE_INPLANE = {
+            [1] = { 2, 3 },  -- X face: in-plane = Y, Z
+            [2] = { 1, 3 },  -- Y face: in-plane = X, Z
+            [3] = { 1, 2 },  -- Z face: in-plane = X, Y
+        }
+        local axA, axB = FACE_INPLANE[faceIdx][1], FACE_INPLANE[faceIdx][2]
+
+        -- Choose which in-plane axis is the LINE direction (most
+        -- horizontal in world) and which is the PERPENDICULAR (most
+        -- vertical, used only for tiny jitter).
+        local worldAxA = part.CFrame:VectorToWorldSpace(LOCAL_AXES[axA])
+        local worldAxB = part.CFrame:VectorToWorldSpace(LOCAL_AXES[axB])
+        local lineAxIdx, perpAxIdx
+        if math.abs(worldAxA.Y) <= math.abs(worldAxB.Y) then
+            lineAxIdx, perpAxIdx = axA, axB
+        else
+            lineAxIdx, perpAxIdx = axB, axA
+        end
+
+        -- sample sorted along-line t values + small perp jitter per pellet
         local ts = table.create(pelletCount)
         for i = 1, pelletCount do
             ts[i] = (math.random() * 2 - 1) * LINE_HALF_LEN
@@ -4695,29 +4712,12 @@ F.games.hoodCustoms.forceHit = (function()
         for i = 1, pelletCount do
             local t = ts[i]
             local p = (math.random() * 2 - 1) * LINE_PERP_JIT
-            -- in-plane coordinates (u, v) on the face
-            local u = lineU * t + perpU * p
-            local v = lineV * t + perpV * p
 
-            -- map (u, v) to local (lx, ly, lz) based on which face we're on
-            local lx, ly, lz
-            if idx == 1 then
-                -- X face: in-plane axes are Y (u), Z (v)
-                lx = (sz.X * 0.5) * sign
-                ly = u
-                lz = v
-            elseif idx == 2 then
-                -- Y face: in-plane axes are X (u), Z (v)
-                lx = u
-                ly = (sz.Y * 0.5) * sign
-                lz = v
-            else
-                -- Z face: in-plane axes are X (u), Y (v)
-                lx = u
-                ly = v
-                lz = (sz.Z * 0.5) * sign
-            end
-            local off = Vector3.new(lx, ly, lz)
+            -- assemble local offset: face axis pinned at +-sz/2,
+            -- line axis = t, perpendicular axis = p
+            local off = LOCAL_AXES[faceIdx] * ({sz.X, sz.Y, sz.Z})[faceIdx] * 0.5 * faceSign
+                     + LOCAL_AXES[lineAxIdx] * t
+                     + LOCAL_AXES[perpAxIdx] * p
             local pos = part.CFrame:PointToWorldSpace(off)
             hits[i]    = { Normal = worldN, Instance = part, Position = pos }
             targets[i] = { thePart = part, theOffset = off }
