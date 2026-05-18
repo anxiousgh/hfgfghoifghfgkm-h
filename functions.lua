@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 03:25 synth-v7 two-part symmetric split"
+local SCRIPT_VERSION = "2026-05-19 04:00 synth-v8 single-part vertical-biased"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4641,130 +4641,79 @@ F.games.hoodCustoms.forceHit = (function()
         local h = getHead(); return h and h.Position or nil
     end
 
-    -- shotgun synth path (v7): TWO-PART SPLIT.
-    -- User reported that a known-working shotgun cheat always lands
-    -- pellets on TWO different body parts (e.g. UpperTorso+LowerTorso,
-    -- or LeftUpperArm+RightUpperArm) per shot. This pattern defeats:
-    --   - "spread too tight on one part" detection (we're always on 2)
-    --   - "damage too high per shot" cap (mixing parts dilutes damage)
+    -- shotgun synth path (v8): SINGLE-PART, VERTICALLY-BIASED SPREAD.
+    -- v7 (2-part split) tripped "spoof pattern" because pellets on two
+    -- separate body parts imply IMPLAUSIBLE pellet directions (server
+    -- raycasts from origin through each Position; the angular spread
+    -- between a UpperTorso pellet and a LowerTorso pellet at close
+    -- range is ~20deg, way wider than any real shotgun cone).
     --
-    -- Algorithm: pick a random symmetric pair of SpecialParts that BOTH
-    -- exist on the target. Split N pellets between them with a 3-2 or
-    -- 2-3 ratio (randomized). For each pellet, compute hit via face-
-    -- based local-offset calculation (NO raycast):
-    --   - determine which face of the part the shooter is on
-    --   - random offset within that face's plane
-    --   - theOffset = local offset (face-axis pinned at +-sz/2)
-    --   - Position   = part.CFrame:PointToWorldSpace(theOffset)
-    --   - Normal     = face's outward normal in world space
-    -- This makes the geometric consistency check PointToWorldSpace
-    -- (theOffset) == Position pass exactly, while keeping all hits on
-    -- valid SpecialParts (no raycast, no chance of hitting wrong stuff).
-    local PAIR_POOL = {
-        { "UpperTorso", "LowerTorso" },          -- vertical torso pair
-        { "LeftUpperArm", "RightUpperArm" },     -- shoulder pair
-        { "LeftLowerArm", "RightLowerArm" },     -- forearm pair
-        { "LeftUpperLeg", "RightUpperLeg" },     -- thigh pair
-        { "Head", "UpperTorso" },                -- head+chest (some damage)
-    }
-    local function fireShotgunSynth(_chosenPart, pelletCount)
+    -- Going back to single-part with face-based offsets, but matching
+    -- the SHAPE of the captured natural close-range pattern:
+    --   - theOffset.X span: 0.16 stud (~8% of UpperTorso width)
+    --   - theOffset.Y span: 0.61 stud (~38% of UpperTorso height)
+    --   - theOffset.Z constant (front face)
+    -- The cluster is strongly vertically elongated (10:1 vertical to
+    -- horizontal). My previous "square" spreads (v4) were wrong shape,
+    -- which is probably what tripped the pattern check.
+    --
+    -- Pellets on the face plane use:
+    --   vertical axis: SPREAD_VERT  = 0.40 of face dimension
+    --   horizontal:    SPREAD_HORIZ = 0.08 of face dimension
+    -- These match the natural capture's spread ratio.
+    local SPREAD_VERT  = 0.40
+    local SPREAD_HORIZ = 0.08
+    local function fireShotgunSynth(part, pelletCount)
+        if not part then return false end
         local origin = getMuzzlePos(); if not origin then return false end
+        if (part.Position - origin).Magnitude < 0.01 then return false end
 
-        -- find target's SpecialParts folder. _chosenPart came from
-        -- getCurrentTargetPart() which targets the SpecialParts subfolder,
-        -- so its parent IS the SpecialParts folder.
-        local spFolder = _chosenPart and _chosenPart.Parent
-        if not spFolder or spFolder.Name ~= "SpecialParts" then
-            -- fallback: walk up to find SpecialParts
-            local cur = _chosenPart and _chosenPart.Parent
-            while cur and not cur:FindFirstChild("SpecialParts") do
-                cur = cur.Parent
-                if not cur or cur == workspace then break end
-            end
-            spFolder = cur and cur:FindFirstChild("SpecialParts")
-            if not spFolder then return false end
+        -- pick face the shooter is on
+        local sz = part.Size
+        local toLocal = part.CFrame:VectorToObjectSpace(origin - part.Position)
+        local ax, ay, az = math.abs(toLocal.X), math.abs(toLocal.Y), math.abs(toLocal.Z)
+        local idx, sign
+        if ax >= ay and ax >= az then
+            idx, sign = 1, (toLocal.X >= 0) and 1 or -1
+        elseif ay >= az then
+            idx, sign = 2, (toLocal.Y >= 0) and 1 or -1
+        else
+            idx, sign = 3, (toLocal.Z >= 0) and 1 or -1
         end
+        local localN = (idx == 1) and Vector3.new(sign, 0, 0)
+                   or  (idx == 2) and Vector3.new(0, sign, 0)
+                   or                 Vector3.new(0, 0, sign)
+        local worldN = part.CFrame:VectorToWorldSpace(localN)
 
-        -- Pick a random pair where BOTH parts exist. Try a few times
-        -- to land on a valid one; fall back to any two SpecialParts.
-        local partA, partB
-        local shuffled = table.clone(PAIR_POOL)
-        for i = #shuffled, 2, -1 do
-            local j = math.random(1, i)
-            shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-        end
-        for _, pair in ipairs(shuffled) do
-            local a = spFolder:FindFirstChild(pair[1])
-            local b = spFolder:FindFirstChild(pair[2])
-            if a and b and a:IsA("BasePart") and b:IsA("BasePart") then
-                partA, partB = a, b; break
-            end
-        end
-        if not partA then
-            -- nothing matched - grab any two SpecialParts
-            local picks = {}
-            for _, c in ipairs(spFolder:GetChildren()) do
-                if c:IsA("BasePart") then table.insert(picks, c) end
-                if #picks >= 2 then break end
-            end
-            partA = picks[1]; partB = picks[2] or picks[1]
-        end
-        if not partA or not partB then return false end
-
-        -- split: nA + nB = pelletCount, with nA in {ceil(N/2), floor(N/2)}
-        local half = pelletCount * 0.5
-        local nA   = (math.random() < 0.5) and math.ceil(half) or math.floor(half)
-        local nB   = pelletCount - nA
-
-        -- Face-based hit generator: pick the face of `bp` that the
-        -- shooter is on, place pellet at random position on that face,
-        -- compute consistent Position / Normal / theOffset.
-        local function hitOnPart(bp)
-            local sz = bp.Size
-            local toLocal = bp.CFrame:VectorToObjectSpace(origin - bp.Position)
-            local ax, ay, az = math.abs(toLocal.X), math.abs(toLocal.Y), math.abs(toLocal.Z)
-            local idx, sign
-            if ax >= ay and ax >= az then
-                idx, sign = 1, (toLocal.X >= 0) and 1 or -1
-            elseif ay >= az then
-                idx, sign = 2, (toLocal.Y >= 0) and 1 or -1
-            else
-                idx, sign = 3, (toLocal.Z >= 0) and 1 or -1
-            end
-            local localN = (idx == 1) and Vector3.new(sign, 0, 0)
-                       or  (idx == 2) and Vector3.new(0, sign, 0)
-                       or                 Vector3.new(0, 0, sign)
-            local worldN = bp.CFrame:VectorToWorldSpace(localN)
-            local SPREAD = 0.6
+        -- The capture's natural pattern is vertically biased relative to
+        -- the part's LOCAL frame -- because UpperTorso's local Y axis is
+        -- aligned with world up. For each face, "vertical" maps to the
+        -- local Y axis component of the face plane, "horizontal" to the
+        -- other in-plane axis.
+        --   face idx=1 (X face): in-plane axes are Y (vert) and Z (horiz)
+        --   face idx=2 (Y face): in-plane axes are X and Z (no inherent
+        --                         vertical direction -- treat as ~equal)
+        --   face idx=3 (Z face): in-plane axes are X (horiz) and Y (vert)
+        local hits, targets = {}, {}
+        for i = 1, pelletCount do
             local lx, ly, lz
             if idx == 1 then
                 lx = (sz.X * 0.5) * sign
-                ly = (math.random() - 0.5) * sz.Y * SPREAD
-                lz = (math.random() - 0.5) * sz.Z * SPREAD
+                ly = (math.random() - 0.5) * sz.Y * SPREAD_VERT
+                lz = (math.random() - 0.5) * sz.Z * SPREAD_HORIZ
             elseif idx == 2 then
-                lx = (math.random() - 0.5) * sz.X * SPREAD
+                lx = (math.random() - 0.5) * sz.X * SPREAD_HORIZ
                 ly = (sz.Y * 0.5) * sign
-                lz = (math.random() - 0.5) * sz.Z * SPREAD
+                lz = (math.random() - 0.5) * sz.Z * SPREAD_VERT
             else
-                lx = (math.random() - 0.5) * sz.X * SPREAD
-                ly = (math.random() - 0.5) * sz.Y * SPREAD
+                lx = (math.random() - 0.5) * sz.X * SPREAD_HORIZ
+                ly = (math.random() - 0.5) * sz.Y * SPREAD_VERT
                 lz = (sz.Z * 0.5) * sign
             end
             local off = Vector3.new(lx, ly, lz)
-            local pos = bp.CFrame:PointToWorldSpace(off)
-            return { Normal = worldN, Instance = bp, Position = pos },
-                   { thePart = bp, theOffset = off }
-        end
-
-        local hits, targets = {}, {}
-        for i = 1, nA do
-            local h, t = hitOnPart(partA)
-            hits[i], targets[i] = h, t
-        end
-        for i = 1, nB do
-            local idx = nA + i
-            local h, t = hitOnPart(partB)
-            hits[idx], targets[idx] = h, t
+            local pos = part.CFrame:PointToWorldSpace(off)
+            hits[i]    = { Normal = worldN, Instance = part, Position = pos }
+            targets[i] = { thePart = part, theOffset = off }
         end
 
         -- aim = centroid (matches capture)
