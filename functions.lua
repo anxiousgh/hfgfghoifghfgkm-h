@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 05:10 synth-v10 horizontal line"
+local SCRIPT_VERSION = "2026-05-19 05:30 shotguns always target torso"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4788,6 +4788,26 @@ F.games.hoodCustoms.forceHit = (function()
             pellets = (tool and SHOTGUN_PELLETS[tool.Name]) or 5
         else
             pellets = 1
+        end
+
+        -- For SHOTGUNS, override the target body part to ALWAYS be the
+        -- torso, regardless of what hitPart the user picked. The hitPart
+        -- dropdown still controls fireDirect (revolvers / pistols).
+        -- Rationale: shotguns naturally land their pellet line on a
+        -- large flat area; the torso is the largest, most consistent
+        -- target. Head-targeting shotgun shots produced 200 dmg per
+        -- shot which trips the per-shot damage cap.
+        if shotgun then
+            local sp = part.Parent
+            if sp and sp.Name == "SpecialParts" then
+                local torso = sp:FindFirstChild("UpperTorso")
+                           or sp:FindFirstChild("Torso")
+                           or sp:FindFirstChild("LowerTorso")
+                           or sp:FindFirstChild("HumanoidRootPart")
+                if torso and torso:IsA("BasePart") then
+                    part = torso
+                end
+            end
         end
 
         local fired = false
