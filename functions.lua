@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 04:25 remove shoot-count"
+local SCRIPT_VERSION = "2026-05-19 04:50 synth-v9 1D line spread"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4636,28 +4636,21 @@ F.games.hoodCustoms.forceHit = (function()
         local h = getHead(); return h and h.Position or nil
     end
 
-    -- shotgun synth path (v8): SINGLE-PART, VERTICALLY-BIASED SPREAD.
-    -- v7 (2-part split) tripped "spoof pattern" because pellets on two
-    -- separate body parts imply IMPLAUSIBLE pellet directions (server
-    -- raycasts from origin through each Position; the angular spread
-    -- between a UpperTorso pellet and a LowerTorso pellet at close
-    -- range is ~20deg, way wider than any real shotgun cone).
+    -- shotgun synth path (v9): SINGLE-PART, 1D LINE SPREAD.
+    -- v8 (rectangle spread) was wrong shape. Re-examining the close-
+    -- range capture's theOffsets shows pellets are CORRELATED along
+    -- one axis: dY/dX is consistently ~-3.8 across all 5 pellets,
+    -- meaning they lie on a near-vertical line (~15deg tilt), not in
+    -- a rectangle. User confirms "spread is only in 1 axis." Example
+    -- images show diagonal lines, horizontal lines, near-vertical lines
+    -- -- the LINE ORIENTATION varies shot-to-shot.
     --
-    -- Going back to single-part with face-based offsets, but matching
-    -- the SHAPE of the captured natural close-range pattern:
-    --   - theOffset.X span: 0.16 stud (~8% of UpperTorso width)
-    --   - theOffset.Y span: 0.61 stud (~38% of UpperTorso height)
-    --   - theOffset.Z constant (front face)
-    -- The cluster is strongly vertically elongated (10:1 vertical to
-    -- horizontal). My previous "square" spreads (v4) were wrong shape,
-    -- which is probably what tripped the pattern check.
-    --
-    -- Pellets on the face plane use:
-    --   vertical axis: SPREAD_VERT  = 0.40 of face dimension
-    --   horizontal:    SPREAD_HORIZ = 0.08 of face dimension
-    -- These match the natural capture's spread ratio.
-    local SPREAD_VERT  = 0.40
-    local SPREAD_HORIZ = 0.08
+    -- Algorithm: for each shot, pick a random angle for the line
+    -- direction in the face's 2D plane. Sample N positions along that
+    -- line with tiny perpendicular jitter (matches the natural pattern's
+    -- 10:1 correlation: pellets stay on the line, not scattered).
+    local LINE_HALF_LEN   = 0.32   -- half length along the line (~0.64 total)
+    local LINE_PERP_JIT   = 0.025  -- half-jitter perpendicular to line (~5%)
     local function fireShotgunSynth(part, pelletCount)
         if not part then return false end
         local origin = getMuzzlePos(); if not origin then return false end
@@ -4680,29 +4673,48 @@ F.games.hoodCustoms.forceHit = (function()
                    or                 Vector3.new(0, 0, sign)
         local worldN = part.CFrame:VectorToWorldSpace(localN)
 
-        -- The capture's natural pattern is vertically biased relative to
-        -- the part's LOCAL frame -- because UpperTorso's local Y axis is
-        -- aligned with world up. For each face, "vertical" maps to the
-        -- local Y axis component of the face plane, "horizontal" to the
-        -- other in-plane axis.
-        --   face idx=1 (X face): in-plane axes are Y (vert) and Z (horiz)
-        --   face idx=2 (Y face): in-plane axes are X and Z (no inherent
-        --                         vertical direction -- treat as ~equal)
-        --   face idx=3 (Z face): in-plane axes are X (horiz) and Y (vert)
+        -- Pick a random angle for the spread line within the face plane.
+        -- Captures showed angles vary shot-to-shot (one near-vertical at
+        -- -75deg, others diagonal). Just uniformly random over [0, 2pi).
+        local theta = math.random() * 2 * math.pi
+        local lineU = math.cos(theta)  -- along-line direction (u component)
+        local lineV = math.sin(theta)  -- along-line direction (v component)
+        -- perpendicular = (-sin, cos) (90deg CCW rotation)
+        local perpU = -lineV
+        local perpV =  lineU
+
+        -- generate t values along the line, sorted (captures showed
+        -- pellets are ordered by their along-line position)
+        local ts = table.create(pelletCount)
+        for i = 1, pelletCount do
+            ts[i] = (math.random() * 2 - 1) * LINE_HALF_LEN
+        end
+        table.sort(ts)
+
         local hits, targets = {}, {}
         for i = 1, pelletCount do
+            local t = ts[i]
+            local p = (math.random() * 2 - 1) * LINE_PERP_JIT
+            -- in-plane coordinates (u, v) on the face
+            local u = lineU * t + perpU * p
+            local v = lineV * t + perpV * p
+
+            -- map (u, v) to local (lx, ly, lz) based on which face we're on
             local lx, ly, lz
             if idx == 1 then
+                -- X face: in-plane axes are Y (u), Z (v)
                 lx = (sz.X * 0.5) * sign
-                ly = (math.random() - 0.5) * sz.Y * SPREAD_VERT
-                lz = (math.random() - 0.5) * sz.Z * SPREAD_HORIZ
+                ly = u
+                lz = v
             elseif idx == 2 then
-                lx = (math.random() - 0.5) * sz.X * SPREAD_HORIZ
+                -- Y face: in-plane axes are X (u), Z (v)
+                lx = u
                 ly = (sz.Y * 0.5) * sign
-                lz = (math.random() - 0.5) * sz.Z * SPREAD_VERT
+                lz = v
             else
-                lx = (math.random() - 0.5) * sz.X * SPREAD_HORIZ
-                ly = (math.random() - 0.5) * sz.Y * SPREAD_VERT
+                -- Z face: in-plane axes are X (u), Y (v)
+                lx = u
+                ly = v
                 lz = (sz.Z * 0.5) * sign
             end
             local off = Vector3.new(lx, ly, lz)
