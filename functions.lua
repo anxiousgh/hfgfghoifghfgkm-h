@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 04:00 synth-v8 single-part vertical-biased"
+local SCRIPT_VERSION = "2026-05-19 04:25 remove shoot-count"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4479,11 +4479,6 @@ F.games.hoodCustoms.forceHit = (function()
     --                the per-shot PRNG check). 2 stacked clusters ~3 studs
     --                apart, sub-stud anti-zero-spread jitter inside each.
     local shotgunMode     = "click"
-    -- multiplier: how many times to fire the shoot payload per forceHit
-    -- call. Default 1 = normal. >1 stacks identical packets back-to-back
-    -- for damage amplification (5-pellet shotgun x3 = 15 effective hits
-    -- if the server doesn't dedupe).
-    local fireMultiplier  = 1
 
     -- visual / audio feedback (FireServer doesn't render bullet visuals
     -- because we never hit the gun script, so we fake them locally)
@@ -4784,17 +4779,15 @@ F.games.hoodCustoms.forceHit = (function()
         end
 
         local fired = false
-        for _ = 1, math.max(1, fireMultiplier) do
-            if shotgun then
-                if shotgunMode == "synth" then
-                    if fireShotgunSynth(part, pellets) then fired = true end
-                else
-                    fireClick()
-                    fired = true
-                end
+        if shotgun then
+            if shotgunMode == "synth" then
+                if fireShotgunSynth(part, pellets) then fired = true end
             else
-                if fireDirect(part) then fired = true end
+                fireClick()
+                fired = true
             end
+        else
+            if fireDirect(part) then fired = true end
         end
 
         if fired then
@@ -4832,10 +4825,6 @@ F.games.hoodCustoms.forceHit = (function()
         if m == "synth" or m == "click" then shotgunMode = m end
     end
     t.getShotgunMode = function() return shotgunMode end
-    t.setFireMultiplier = function(n)
-        fireMultiplier = math.clamp(tonumber(n) or 1, 1, 10)
-    end
-    t.getFireMultiplier = function() return fireMultiplier end
     -- tracer + hit sound
     t.setTracerEnabled  = function(v) tracerEnabled = v == true end
     t.setTracerColor    = function(c) if typeof(c) == "Color3" then tracerColor = c end end
