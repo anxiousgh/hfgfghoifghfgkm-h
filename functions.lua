@@ -1076,111 +1076,103 @@ end
 --  STICKY EMOTES
 -- ============================================================
 --  Two filters keep us catching ONLY emotes, not weapon/tool anims:
---
 --    1. Tool-ancestor filter — if the source Animation Instance is
 --       parented under a Tool (or HopperBin) anywhere up the chain,
 --       it's a tool/weapon animation (knife slash, gun fire) and we
---       skip it. This is the line that separates a Wave emote from
---       a Knife.Slash.
---
+--       skip it.
 --    2. Builtin filter — Roblox's Animate LocalScript tracks
 --       (WalkAnim, RunAnim, IdleAnim, ToolNoneAnim, etc.) are
---       excluded by exact-name + parent-folder + low-priority
---       checks. These never get touched.
+--       excluded by exact-name + parent-folder + low-priority.
+--  Anything that passes both is treated as an emote (catalog OR
+--  game-custom). No-stacking via G._stickyTracks — we only ever
+--  touch tracks we ourselves captured or spawned.
 --
---  Anything that passes both is treated as an emote. That includes
---  Roblox catalog emotes (via /e or the emote menu) AND custom
---  game emote systems that load their animations directly via
---  Animator:LoadAnimation rather than Humanoid:PlayEmote — those
---  bypass the PlayEmote namecall, so a namecall-only filter would
---  miss them entirely (which is what happened in the prior build).
---
---  No-stacking: every track we capture or Heartbeat-spawn is added
---  to G._stickyTracks. A new emote calls _emoteStopOurs() first,
---  which only touches that set — unrelated game animations are
---  never stopped.
+--  WRAPPED IN do ... end so all the helper locals (filter tables,
+--  helper funcs, etc.) leave the chunk's register pool after the
+--  block. Only stopStickyEmote / startStickyEmote stay as top-level
+--  locals because they're referenced by makeToggle and stopAll
+--  later in the file. Luau's per-function 200-local limit was hit
+--  when these were declared individually at chunk top-level.
 -- ============================================================
-local BUILTIN_ANIM_NAMES = {
-    -- R15 standard Animate script
-    WalkAnim = true, RunAnim = true, JumpAnim = true, IdleAnim = true,
-    FallAnim = true, ClimbAnim = true, SwimAnim = true, SwimIdleAnim = true,
-    ToolNoneAnim = true, ToolSlashAnim = true, ToolLungeAnim = true,
-    -- R6 (space-separated)
-    ["Idle Anim"] = true, ["Walk Anim"] = true, ["Run Anim"] = true,
-    ["Jump Anim"] = true, ["Fall Anim"] = true, ["Climb Anim"] = true,
-    -- Misc internal
-    PoseAnim = true, DeathAnim = true, SitAnim = true,
-}
-local BUILTIN_PARENT_NAMES = {
-    walk = true, run = true, jump = true, idle = true, fall = true,
-    climb = true, swim = true, swimidle = true, sit = true,
-    toolnone = true, toolslash = true, toollunge = true,
-}
-local function _emoteGetAnimator()
-    local c = lplr.Character
-    local hum = c and c:FindFirstChildOfClass("Humanoid")
-    return hum and hum:FindFirstChildOfClass("Animator")
-end
--- True if the Animation Instance is anywhere under a Tool/HopperBin
--- in the parent chain. Tool/weapon anims live inside the Tool, so
--- this excludes knife slashes, gun fires, etc. Bounded walk so a
--- malformed parent chain can't hang us.
-local function _emoteIsToolAnim(track)
-    local a = track.Animation
-    if not a then return false end
-    local p = a.Parent
-    for _ = 1, 12 do
-        if not p or p == game then return false end
-        if p:IsA("Tool") or p:IsA("HopperBin") then return true end
-        p = p.Parent
+local stopStickyEmote, startStickyEmote
+do
+    local BUILTIN_ANIM_NAMES = {
+        -- R15 standard Animate script
+        WalkAnim = true, RunAnim = true, JumpAnim = true, IdleAnim = true,
+        FallAnim = true, ClimbAnim = true, SwimAnim = true, SwimIdleAnim = true,
+        ToolNoneAnim = true, ToolSlashAnim = true, ToolLungeAnim = true,
+        -- R6 (space-separated)
+        ["Idle Anim"] = true, ["Walk Anim"] = true, ["Run Anim"] = true,
+        ["Jump Anim"] = true, ["Fall Anim"] = true, ["Climb Anim"] = true,
+        -- Misc internal
+        PoseAnim = true, DeathAnim = true, SitAnim = true,
+    }
+    local BUILTIN_PARENT_NAMES = {
+        walk = true, run = true, jump = true, idle = true, fall = true,
+        climb = true, swim = true, swimidle = true, sit = true,
+        toolnone = true, toolslash = true, toollunge = true,
+    }
+    local function getAnimator()
+        local c = lplr.Character
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        return hum and hum:FindFirstChildOfClass("Animator")
     end
-    return false
-end
-local function _emoteIsBuiltin(track)
-    local a = track.Animation
-    if not a then return true end
-    if BUILTIN_ANIM_NAMES[a.Name or ""] then return true end
-    local parent = a.Parent
-    if parent then
-        if BUILTIN_PARENT_NAMES[(parent.Name or ""):lower()] then return true end
-        local grand = parent.Parent
-        if grand and grand.Name == "Animate" then return true end
+    -- True if the Animation Instance is anywhere under a Tool/HopperBin
+    -- in the parent chain. Tool/weapon anims live inside the Tool, so
+    -- this excludes knife slashes, gun fires, etc.
+    local function isToolAnim(track)
+        local a = track.Animation
+        if not a then return false end
+        local p = a.Parent
+        for _ = 1, 12 do
+            if not p or p == game then return false end
+            if p:IsA("Tool") or p:IsA("HopperBin") then return true end
+            p = p.Parent
+        end
+        return false
     end
-    -- Movement/Idle/Core priority anims are never emotes
-    local prio = track.Priority
-    if prio == Enum.AnimationPriority.Idle
-       or prio == Enum.AnimationPriority.Movement
-       or prio == Enum.AnimationPriority.Core then
+    local function isBuiltin(track)
+        local a = track.Animation
+        if not a then return true end
+        if BUILTIN_ANIM_NAMES[a.Name or ""] then return true end
+        local parent = a.Parent
+        if parent then
+            if BUILTIN_PARENT_NAMES[(parent.Name or ""):lower()] then return true end
+            local grand = parent.Parent
+            if grand and grand.Name == "Animate" then return true end
+        end
+        local prio = track.Priority
+        if prio == Enum.AnimationPriority.Idle
+           or prio == Enum.AnimationPriority.Movement
+           or prio == Enum.AnimationPriority.Core then
+            return true
+        end
+        return false
+    end
+    local function shouldStick(track)
+        if isToolAnim(track) then return false end
+        if isBuiltin(track) then return false end
         return true
     end
-    return false
-end
-local function _emoteShouldStick(track)
-    if _emoteIsToolAnim(track) then return false end
-    if _emoteIsBuiltin(track) then return false end
-    return true
-end
--- Stop every AnimationTrack we've captured/spawned. Doesn't touch
--- tracks the game/tool/weapon system spawned independently.
-local function _emoteStopOurs()
-    G._stickyTracks = G._stickyTracks or {}
-    for t, _ in pairs(G._stickyTracks) do
-        pcall(function() t:Stop(0) end)
+    local function stopOurs()
+        G._stickyTracks = G._stickyTracks or {}
+        for t, _ in pairs(G._stickyTracks) do
+            pcall(function() t:Stop(0) end)
+        end
+        table.clear(G._stickyTracks)
     end
-    table.clear(G._stickyTracks)
-end
-local function stopStickyEmote()
-    G.stickyEmoteActive   = false
-    G._currentEmoteId     = nil
-    G._emoteStopRequested = false
-    if G._emoteAnimConn     then G._emoteAnimConn:Disconnect();     G._emoteAnimConn     = nil end
-    if G._emoteCharConn     then G._emoteCharConn:Disconnect();     G._emoteCharConn     = nil end
-    if G._emoteChatConn     then G._emoteChatConn:Disconnect();     G._emoteChatConn     = nil end
-    if G._emoteTextChatConn then G._emoteTextChatConn:Disconnect(); G._emoteTextChatConn = nil end
-    if G._emoteHbConn       then G._emoteHbConn:Disconnect();       G._emoteHbConn       = nil end
-    _emoteStopOurs()
-end
-local function startStickyEmote()
+    function stopStickyEmote()
+        G.stickyEmoteActive   = false
+        G._currentEmoteId     = nil
+        G._emoteStopRequested = false
+        if G._emoteAnimConn     then G._emoteAnimConn:Disconnect();     G._emoteAnimConn     = nil end
+        if G._emoteCharConn     then G._emoteCharConn:Disconnect();     G._emoteCharConn     = nil end
+        if G._emoteChatConn     then G._emoteChatConn:Disconnect();     G._emoteChatConn     = nil end
+        if G._emoteTextChatConn then G._emoteTextChatConn:Disconnect(); G._emoteTextChatConn = nil end
+        if G._emoteHbConn       then G._emoteHbConn:Disconnect();       G._emoteHbConn       = nil end
+        stopOurs()
+    end
+    function startStickyEmote()
     G.stickyEmoteActive    = true
     G._emoteStopRequested  = false
     G._currentEmoteId      = nil
@@ -1196,7 +1188,7 @@ local function startStickyEmote()
         if G._emoteAnimConn then G._emoteAnimConn:Disconnect() end
         G._emoteAnimConn = animator.AnimationPlayed:Connect(function(track)
             if not G.stickyEmoteActive or G._emoteStopRequested then return end
-            if not _emoteShouldStick(track) then return end
+            if not shouldStick(track) then return end
             local a = track.Animation
             if not a or a.AnimationId == "" then return end
             -- if this is OUR own Heartbeat-spawned replay of the current
@@ -1207,7 +1199,7 @@ local function startStickyEmote()
                 return
             end
             -- different emote (or first one) — supersede the old set
-            _emoteStopOurs()
+            stopOurs()
             G._stickyTracks[track] = true
             G._currentEmoteId = a.AnimationId
             pcall(function() track.Priority = Enum.AnimationPriority.Action4 end)
@@ -1232,7 +1224,7 @@ local function startStickyEmote()
         if not G.stickyEmoteActive or G._emoteStopRequested then return end
         local id = G._currentEmoteId
         if not id or id == "" then return end
-        local animator = _emoteGetAnimator()
+        local animator = getAnimator()
         if not animator then return end
         -- prune dead tracks from our set
         for t, _ in pairs(G._stickyTracks) do
@@ -1269,7 +1261,7 @@ local function startStickyEmote()
         if m:match("^/e%s+stop") or m:match("^/emote%s+stop") then
             G._emoteStopRequested = true
             G._currentEmoteId     = nil
-            _emoteStopOurs()
+            stopOurs()
             task.delay(0.5, function() G._emoteStopRequested = false end)
         end
     end
@@ -1285,6 +1277,7 @@ local function startStickyEmote()
         end
     end)
 end
+end  -- end of "do" block that scopes sticky-emote helpers
 
 local function cmdBlink()
     local char=lplr.Character; if not char then return end
