@@ -538,7 +538,12 @@ local function startAntiAfk()
         t+=dt
         if t>=55 then
             t=0
-            pcall(function() firesignal(lplr.Idled) end)
+            -- firesignal(lplr.Idled) was here but is a no-op (and a footgun):
+            -- the connections to lplr.Idled were disabled in startAntiAfk above,
+            -- so firing the signal does nothing. If a future change re-enables
+            -- those connections it would actively *trigger* the AFK kick.
+            -- The VirtualInputManager W-press below is what actually keeps the
+            -- engine considering us "active".
             pcall(function()
                 local vim=VirtualInputManager
                 vim:SendKeyEvent(true,Enum.KeyCode.W,false,game)
@@ -785,6 +790,7 @@ local function stopFreecam()
     G.freecamActive=false
     if G.freecamConn then G.freecamConn:Disconnect(); G.freecamConn=nil end
     if G.freecamMouseConn then G.freecamMouseConn:Disconnect(); G.freecamMouseConn=nil end
+    if G._freecamCharConn then G._freecamCharConn:Disconnect(); G._freecamCharConn=nil end
     pcall(function() RunService:UnbindFromRenderStep("FreecamRender") end)
     workspace.CurrentCamera.CameraType=Enum.CameraType.Custom
     UserInputService.MouseBehavior=Enum.MouseBehavior.Default
@@ -801,19 +807,27 @@ local function startFreecam()
     local cam=workspace.CurrentCamera
     G.freecamCF=cam.CFrame
     cam.CameraType=Enum.CameraType.Scriptable
-    do
-        local char=lplr.Character
-        if char then
-            local hrp=char:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local bv=Instance.new("BodyVelocity")
-                bv.Name="FreecamAnchor"; bv.Velocity=Vector3.zero
-                bv.MaxForce=Vector3.new(1e5,1e5,1e5); bv.Parent=hrp
-            end
-            local hum=char:FindFirstChildOfClass("Humanoid")
-            if hum then hum.WalkSpeed=0; hum.JumpPower=0 end
+    -- anchor body + zero walkspeed/jump on every (re)spawn while active.
+    -- without the CharacterAdded hook, the new character would drift away
+    -- from where freecam expected to anchor it after a respawn.
+    local function anchorChar(char)
+        if not char then return end
+        local hrp=char:WaitForChild("HumanoidRootPart",5)
+        if hrp then
+            local existing=hrp:FindFirstChild("FreecamAnchor")
+            if existing then existing:Destroy() end
+            local bv=Instance.new("BodyVelocity")
+            bv.Name="FreecamAnchor"; bv.Velocity=Vector3.zero
+            bv.MaxForce=Vector3.new(1e5,1e5,1e5); bv.Parent=hrp
         end
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.WalkSpeed=0; hum.JumpPower=0 end
     end
+    anchorChar(lplr.Character)
+    if G._freecamCharConn then G._freecamCharConn:Disconnect() end
+    G._freecamCharConn=lplr.CharacterAdded:Connect(function(c)
+        if G.freecamActive then anchorChar(c) end
+    end)
     local BASE_SPEED=40; local SPRINT_MULT=4
     local rotX=math.asin(math.clamp(cam.CFrame.LookVector.Y,-1,1))
     local rotY=math.atan2(-cam.CFrame.LookVector.X,-cam.CFrame.LookVector.Z)
@@ -1001,6 +1015,8 @@ end
 
 local function stopSpin()
     G.spinActive=false
+    if G._spinCharConn then G._spinCharConn:Disconnect(); G._spinCharConn=nil end
+    G._spinGyro=nil
     pcall(function() RunService:UnbindFromRenderStep("SpinStep") end)
     local char=lplr.Character
     if char then
@@ -1012,13 +1028,24 @@ local function stopSpin()
 end
 local function startSpin()
     G.spinActive=true
-    local char=lplr.Character; if not char then return end
-    local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
-    local hum=char:FindFirstChildOfClass("Humanoid")
-    if hum then hum.AutoRotate=false end
-    local gyro=Instance.new("BodyAngularVelocity")
-    gyro.Name="SpinGyro"; gyro.AngularVelocity=Vector3.new(0,SPIN_SPEED,0)
-    gyro.MaxTorque=Vector3.new(0,1e6,0); gyro.Parent=hrp
+    local function setup(char)
+        if not char then return end
+        local hrp=char:WaitForChild("HumanoidRootPart",5); if not hrp then return end
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.AutoRotate=false end
+        -- clear any stale gyro on this (potentially recycled) HRP before re-creating
+        local existing=hrp:FindFirstChild("SpinGyro")
+        if existing then existing:Destroy() end
+        local gyro=Instance.new("BodyAngularVelocity")
+        gyro.Name="SpinGyro"; gyro.AngularVelocity=Vector3.new(0,SPIN_SPEED,0)
+        gyro.MaxTorque=Vector3.new(0,1e6,0); gyro.Parent=hrp
+        G._spinGyro=gyro
+    end
+    setup(lplr.Character)
+    if G._spinCharConn then G._spinCharConn:Disconnect() end
+    G._spinCharConn=lplr.CharacterAdded:Connect(function(c)
+        if G.spinActive then setup(c) end
+    end)
 end
 
 local function stopIce()
@@ -2641,7 +2668,14 @@ F.fullbright= makeToggle(startFullbright,stopFullbright,"fullbrightActive")
 F.freecam   = makeToggle(startFreecam,   stopFreecam,   "freecamActive")
 F.zoom      = makeToggle(startZoom,      stopZoom,      "zoomActive")
 F.spin      = makeToggle(startSpin,      stopSpin,      "spinActive")
-F.spin.setSpeed = function(n) SPIN_SPEED = tonumber(n) or SPIN_SPEED end
+F.spin.setSpeed = function(n)
+    SPIN_SPEED = tonumber(n) or SPIN_SPEED
+    -- live-update the running gyro so the slider takes effect immediately
+    -- instead of requiring a toggle off/on
+    if G._spinGyro and G._spinGyro.Parent then
+        G._spinGyro.AngularVelocity = Vector3.new(0, SPIN_SPEED, 0)
+    end
+end
 F.flip      = makeToggle(startFlip,      stopFlip,      "flipActive")
 F.tilt      = makeToggle(startTilt,      stopTilt,      "tiltActive")
 F.backwards = makeToggle(startBackwards, stopBackwards, "backwardsActive")
