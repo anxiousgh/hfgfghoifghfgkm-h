@@ -1072,6 +1072,121 @@ local function startIce()
     end)
 end
 
+-- ============================================================
+--  STICKY EMOTES
+-- ============================================================
+--  Roblox stops emotes the instant you start moving because the
+--  default Animate LocalScript plays WalkAnim/RunAnim, which fade
+--  out the catalog emote tracks. We:
+--    1. Watch AnimationPlayed on the local Humanoid's Animator
+--    2. Skip any track whose Animation.Name ends in "Anim" — those
+--       are the Animate LocalScript's WalkAnim/RunAnim/IdleAnim/etc.
+--    3. Promote everything else to Action4 priority so movement
+--       anims can't override
+--    4. Re-:Play() on Stopped so it persists across movement
+--  Stop triggers: user types "/e stop" or "/emote stop" in chat,
+--  OR toggles the feature off. Both legacy chat and the new
+--  TextChatService are hooked so this works in either kind of game.
+-- ============================================================
+local function _emoteIsBuiltin(track)
+    local a = track.Animation
+    if not a then return true end
+    local n = a.Name or ""
+    -- Default R15 Animate script names all end in "Anim":
+    -- WalkAnim, RunAnim, JumpAnim, IdleAnim, FallAnim, ClimbAnim,
+    -- SwimAnim, SwimIdleAnim, ToolNoneAnim, ToolSlashAnim, ToolLungeAnim
+    if n:match("Anim$") then return true end
+    return false
+end
+local function _emoteStopAll()
+    local c = lplr.Character
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if not animator then return end
+    for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+        if not _emoteIsBuiltin(t) then
+            pcall(function() t:Stop(0) end)
+        end
+    end
+end
+local function stopStickyEmote()
+    G.stickyEmoteActive = false
+    G._currentStickyEmote = nil
+    if G._emoteAnimConn     then G._emoteAnimConn:Disconnect();     G._emoteAnimConn     = nil end
+    if G._emoteCharConn     then G._emoteCharConn:Disconnect();     G._emoteCharConn     = nil end
+    if G._emoteChatConn     then G._emoteChatConn:Disconnect();     G._emoteChatConn     = nil end
+    if G._emoteTextChatConn then G._emoteTextChatConn:Disconnect(); G._emoteTextChatConn = nil end
+    _emoteStopAll()
+end
+local function startStickyEmote()
+    G.stickyEmoteActive   = true
+    G._emoteStopRequested = false
+    G._currentStickyEmote = nil
+
+    local function hookChar(char)
+        if not char then return end
+        local hum = char:WaitForChild("Humanoid", 5); if not hum then return end
+        local animator = hum:WaitForChild("Animator", 5); if not animator then return end
+        if G._emoteAnimConn then G._emoteAnimConn:Disconnect() end
+        G._emoteAnimConn = animator.AnimationPlayed:Connect(function(track)
+            if not G.stickyEmoteActive then return end
+            if _emoteIsBuiltin(track) then return end
+            -- New emote supersedes any previous sticky one so we don't
+            -- end up replaying both forever in parallel.
+            if G._currentStickyEmote and G._currentStickyEmote ~= track then
+                pcall(function() G._currentStickyEmote:Stop(0) end)
+            end
+            G._currentStickyEmote = track
+            pcall(function() track.Priority = Enum.AnimationPriority.Action4 end)
+            local stopConn
+            stopConn = track.Stopped:Connect(function()
+                if stopConn then stopConn:Disconnect() end
+                if not G.stickyEmoteActive   then return end
+                if G._emoteStopRequested     then return end
+                if G._currentStickyEmote ~= track then return end  -- superseded
+                -- defer so we're not :Play()-ing inside Stopped
+                task.defer(function()
+                    if G.stickyEmoteActive
+                        and not G._emoteStopRequested
+                        and G._currentStickyEmote == track then
+                        pcall(function() track:Play(0) end)
+                    end
+                end)
+            end)
+        end)
+    end
+    hookChar(lplr.Character)
+    if G._emoteCharConn then G._emoteCharConn:Disconnect() end
+    G._emoteCharConn = lplr.CharacterAdded:Connect(function(c)
+        if G.stickyEmoteActive then hookChar(c) end
+    end)
+
+    -- /e stop interception. Window the stop-flag for half a second so
+    -- the in-flight Stopped callbacks have time to early-out before we
+    -- re-arm for the next emote.
+    local function onChat(msg)
+        if not G.stickyEmoteActive or type(msg) ~= "string" then return end
+        local m = msg:lower():gsub("^%s+", "")
+        if m:match("^/e%s+stop") or m:match("^/emote%s+stop") then
+            G._emoteStopRequested = true
+            G._currentStickyEmote = nil
+            _emoteStopAll()
+            task.delay(0.5, function() G._emoteStopRequested = false end)
+        end
+    end
+    if G._emoteChatConn then G._emoteChatConn:Disconnect() end
+    G._emoteChatConn = lplr.Chatted:Connect(onChat)
+    if G._emoteTextChatConn then G._emoteTextChatConn:Disconnect() end
+    pcall(function()
+        local TCS = game:GetService("TextChatService")
+        if TCS and TCS.SendingMessage then
+            G._emoteTextChatConn = TCS.SendingMessage:Connect(function(message)
+                if message and message.Text then onChat(message.Text) end
+            end)
+        end
+    end)
+end
+
 local function cmdBlink()
     local char=lplr.Character; if not char then return end
     local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
@@ -2681,6 +2796,8 @@ F.tilt      = makeToggle(startTilt,      stopTilt,      "tiltActive")
 F.backwards = makeToggle(startBackwards, stopBackwards, "backwardsActive")
 F.ice       = makeToggle(startIce,       stopIce,       "iceActive")
 F.ice.setSlide = function(n) ICE_SLIDE = math.clamp(tonumber(n) or ICE_SLIDE, 0, 0.999) end
+
+F.stickyEmote = makeToggle(startStickyEmote, stopStickyEmote, "stickyEmoteActive")
 
 F.respawn = { fire = cmdRe }
 F.blink   = {
@@ -5478,6 +5595,7 @@ F.disableAll = function()
     if F.forceChat and F.forceChat.stop then F.forceChat.stop() end
     stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopTilt(); stopBackwards(); stopIce()
+    stopStickyEmote()
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
     TrigSettings.Enabled=false
     RageSettings.SilentForce=false; RageSettings.AutoShoot=false
