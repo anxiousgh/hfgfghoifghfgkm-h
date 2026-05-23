@@ -2109,7 +2109,7 @@ RunService.RenderStepped:Connect(function(dt)
     if RageSettings.FaceTarget and hrp and lhrp then
         if not _rbFaceStepBound then
             _rbFaceStepBound = true
-            RunService:BindToRenderStep("rbFaceStep", Enum.RenderPriority.Camera.Value+1, function()
+            RunService:BindToRenderStep("rbFaceStep", Enum.RenderPriority.Character.Value+1, function()
                 if not RageSettings.FaceTarget then
                     RunService:UnbindFromRenderStep("rbFaceStep")
                     _rbFaceStepBound = false
