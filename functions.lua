@@ -177,12 +177,12 @@ local function stopFly()
     G.flyActive=false; if G.flyConn then G.flyConn:Disconnect(); G.flyConn=nil end
 end
 local function startFly()
-    local char=lplr.Character; if not char then return end
-    local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
     G.flyActive=true
+    if G.flyConn then G.flyConn:Disconnect() end
     G.flyConn=RunService.Heartbeat:Connect(function(dt)
-        char=lplr.Character; if not char then stopFly(); return end
-        hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then stopFly(); return end
+        if not G.flyActive then return end
+        local char=lplr.Character; if not char then return end
+        local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
         local cam=workspace.CurrentCamera; local dir=Vector3.zero
         if UserInputService:IsKeyDown(Enum.KeyCode.W)         then dir+=cam.CFrame.LookVector  end
         if UserInputService:IsKeyDown(Enum.KeyCode.S)         then dir-=cam.CFrame.LookVector  end
