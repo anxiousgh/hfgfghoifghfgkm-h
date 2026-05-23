@@ -1325,7 +1325,7 @@ do
             F.disableAll()
             for _, name in ipairs({
                 "Fly","Speed","Walkspeed","JumpPowerToggle","Bhop","InfJump","AntiAfk","ClickTp","Noclip","AutoRespawn",
-                "Fullbright","Freecam","Zoom","Spin","Flip","Ice",
+                "Fullbright","Freecam","Zoom","Spin","Flip","Ice","StickyEmote",
                 "AimEnabled","TrigEnabled","CamEnabled",
                 "RageSilentForce","RageAutoShoot","RageOrbit","RageFaceTarget","RageCamSnap",
                 "EspEnabled",
@@ -1375,6 +1375,20 @@ do
         Default = false,
         Callback = function(v)
             if v then F.forceChat.start() else F.forceChat.stop() end
+        end,
+    })
+
+    -- =================== STICKY EMOTES ===================
+    -- Keeps catalog emotes playing through movement (promotes the
+    -- track to Action4 so WalkAnim/RunAnim can't fade them out, and
+    -- replays on Stopped). Type "/e stop" or "/emote stop" in chat
+    -- to stop, same as vanilla Roblox.
+    local Emotes = Tabs.Misc:AddLeftGroupbox("Sticky emotes")
+    Emotes:AddToggle("StickyEmote", { Text = "Keep emotes playing through movement",
+        Default = false,
+        Tooltip = "Type /e stop or /emote stop in chat to stop the current emote.",
+        Callback = function(v)
+            if v then F.stickyEmote.start() else F.stickyEmote.stop() end
         end,
     })
 
