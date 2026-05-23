@@ -312,13 +312,13 @@ local function stopCframeSpeed()
     G.speedActive=false; if G.speedConn then G.speedConn:Disconnect(); G.speedConn=nil end
 end
 local function startCframeSpeed(mult)
-    local char=lplr.Character; if not char then return end
-    local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
     G.speedActive=true; G.speedValue=mult or 2
+    if G.speedConn then G.speedConn:Disconnect() end
     G.speedConn=RunService.Heartbeat:Connect(function(dt)
-        char=lplr.Character; if UserInputService:GetFocusedTextBox() then return end
-        if not char then stopCframeSpeed(); return end
-        hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then stopCframeSpeed(); return end
+        if not G.speedActive then return end
+        if UserInputService:GetFocusedTextBox() then return end
+        local char=lplr.Character; if not char then return end
+        local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
         local dir=Vector3.zero
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir+=workspace.CurrentCamera.CFrame.LookVector  end
         if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir-=workspace.CurrentCamera.CFrame.LookVector  end
