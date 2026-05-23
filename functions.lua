@@ -2081,6 +2081,7 @@ end)
 
 local rbCachedTarget = nil
 local _rbFaceStepBound = false
+local _rbFaceSavedAutoRotate = nil  -- snapshot of Humanoid.AutoRotate before we forced it off
 local rbOrbitAngle = 0
 
 -- target visualization
@@ -2350,14 +2351,39 @@ RunService.RenderStepped:Connect(function(dt)
     if RageSettings.FaceTarget and hrp and lhrp then
         if not _rbFaceStepBound then
             _rbFaceStepBound = true
-            RunService:BindToRenderStep("rbFaceStep", Enum.RenderPriority.Character.Value+1, function()
+            -- Bind at Last+1 so we run AFTER everything:
+            --   * PlayerModule shiftlock (Camera priority, 200)
+            --   * Any game script using BindToRenderStep at arbitrary priorities
+            --   * Any game script using RenderStepped:Connect (fires at Last=2000)
+            -- Last+1 (2001) makes our HRP.CFrame write the final word that frame.
+            -- That's what fixes shiftlock / gun-aim systems still overriding us.
+            RunService:BindToRenderStep("rbFaceStep", Enum.RenderPriority.Last.Value+1, function()
                 if not RageSettings.FaceTarget then
                     RunService:UnbindFromRenderStep("rbFaceStep")
                     _rbFaceStepBound = false
+                    -- restore the AutoRotate we forced off below
+                    local c   = lplr.Character
+                    local hum = c and c:FindFirstChildOfClass("Humanoid")
+                    if hum and _rbFaceSavedAutoRotate ~= nil then
+                        pcall(function() hum.AutoRotate = _rbFaceSavedAutoRotate end)
+                    end
+                    _rbFaceSavedAutoRotate = nil
                     return
                 end
                 local char2=lplr.Character; if not char2 then return end
                 local lhrp2=char2:FindFirstChild("HumanoidRootPart"); if not lhrp2 then return end
+                -- Pin AutoRotate=false so the engine doesn't rotate the
+                -- character toward MoveDirection / camera between our writes.
+                -- Capture the user's original value once so we can restore.
+                local hum = char2:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    if _rbFaceSavedAutoRotate == nil then
+                        _rbFaceSavedAutoRotate = hum.AutoRotate
+                    end
+                    if hum.AutoRotate then
+                        pcall(function() hum.AutoRotate = false end)
+                    end
+                end
                 local tplr=RageSettings.TargetPlayer; if not tplr then return end
                 local tchar=tplr.Character; if not tchar then return end
                 local thrp=tchar:FindFirstChild("HumanoidRootPart"); if not thrp then return end
@@ -2371,6 +2397,13 @@ RunService.RenderStepped:Connect(function(dt)
         if _rbFaceStepBound then
             RunService:UnbindFromRenderStep("rbFaceStep")
             _rbFaceStepBound=false
+            -- restore AutoRotate when face-target toggles off via the outer
+            -- guard (target lost, etc.), not via the inner self-unbind path
+            local hum = lc:FindFirstChildOfClass("Humanoid")
+            if hum and _rbFaceSavedAutoRotate ~= nil then
+                pcall(function() hum.AutoRotate = _rbFaceSavedAutoRotate end)
+            end
+            _rbFaceSavedAutoRotate = nil
         end
     end
 
