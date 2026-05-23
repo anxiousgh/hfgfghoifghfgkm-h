@@ -1073,104 +1073,94 @@ local function startIce()
 end
 
 -- ============================================================
---  STICKY EMOTES
+--  STICKY EMOTES  (catalog-emote-only)
 -- ============================================================
---  Roblox stops catalog emotes the moment you start moving because
---  internal CoreScripts call :Stop() on the emote track when the
---  character begins WalkAnim/RunAnim. Setting Priority=Action4 alone
---  is not enough because the engine doesn't care about priority for
---  its own Stop() calls.
+--  Two things kept the prior versions from working:
+--    1) Tool/weapon animations (knife swings, gun fires) are also
+--       at Action priority, so a priority/name-based filter wrongly
+--       caught them and put them in a replay loop.
+--    2) Starting a new emote stacked it on top of the previous one
+--       because the engine only stops emotes it spawned itself, not
+--       the duplicate tracks our Heartbeat keep-alive created.
 --
---  Strategy:
---    1. Watch Animator.AnimationPlayed; the first non-builtin track
---       captures its Animation.AnimationId as the "active emote".
---    2. Every Heartbeat, scan playing tracks for one matching that
---       AssetId. If none, Instance.new("Animation") + LoadAnimation
---       a fresh track and :Play() it at Action4 priority.
---    3. /e stop, /emote stop, toggling off, or starting a different
---       emote clears or replaces the active emote.
---
---  Built-in animation filter (3 layers — anything that fails ALL of
---  them is treated as an emote):
---    a) Exact-name whitelist of Roblox Animate-script track names
---    b) Parent folder named walk/run/jump/idle/etc., or grandparent
---       is an "Animate" script
---    c) Priority is Movement / Idle / Core (emotes are Action+)
---  The old "name ends in Anim" filter was too loose — many catalog
---  emotes have names like "rthro_jump_anim" — so it skipped real
---  emotes while wrongly catching custom game walk anims that don't
---  use the standard names. That's what made walking look broken.
+--  This version:
+--    a) Hooks Humanoid:PlayEmote / PlayEmoteAndGetAnimTrackById via
+--       __namecall and stamps a timestamp. Only AnimationPlayed
+--       events within 500ms of that stamp are treated as emotes.
+--       Tool/weapon anims don't go through PlayEmote, so they're
+--       guaranteed-skipped.
+--    b) Tracks every emote AnimationTrack we capture or spawn in
+--       G._stickyTracks. When a new emote arrives we stop ALL of
+--       them before recording the new one, so no stacking. Unrelated
+--       tool/weapon animations are never touched because we only
+--       iterate our own set, not the full GetPlayingAnimationTracks.
+--    c) The Heartbeat keep-alive recreates the active emote's track
+--       from its AssetId whenever it's gone, and adds the new track
+--       to G._stickyTracks so future cleanups catch it.
 -- ============================================================
-local BUILTIN_ANIM_NAMES = {
-    -- R15 standard Animate script
-    WalkAnim = true, RunAnim = true, JumpAnim = true, IdleAnim = true,
-    FallAnim = true, ClimbAnim = true, SwimAnim = true, SwimIdleAnim = true,
-    ToolNoneAnim = true, ToolSlashAnim = true, ToolLungeAnim = true,
-    -- R6 variants (space in the name)
-    ["Idle Anim"] = true, ["Walk Anim"] = true, ["Run Anim"] = true,
-    ["Jump Anim"] = true, ["Fall Anim"] = true, ["Climb Anim"] = true,
-    -- Misc internal
-    PoseAnim = true, DeathAnim = true, SitAnim = true,
-}
-local BUILTIN_PARENT_NAMES = {
-    walk = true, run = true, jump = true, idle = true, fall = true,
-    climb = true, swim = true, swimidle = true, sit = true,
-    toolnone = true, toolslash = true, toollunge = true,
-}
-local function _emoteIsBuiltin(track)
-    local a = track.Animation
-    if not a then return true end
-    -- (a) exact-name whitelist
-    if BUILTIN_ANIM_NAMES[a.Name or ""] then return true end
-    -- (b) parent folder name OR grandparent is the "Animate" script
-    local parent = a.Parent
-    if parent then
-        if BUILTIN_PARENT_NAMES[(parent.Name or ""):lower()] then return true end
-        local grand = parent.Parent
-        if grand and grand.Name == "Animate" then return true end
-    end
-    -- (c) priority is below Action (Action/Action2/Action3/Action4 = emote-tier)
-    local prio = track.Priority
-    if prio == Enum.AnimationPriority.Idle
-       or prio == Enum.AnimationPriority.Movement
-       or prio == Enum.AnimationPriority.Core then
-        return true
-    end
-    return false
-end
 local function _emoteGetAnimator()
     local c = lplr.Character
     local hum = c and c:FindFirstChildOfClass("Humanoid")
     return hum and hum:FindFirstChildOfClass("Animator")
 end
-local function _emoteStopAll()
-    local animator = _emoteGetAnimator()
-    if not animator then return end
-    for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
-        if not _emoteIsBuiltin(t) then
-            pcall(function() t:Stop(0) end)
-        end
+-- Stop every AnimationTrack we've captured/spawned. Doesn't touch
+-- tracks the game/tool/weapon system spawned independently.
+local function _emoteStopOurs()
+    G._stickyTracks = G._stickyTracks or {}
+    for t, _ in pairs(G._stickyTracks) do
+        pcall(function() t:Stop(0) end)
     end
+    table.clear(G._stickyTracks)
+end
+-- Install the __namecall hook once per session (persisted in getgenv
+-- so a script reload doesn't double-stack it). The hook is cheap: a
+-- single getnamecallmethod() + string compare on the rare frames
+-- when PlayEmote is actually called.
+local function _emoteInstallNamecallHook()
+    if getgenv()._F_STICKY_EMOTE_HOOKED then return end
+    if not hookmetamethod or not newcclosure then return end
+    getgenv()._F_STICKY_EMOTE_HOOKED = true
+    local oldNc
+    oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "PlayEmote" or method == "PlayEmoteAndGetAnimTrackById" then
+            if G.stickyEmoteActive and not G._emoteStopRequested then
+                local lc = lplr.Character
+                local lhum = lc and lc:FindFirstChildOfClass("Humanoid")
+                if self == lhum then
+                    G._stickyExpectEmoteAt = tick()
+                end
+            end
+        end
+        return oldNc(self, ...)
+    end))
 end
 local function stopStickyEmote()
     G.stickyEmoteActive   = false
     G._currentEmoteId     = nil
     G._emoteStopRequested = false
+    G._stickyExpectEmoteAt = 0
     if G._emoteAnimConn     then G._emoteAnimConn:Disconnect();     G._emoteAnimConn     = nil end
     if G._emoteCharConn     then G._emoteCharConn:Disconnect();     G._emoteCharConn     = nil end
     if G._emoteChatConn     then G._emoteChatConn:Disconnect();     G._emoteChatConn     = nil end
     if G._emoteTextChatConn then G._emoteTextChatConn:Disconnect(); G._emoteTextChatConn = nil end
     if G._emoteHbConn       then G._emoteHbConn:Disconnect();       G._emoteHbConn       = nil end
-    _emoteStopAll()
+    _emoteStopOurs()
+    -- the __namecall hook stays installed but is gated on
+    -- G.stickyEmoteActive, so it becomes a no-op
 end
 local function startStickyEmote()
-    G.stickyEmoteActive   = true
-    G._emoteStopRequested = false
-    G._currentEmoteId     = nil
+    G.stickyEmoteActive    = true
+    G._emoteStopRequested  = false
+    G._currentEmoteId      = nil
+    G._stickyExpectEmoteAt = 0
+    G._stickyTracks        = G._stickyTracks or {}
 
-    -- Capture the AssetId of any non-builtin track that starts playing.
-    -- That id becomes the "stuck" emote until the user types /e stop,
-    -- toggles off, or starts a different emote.
+    _emoteInstallNamecallHook()
+
+    -- AnimationPlayed only counts as an emote start if it happens
+    -- within 500ms of a Humanoid:PlayEmote* call. Tool/weapon anims
+    -- don't go through PlayEmote, so they never get captured.
     local function hookChar(char)
         if not char then return end
         local hum = char:WaitForChild("Humanoid", 5); if not hum then return end
@@ -1178,29 +1168,33 @@ local function startStickyEmote()
         if G._emoteAnimConn then G._emoteAnimConn:Disconnect() end
         G._emoteAnimConn = animator.AnimationPlayed:Connect(function(track)
             if not G.stickyEmoteActive or G._emoteStopRequested then return end
-            if _emoteIsBuiltin(track) then return end
+            if tick() - (G._stickyExpectEmoteAt or 0) > 0.5 then return end
             local a = track.Animation
             if not a or a.AnimationId == "" then return end
+            -- new emote supersedes the previous — kill our old tracks first
+            _emoteStopOurs()
+            G._stickyTracks[track] = true
             G._currentEmoteId = a.AnimationId
             pcall(function() track.Priority = Enum.AnimationPriority.Action4 end)
+            -- consume the expect-stamp so a single PlayEmote can't capture
+            -- more than one track (some emotes load multiple anims)
+            G._stickyExpectEmoteAt = 0
         end)
     end
     hookChar(lplr.Character)
     if G._emoteCharConn then G._emoteCharConn:Disconnect() end
     G._emoteCharConn = lplr.CharacterAdded:Connect(function(c)
         if G.stickyEmoteActive then
-            -- fresh character, clear the active emote (it'll be re-captured
-            -- the next time the user plays one)
             G._currentEmoteId = nil
+            table.clear(G._stickyTracks)
             hookChar(c)
         end
     end)
 
-    -- Heartbeat keep-alive: if the captured emote AssetId isn't in
-    -- the currently-playing tracks list, load a fresh AnimationTrack
-    -- from that AssetId and play it at Action4. This is what actually
-    -- defeats the engine's Stop()-on-move behavior — we just keep
-    -- reissuing fresh tracks faster than it can stop them.
+    -- Heartbeat keep-alive: if the captured emote isn't currently
+    -- playing on any of OUR tracks, load a fresh copy from its asset
+    -- id and play at Action4. We only scan our own track set, so we
+    -- never trip on unrelated tool/weapon animations.
     if G._emoteHbConn then G._emoteHbConn:Disconnect() end
     G._emoteHbConn = RunService.Heartbeat:Connect(function()
         if not G.stickyEmoteActive or G._emoteStopRequested then return end
@@ -1208,15 +1202,22 @@ local function startStickyEmote()
         if not id or id == "" then return end
         local animator = _emoteGetAnimator()
         if not animator then return end
-        for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
-            if t.Animation and t.Animation.AnimationId == id then
+        -- prune dead tracks from our set
+        for t, _ in pairs(G._stickyTracks) do
+            if not t.IsPlaying and t.Parent ~= animator then
+                G._stickyTracks[t] = nil
+            end
+        end
+        -- one of our tracks already playing for this id?
+        for t, _ in pairs(G._stickyTracks) do
+            if t.IsPlaying and t.Animation and t.Animation.AnimationId == id then
                 if t.Priority ~= Enum.AnimationPriority.Action4 then
                     pcall(function() t.Priority = Enum.AnimationPriority.Action4 end)
                 end
-                return  -- already playing, nothing to do
+                return
             end
         end
-        -- not playing — load + play a fresh copy
+        -- nope — load and play a fresh copy, add to our set
         local anim = Instance.new("Animation")
         anim.AnimationId = id
         local newTrack
@@ -1224,19 +1225,19 @@ local function startStickyEmote()
         if newTrack then
             pcall(function() newTrack.Priority = Enum.AnimationPriority.Action4 end)
             pcall(function() newTrack:Play(0) end)
+            G._stickyTracks[newTrack] = true
         end
     end)
 
-    -- /e stop and /emote stop interception. Window the stop-flag for
-    -- half a second so the in-flight Heartbeat ticks early-out before
-    -- we re-arm for the next emote.
+    -- /e stop and /emote stop interception. Window the stop-flag
+    -- so in-flight Heartbeat ticks early-out before we re-arm.
     local function onChat(msg)
         if not G.stickyEmoteActive or type(msg) ~= "string" then return end
         local m = msg:lower():gsub("^%s+", "")
         if m:match("^/e%s+stop") or m:match("^/emote%s+stop") then
             G._emoteStopRequested = true
             G._currentEmoteId     = nil
-            _emoteStopAll()
+            _emoteStopOurs()
             task.delay(0.5, function() G._emoteStopRequested = false end)
         end
     end
