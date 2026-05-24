@@ -1337,6 +1337,71 @@ do
         removePlayerButton(pl)
         if _selected == pl then selectPlayer(nil) end
     end)
+
+    -- ===================== WHITELIST =====================
+    -- Global whitelist tested by ragebot (target skip) and MM2
+    -- shoot/trigger. Case-insensitive match against either
+    -- Player.Name or Player.DisplayName.
+    local WL = Tabs.Players:AddRightGroupbox("Whitelist")
+    WL:AddLabel("Skipped by ragebot, MM2 shoot/trigger")
+
+    local function refreshWlDropdown()
+        if Options.WhitelistList and Options.WhitelistList.SetValues then
+            Options.WhitelistList:SetValues(F.whitelist.list())
+        end
+    end
+
+    WL:AddInput("WhitelistInput", {
+        Text     = "Name",
+        Default  = "",
+        Numeric  = false,
+        Finished = false,
+        Placeholder = "Player name to add",
+    })
+    WL:AddButton({ Text = "Add", Func = function()
+        local n = Options.WhitelistInput and Options.WhitelistInput.Value or ""
+        if n == "" then return end
+        if F.whitelist.add(n) then
+            Library:Notify("Whitelisted '" .. n .. "'", 2)
+            refreshWlDropdown()
+        else
+            Library:Notify("'" .. n .. "' already in whitelist", 2)
+        end
+    end })
+    WL:AddButton({ Text = "Add selected", Func = function()
+        if not _selected then
+            Library:Notify("No player selected in Actions list", 2)
+            return
+        end
+        if F.whitelist.add(_selected.Name) then
+            Library:Notify("Whitelisted '" .. _selected.Name .. "'", 2)
+            refreshWlDropdown()
+        else
+            Library:Notify("'" .. _selected.Name .. "' already in whitelist", 2)
+        end
+    end })
+
+    WL:AddDropdown("WhitelistList", {
+        Text     = "Whitelisted",
+        Values   = F.whitelist.list(),
+        Default  = 1,
+        AllowNull = true,
+    })
+    WL:AddButton({ Text = "Remove selected", Func = function()
+        local n = Options.WhitelistList and Options.WhitelistList.Value
+        if not n or n == "" then
+            Library:Notify("Pick a name from the dropdown first", 2)
+            return
+        end
+        F.whitelist.remove(n)
+        Library:Notify("Removed '" .. n .. "'", 2)
+        refreshWlDropdown()
+    end })
+    WL:AddButton({ Text = "Clear all", DoubleClick = true, Func = function()
+        F.whitelist.clear()
+        refreshWlDropdown()
+        Library:Notify("Whitelist cleared", 2)
+    end })
 end
 
 -- ============================================================

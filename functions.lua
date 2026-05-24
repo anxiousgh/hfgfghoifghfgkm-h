@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.1.9"
+local SCRIPT_VERSION = "v1.2.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -1966,6 +1966,7 @@ local function rbGetTarget()
                 end
             end
             local plr=entry.plr; if not plr or not plr.Parent then continue end
+            if F.whitelist and F.whitelist.contains(plr) then continue end  -- skip whitelisted players
             local char=plr.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart")
             if not hrp then continue end
             local hum=char:FindFirstChildOfClass("Humanoid"); if not hum or hum.Health<=0 then continue end
@@ -1983,6 +1984,7 @@ local function rbGetTarget()
     end
     for _,p in ipairs(plrs:GetPlayers()) do
         if p.UserId==uid then
+            if F.whitelist and F.whitelist.contains(p) then return nil end
             if rbIgnoreByKnocked(p) then return nil end
             RageSettings.TargetPlayer=p; return p
         end
@@ -1997,6 +1999,7 @@ local function rbLockClosest()
     local best, bestDist = nil, math.huge
     for _, plr in ipairs(plrs:GetPlayers()) do
         if plr == lplr then continue end
+        if F.whitelist and F.whitelist.contains(plr) then continue end
         local char = plr.Character; local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hrp then continue end
         local sp, onScreen = cam:WorldToViewportPoint(hrp.Position)
@@ -5789,6 +5792,7 @@ F.games.mm2 = (function()
             if tick() - triggerLastFire < TRIGGER_COOLDOWN then return end
             local plr = getHoveredPlayer()
             if not plr or plr == lplr then return end
+            if F.whitelist and F.whitelist.contains(plr) then return end
             if identityCache[plr] ~= "Murderer" and getIdentity(plr) ~= "Murderer" then return end
             local theirChar = plr.Character
             local theirHRP  = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
@@ -5827,7 +5831,9 @@ F.games.mm2 = (function()
         if not myHRP then return false, "no_my_hrp" end
         local victim
         for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= lplr and getIdentity(plr) == "Murderer" then
+            if plr ~= lplr
+                and not (F.whitelist and F.whitelist.contains(plr))
+                and getIdentity(plr) == "Murderer" then
                 victim = plr; break
             end
         end
@@ -6631,6 +6637,79 @@ F.pulseLagswitch = (function()
             end
         end,
         getVisualEnabled = function() return visualEnabled end,
+    }
+end)()
+
+-- ============================================================
+--  WHITELIST  (global, all-features-aware)
+-- ============================================================
+--  Lookup tested by:
+--    * Ragebot targeting (rbGetTarget + rbLockClosest skip
+--      whitelisted players entirely)
+--    * MM2 shootMurderer + triggerMurderer (skip whitelisted)
+--
+--  Case-insensitive. Matches by both Name and DisplayName so a user
+--  can whitelist either. Stored on getgenv so script reloads keep
+--  the list within a session.
+-- ============================================================
+F.whitelist = (function()
+    getgenv()._F_WHITELIST = getgenv()._F_WHITELIST or {}
+    local store = getgenv()._F_WHITELIST  -- map: actualName -> true
+    -- Rebuild lowercase index from store (in case getgenv survived
+    -- a reload).
+    local lower = {}
+    for n in pairs(store) do lower[n:lower()] = n end
+
+    local function add(name)
+        if type(name) ~= "string" or name == "" then return false end
+        local k = name:lower()
+        if lower[k] then return false end  -- already in
+        store[name] = true
+        lower[k] = name
+        return true
+    end
+
+    local function remove(name)
+        if type(name) ~= "string" then return false end
+        local k = name:lower()
+        local actual = lower[k]
+        if not actual then return false end
+        store[actual] = nil
+        lower[k] = nil
+        return true
+    end
+
+    local function contains(plr)
+        if not plr then return false end
+        if type(plr) == "string" then
+            return lower[plr:lower()] ~= nil
+        end
+        if typeof(plr) == "Instance" and plr:IsA("Player") then
+            if lower[plr.Name:lower()] then return true end
+            local dn = plr.DisplayName
+            if dn and dn ~= "" and lower[dn:lower()] then return true end
+        end
+        return false
+    end
+
+    local function list()
+        local out = {}
+        for n in pairs(store) do table.insert(out, n) end
+        table.sort(out, function(a, b) return a:lower() < b:lower() end)
+        return out
+    end
+
+    local function clear()
+        for k in pairs(store) do store[k] = nil end
+        for k in pairs(lower) do lower[k] = nil end
+    end
+
+    return {
+        add      = add,
+        remove   = remove,
+        contains = contains,
+        list     = list,
+        clear    = clear,
     }
 end)()
 
