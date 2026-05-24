@@ -4845,31 +4845,37 @@ F.games.hoodCustoms.forceHit = (function()
         task.delay(5, function() if s and s.Parent then s:Destroy() end end)
     end
 
-    -- single-fire path: synthetic payload, direct FireServer.
-    -- `part` is the target body part already resolved by the caller
-    -- (fireOnce uses getCurrentTargetPart which reads ragebot target).
-    -- Returns true if FireServer was actually called, false otherwise -
-    -- the caller uses this to gate tracer/sound so we don't spam visuals
-    -- on no-op calls.
-    local function fireDirect(part)
+    -- Canonical HC client-side Shoot payload, verified against a
+    -- working reference implementation. pelletCount identical entries
+    -- all referencing the SAME target part, with:
+    --   origin = local player's HRP.Position
+    --   aim    = local player's HRP.Position  (yes, identical to origin)
+    --   stamp  = workspace:GetServerTimeNow()
+    -- No MainFunction:InvokeServer("GunCheck") follow-up — that extra
+    -- remote call was part of what was tripping HC's anti-cheat. The
+    -- "Normal" field is set to the head position (NOT a unit vector);
+    -- the reference impl does this and the server accepts it, so we
+    -- match exactly rather than reasoning about why.
+    local function fireShoot(part, pelletCount)
         if not part then return false end
-        local head = getHead(); if not head then return false end
-        local origin = head.Position
-        local hitPos = part.Position
-        local dist   = (hitPos - origin).Magnitude
-        local aim    = origin + workspace.CurrentCamera.CFrame.LookVector * dist
-        local normal = (origin - hitPos).Unit
-        local payload = {
-            { { Normal = normal, Instance = part, Position = hitPos } },
-            { { thePart = part, theOffset = Vector3.new(0, 0, 0) } },
-            origin, aim, tick(),
-        }
         local me = _RS:FindFirstChild("MainEvent")
         if not me then return false end
-        local ok = pcall(function() me:FireServer("Shoot", payload) end)
-        local mf = _RS:FindFirstChild("MainFunction")
-        if mf then pcall(function() mf:InvokeServer("GunCheck") end) end
-        return ok
+        local c = lplr.Character
+        local root = c and c:FindFirstChild("HumanoidRootPart")
+        if not root then return false end
+        local hitPos  = part.Position
+        local hits    = table.create(pelletCount)
+        local targets = table.create(pelletCount)
+        for i = 1, pelletCount do
+            hits[i]    = { Normal = hitPos, Instance = part, Position = hitPos }
+            targets[i] = { thePart = part, theOffset = Vector3.zero }
+        end
+        local payload = { hits, targets, root.Position, root.Position, workspace:GetServerTimeNow() }
+        return pcall(function() me:FireServer("Shoot", payload) end)
+    end
+    -- Legacy single-shot wrapper kept for non-shotgun call sites
+    local function fireDirect(part)
+        return fireShoot(part, 1)
     end
 
     -- shotgun path: VIM click fires the gun natively (silent aim handles aim)
@@ -4986,47 +4992,12 @@ F.games.hoodCustoms.forceHit = (function()
         end
     end
 
+    -- Shotgun fire path: just routes to fireShoot with the gun's pellet
+    -- count. The old V-pattern / barrel-origin / centroid-aim synth was
+    -- what HC anti-cheat was kicking on. Reference impl sends N identical
+    -- pellets all at the same part, and HC accepts it.
     local function fireShotgunSynth(part, pelletCount)
-        if not part then return false end
-        local origin = getMuzzlePos(); if not origin then return false end
-
-        -- `part` is UpperTorso (set by fireOnce override). Get LowerTorso
-        -- (or HumanoidRootPart fallback) as the second part.
-        local sp = part.Parent
-        if not sp then return false end
-        local partA = part
-        local partB = sp:FindFirstChild("LowerTorso")
-                   or sp:FindFirstChild("HumanoidRootPart")
-                   or sp:FindFirstChild("Torso")
-        if not partB or partB == partA then
-            -- only one torso part available -> degrade to single-part
-            -- (kept simple; if this happens repeatedly we should switch
-            -- to a different pair)
-            partB = partA
-        end
-
-        -- split: 3 on top arm of V, 2 on bottom arm (randomized which is which)
-        local nA = (math.random() < 0.5) and math.ceil(pelletCount / 2) or math.floor(pelletCount / 2)
-        local nB = pelletCount - nA
-
-        local hits, targets = {}, {}
-        -- top arm goes /, bottom arm goes \ -- together = V (point down at vertex)
-        _vGenOnPart(partA, nA,  LINE_ANGLE_DEG, origin, hits, targets, 0)
-        _vGenOnPart(partB, nB, -LINE_ANGLE_DEG, origin, hits, targets, nA)
-
-        -- aim = centroid (matches capture)
-        local sum = Vector3.zero
-        for j = 1, pelletCount do sum = sum + hits[j].Position end
-        local aim = sum / pelletCount
-
-        local payload = { hits, targets, origin, aim, tick() }
-
-        local me = _RS:FindFirstChild("MainEvent")
-        if not me then return false end
-        local ok = pcall(function() me:FireServer("Shoot", payload) end)
-        local mf = _RS:FindFirstChild("MainFunction")
-        if mf then pcall(function() mf:InvokeServer("GunCheck") end) end
-        return ok
+        return fireShoot(part, pelletCount or 5)
     end
 
     -- pick whichever target is most current. Ragebot's target auto-switches
