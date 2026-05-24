@@ -4620,45 +4620,91 @@ F.games.hoodCustoms.godmode = (function()
     --   Root  (HRP -> LowerTorso)  — physics anchor / walking
     --   Waist (LowerTorso -> UpperTorso) — torso stays solid
     --   Neck  (UpperTorso -> Head) — head stays put
+    -- Detach EVERY joint in the limb chain — not just the top one.
+    -- Just breaking LeftShoulder while LeftElbow/LeftWrist stayed
+    -- intact let the animator keep driving the lower arm relative
+    -- to the upper arm. That's what caused the "wiggle" the user
+    -- saw. Breaking the whole chain stops the animator on every
+    -- segment.
     local LIMB_JOINTS = {
-        -- R15
-        LeftHip       = true, RightHip       = true,
-        LeftShoulder  = true, RightShoulder  = true,
-        -- R6 (space-separated)
+        -- R15 full arm chain
+        LeftShoulder  = true, LeftElbow  = true, LeftWrist  = true,
+        RightShoulder = true, RightElbow = true, RightWrist = true,
+        -- R15 full leg chain
+        LeftHip  = true, LeftKnee  = true, LeftAnkle  = true,
+        RightHip = true, RightKnee = true, RightAnkle = true,
+        -- R6 (only top joints exist on R6 rigs)
         ["Left Hip"]      = true, ["Right Hip"]      = true,
         ["Left Shoulder"] = true, ["Right Shoulder"] = true,
     }
+    -- Limb parts we tag Massless + CanCollide=false on so the
+    -- detached limbs don't fight gravity or bump into the torso.
+    local LIMB_PARTS = {
+        LeftUpperArm  = true, LeftLowerArm  = true, LeftHand = true,
+        RightUpperArm = true, RightLowerArm = true, RightHand = true,
+        LeftUpperLeg  = true, LeftLowerLeg  = true, LeftFoot = true,
+        RightUpperLeg = true, RightLowerLeg = true, RightFoot = true,
+        ["Left Arm"]  = true, ["Right Arm"]  = true,
+        ["Left Leg"]  = true, ["Right Leg"]  = true,
+    }
 
-    local saved  = {}   -- [Motor6D] = { p0, p1 }
-    local cached = {}   -- list of Motor6Ds we manage for this character
+    local savedJoints = {}   -- [Motor6D] = { p0, p1 }
+    local savedParts  = {}   -- [BasePart] = { massless, cancollide }
+    local cachedJ     = {}   -- Motor6D list for this character
+    local cachedP     = {}   -- limb BasePart list
     local hbConn, charConn
 
     local function snapshot(char)
         if not char then return end
         for _, d in ipairs(char:GetDescendants()) do
             if d:IsA("Motor6D") and LIMB_JOINTS[d.Name] then
-                if not saved[d] then
-                    saved[d] = { p0 = d.Part0, p1 = d.Part1 }
+                if not savedJoints[d] then
+                    savedJoints[d] = { p0 = d.Part0, p1 = d.Part1 }
                 end
                 local already = false
-                for _, m in ipairs(cached) do
+                for _, m in ipairs(cachedJ) do
                     if m == d then already = true; break end
                 end
-                if not already then table.insert(cached, d) end
+                if not already then table.insert(cachedJ, d) end
+            end
+        end
+        for _, d in ipairs(char:GetChildren()) do
+            if d:IsA("BasePart") and LIMB_PARTS[d.Name] then
+                if not savedParts[d] then
+                    savedParts[d] = { massless = d.Massless, cancollide = d.CanCollide }
+                end
+                local already = false
+                for _, p in ipairs(cachedP) do
+                    if p == d then already = true; break end
+                end
+                if not already then table.insert(cachedP, d) end
             end
         end
     end
 
     local function detachAll()
-        for _, m in ipairs(cached) do
-            if m.Parent and m.Part0 ~= nil then
-                pcall(function() m.Part0 = nil end)
+        -- Fully break each joint: nil BOTH Part0 AND Part1, not just
+        -- Part0. With Part1 still set, the animator kept writing to
+        -- Motor6D.Transform, which (combined with the lower joints
+        -- still being intact in the chain) drove the limb each frame.
+        for _, m in ipairs(cachedJ) do
+            if m.Parent and (m.Part0 ~= nil or m.Part1 ~= nil) then
+                pcall(function()
+                    m.Part0 = nil
+                    m.Part1 = nil
+                end)
+            end
+        end
+        for _, p in ipairs(cachedP) do
+            if p.Parent then
+                if not p.Massless   then pcall(function() p.Massless   = true  end) end
+                if     p.CanCollide then pcall(function() p.CanCollide = false end) end
             end
         end
     end
 
     local function reattachAll()
-        for m, s in pairs(saved) do
+        for m, s in pairs(savedJoints) do
             if m.Parent then
                 pcall(function()
                     m.Part0 = s.p0
@@ -4666,7 +4712,15 @@ F.games.hoodCustoms.godmode = (function()
                 end)
             end
         end
-        saved, cached = {}, {}
+        for p, s in pairs(savedParts) do
+            if p.Parent then
+                pcall(function()
+                    p.Massless   = s.massless
+                    p.CanCollide = s.cancollide
+                end)
+            end
+        end
+        savedJoints, savedParts, cachedJ, cachedP = {}, {}, {}, {}
     end
 
     return makeToggle(
@@ -4683,7 +4737,7 @@ F.games.hoodCustoms.godmode = (function()
             charConn = lplr.CharacterAdded:Connect(function(c)
                 if not G.hcGmActive then return end
                 -- fresh character, fresh joints. let HC's setup settle first.
-                saved, cached = {}, {}
+                savedJoints, savedParts, cachedJ, cachedP = {}, {}, {}, {}
                 task.wait(0.3)
                 snapshot(c)
                 detachAll()
