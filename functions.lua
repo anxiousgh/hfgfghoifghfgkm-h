@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.2.3"
+local SCRIPT_VERSION = "v1.2.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5772,6 +5772,26 @@ F.games.mm2 = (function()
         return Players:GetPlayerFromCharacter(model)
     end
 
+    -- Hit-position resolver: HC's Shoot remote canonically takes the
+    -- TARGET's LowerTorso CFrame (full rotation matrix preserved).
+    -- R6 fallback to Torso; final fallback HRP so we still fire if
+    -- the rig is weird mid-respawn.
+    local function targetHitPart(char)
+        if not char then return nil end
+        return char:FindFirstChild("LowerTorso")
+            or char:FindFirstChild("Torso")
+            or char:FindFirstChild("HumanoidRootPart")
+    end
+    -- Second arg is "my position" with identity rotation — matches the
+    -- canonical payload exactly (CFrame.new(x, y, z) without basis
+    -- vectors).
+    local function myPosCFrame()
+        local c = lplr.Character
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if not hrp then return nil end
+        return CFrame.new(hrp.Position)
+    end
+
     local function triggerStart()
         if triggerActive then return end
         triggerActive = true
@@ -5783,11 +5803,9 @@ F.games.mm2 = (function()
             if not plr or plr == lplr then return end
             if F.whitelist and F.whitelist.contains(plr) then return end
             if identityCache[plr] ~= "Murderer" and getIdentity(plr) ~= "Murderer" then return end
-            local theirChar = plr.Character
-            local theirHRP  = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
-            local myChar    = lplr.Character
-            local myHRP     = myChar and myChar:FindFirstChild("HumanoidRootPart")
-            if not theirHRP or not myHRP then return end
+            local theirHit = targetHitPart(plr.Character)
+            local myPos    = myPosCFrame()
+            if not theirHit or not myPos then return end
             local remote = findHitRemote()
             if not remote then
                 -- gun not equipped — best-effort equip and skip this
@@ -5796,7 +5814,7 @@ F.games.mm2 = (function()
                 ensureGunEquipped()
                 return
             end
-            pcall(function() remote:FireServer(theirHRP.CFrame, myHRP.CFrame) end)
+            pcall(function() remote:FireServer(theirHit.CFrame, myPos) end)
             triggerLastFire = tick()
         end)
     end
@@ -5822,9 +5840,8 @@ F.games.mm2 = (function()
     --   false, "no_gun"          no Gun in Character or Backpack
     --                            (we're not the Sheriff)
     local function shootMurdererFire()
-        local myChar = lplr.Character
-        local myHRP  = myChar and myChar:FindFirstChild("HumanoidRootPart")
-        if not myHRP then return false, "no_my_hrp" end
+        local myPos = myPosCFrame()
+        if not myPos then return false, "no_my_hrp" end
 
         local victim
         for _, plr in ipairs(Players:GetPlayers()) do
@@ -5835,14 +5852,13 @@ F.games.mm2 = (function()
             end
         end
         if not victim then return false, "no_murderer" end
-        local vChar = victim.Character
-        local vHRP  = vChar and vChar:FindFirstChild("HumanoidRootPart")
-        if not vHRP then return false, "no_victim_hrp" end
+        local theirHit = targetHitPart(victim.Character)
+        if not theirHit then return false, "no_victim_hrp" end
 
         local remote = findHitRemote()
         if remote then
             -- gun equipped, fire immediately
-            pcall(function() remote:FireServer(vHRP.CFrame, myHRP.CFrame) end)
+            pcall(function() remote:FireServer(theirHit.CFrame, myPos) end)
             return true
         end
 
@@ -5850,13 +5866,12 @@ F.games.mm2 = (function()
         if not ensureGunEquipped() then return false, "no_gun" end
         task.delay(0.5, function()
             local r = findHitRemote(); if not r then return end
-            -- re-resolve target + self CFrames since 0.5s passed
-            local mC = lplr.Character
-            local mH = mC and mC:FindFirstChild("HumanoidRootPart")
-            local vC = victim and victim.Parent and victim.Character
-            local vH = vC and vC:FindFirstChild("HumanoidRootPart")
-            if not mH or not vH then return end
-            pcall(function() r:FireServer(vH.CFrame, mH.CFrame) end)
+            -- re-resolve target + self since 0.5s passed (we / they
+            -- may have moved or respawned)
+            local mP = myPosCFrame()
+            local tH = victim and victim.Parent and targetHitPart(victim.Character)
+            if not mP or not tH then return end
+            pcall(function() r:FireServer(tH.CFrame, mP) end)
         end)
         return true
     end
@@ -5956,6 +5971,14 @@ F.desync = (function()
     local VEL_MAGNITUDE = 16384
     -- sky desync: how many studs to shove HRP up server-side (X/Z preserved)
     local SKY_HEIGHT   = 5000
+    -- invisible desync: tight-radius void TP. Picks a base void point
+    -- on each spoof, jitters within INVIS_RADIUS studs of it. Result:
+    -- server sees the character clustered in a small area far from
+    -- the real position (so it doesn't render for other players),
+    -- but the cluster is small enough that the server doesn't
+    -- treat the per-tick motion as anti-cheat-worthy "warping".
+    local INVIS_BASE_DIST = 1500   -- how far the cluster center is from origin
+    local INVIS_RADIUS    = 25     -- jitter radius around the cluster center
 
     -- shared state in getgenv() so the raknet hook (which is installed
     -- ONCE at module load and survives script re-runs) reads the current
@@ -5964,7 +5987,8 @@ F.desync = (function()
     local SHARED = getgenv()._F_DESYNC_STATE
 
     local active   = false
-    local mode     = "off"   -- "void"|"voidspam"|"spin"|"velocity"|"raknet"|"off"
+    local mode     = "off"   -- "void"|"voidspam"|"sky"|"spin"|"velocity"|"raknet"|"invisible"|"off"
+    local _invisBase  -- cluster center for invisible mode (picked once per session)
     local realCF, realLV, realAV
     local syncEnd  = 0
     local hbConn
@@ -5999,6 +6023,24 @@ F.desync = (function()
         elseif mode == "velocity" then
             -- CFrame untouched - we only spoof the velocity vector
             hrp.AssemblyLinearVelocity = Vector3.new(1, 1, 1) * VEL_MAGNITUDE
+        elseif mode == "invisible" then
+            -- Tight-radius void cluster. Pick the cluster center once
+            -- (a far-away point), then each frame jitter ±INVIS_RADIUS
+            -- around it. Looks like a player standing still at a void
+            -- coordinate from the server's POV.
+            if not _invisBase then
+                local function axis()
+                    return ((math.random() < 0.5) and -1 or 1) * INVIS_BASE_DIST
+                end
+                _invisBase = Vector3.new(axis(), axis(), axis())
+            end
+            local r = INVIS_RADIUS
+            local jitter = Vector3.new(
+                (math.random() * 2 - 1) * r,
+                (math.random() * 2 - 1) * r,
+                (math.random() * 2 - 1) * r
+            )
+            hrp.CFrame = CFrame.new(_invisBase + jitter)
         end
     end
 
@@ -6403,6 +6445,10 @@ F.desync = (function()
             startMode("raknet")
             return true
         end,
+        startInvisible  = function()
+            _invisBase = nil  -- fresh cluster center every enable
+            startMode("invisible")
+        end,
         stop            = stopAll,
         isRaknetAvailable = function() return findRaknet() ~= nil end,
         isActive        = function() return active end,
@@ -6411,6 +6457,13 @@ F.desync = (function()
             VOID_MIN = math.max(100, tonumber(minV) or VOID_MIN)
             VOID_MAX = math.max(VOID_MIN + 1, tonumber(maxV) or VOID_MAX)
         end,
+        -- Invisible-mode jitter radius (studs) around the cluster
+        -- center. Smaller = tighter, less "warping" perceived by
+        -- server anti-cheat; larger = more chaotic position.
+        setInvisibleRadius = function(n)
+            INVIS_RADIUS = math.clamp(tonumber(n) or 25, 0, 500)
+        end,
+        getInvisibleRadius = function() return INVIS_RADIUS end,
         -- Now interpreted as "post-animation duration (ms)" — how
         -- long the spoof stays off after the swing animation ends.
         setShotSyncMs   = function(n)
