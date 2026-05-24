@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.1.0"
+local SCRIPT_VERSION = "v1.1.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5589,6 +5589,95 @@ F.games.mm2 = (function()
         return true
     end
 
+    -- ---------- Dropped-gun ESP ----------
+    -- Adds a Highlight + a BillboardGui ("GUN") above any BasePart
+    -- named "GunDrop" in the workspace. Polls every 0.3s to catch
+    -- newly spawned drops; auto-cleans guis whose drop went away.
+    local dropEspActive = false
+    local dropEspThread
+    local dropEspAdorned = {}  -- [drop part] = { hl, bg }
+
+    local function buildDropMarker(drop)
+        local hl = Instance.new("Highlight")
+        hl.Name              = "_mm2_dropgun_hl"
+        hl.FillColor         = Color3.fromRGB(255, 215,  60)
+        hl.OutlineColor      = Color3.fromRGB(255, 255, 255)
+        hl.FillTransparency  = 0.45
+        hl.OutlineTransparency = 0
+        hl.DepthMode         = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Adornee           = drop
+        hl.Parent            = drop
+
+        local bg = Instance.new("BillboardGui")
+        bg.Name           = "_mm2_dropgun_bg"
+        bg.AlwaysOnTop    = true
+        bg.LightInfluence = 0
+        bg.Size           = UDim2.fromOffset(80, 24)
+        bg.StudsOffset    = Vector3.new(0, 1.5, 0)
+        bg.Adornee        = drop
+        local label = Instance.new("TextLabel")
+        label.Name                   = "Label"
+        label.BackgroundTransparency = 1
+        label.Size                   = UDim2.fromScale(1, 1)
+        label.Font                   = Enum.Font.GothamBold
+        label.TextSize               = 16
+        label.TextColor3             = Color3.fromRGB(255, 215, 60)
+        label.TextStrokeTransparency = 0
+        label.Text                   = "GUN"
+        label.Parent                 = bg
+        bg.Parent = drop
+
+        return hl, bg
+    end
+
+    local function dropEspClearAll()
+        for drop, m in pairs(dropEspAdorned) do
+            pcall(function() if m.hl and m.hl.Parent then m.hl:Destroy() end end)
+            pcall(function() if m.bg and m.bg.Parent then m.bg:Destroy() end end)
+        end
+        dropEspAdorned = {}
+    end
+
+    local function dropEspTick()
+        -- collect current drops by reference
+        local seen = {}
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("BasePart") and d.Name == "GunDrop" then
+                seen[d] = true
+                if not dropEspAdorned[d] then
+                    local hl, bg = buildDropMarker(d)
+                    dropEspAdorned[d] = { hl = hl, bg = bg }
+                end
+            end
+        end
+        -- prune drops that no longer exist (picked up / destroyed)
+        for drop, m in pairs(dropEspAdorned) do
+            if not seen[drop] or not drop.Parent then
+                pcall(function() if m.hl and m.hl.Parent then m.hl:Destroy() end end)
+                pcall(function() if m.bg and m.bg.Parent then m.bg:Destroy() end end)
+                dropEspAdorned[drop] = nil
+            end
+        end
+    end
+
+    local function dropEspStart()
+        if dropEspActive then return end
+        dropEspActive = true
+        if dropEspThread then pcall(task.cancel, dropEspThread) end
+        dropEspThread = task.spawn(function()
+            while dropEspActive do
+                pcall(dropEspTick)
+                task.wait(0.3)
+            end
+        end)
+    end
+
+    local function dropEspStop()
+        dropEspActive = false
+        if dropEspThread then pcall(task.cancel, dropEspThread); dropEspThread = nil end
+        dropEspClearAll()
+    end
+
     -- ---------- Auto-pickup ----------
     local autoActive = false
     local autoThread
@@ -5631,6 +5720,11 @@ F.games.mm2 = (function()
             start    = autoStart,
             stop     = autoStop,
             isActive = function() return autoActive end,
+        },
+        dropEsp = {
+            start    = dropEspStart,
+            stop     = dropEspStop,
+            isActive = function() return dropEspActive end,
         },
     }
 end)()
@@ -6386,6 +6480,7 @@ F.disableAll = function()
     if F.games.mm2 then
         F.games.mm2.identityEsp.stop()
         F.games.mm2.autoPickupGun.stop()
+        F.games.mm2.dropEsp.stop()
     end
     if F.desync then F.desync.stop() end
     if F.pulseLagswitch then F.pulseLagswitch.stop() end

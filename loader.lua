@@ -1901,6 +1901,14 @@ do
         MM2:AddDivider()
 
         MM2:AddLabel("Gun pickup")
+        MM2:AddToggle("MM2DropEsp", { Text = "Dropped gun ESP",
+            Tooltip  = "Yellow Highlight + 'GUN' label above any 'GunDrop' part in the workspace. Auto-cleans when the drop disappears (picked up).",
+            Default  = false,
+            Callback = function(v)
+                if v then F.games.mm2.dropEsp.start()
+                else      F.games.mm2.dropEsp.stop() end
+            end,
+        })
         MM2:AddLabel("Pickup gun key"):AddKeyPicker("MM2PickupGunKey", {
             Default = "G", Mode = "Toggle", Text = "Pickup gun",
             Callback = function(state)
