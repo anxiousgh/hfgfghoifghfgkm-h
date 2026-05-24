@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.5"
+local SCRIPT_VERSION = "v1.3.6"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5766,30 +5766,18 @@ F.games.mm2 = (function()
     local triggerLastFire = 0
     local TRIGGER_COOLDOWN = 0.4
 
-    -- The shoot remote lives at lplr.Character.Gun.Shoot - only
-    -- exists while the Gun tool is equipped (in the Character, not
-    -- the Backpack). Returns nil if the gun isn't equipped.
+    -- The Gun tool's Shoot RemoteEvent works whether the Gun is in
+    -- the Character (equipped) OR in the Backpack (not equipped) -
+    -- captured both cases. We check both parents so no auto-equip
+    -- is needed.
     local function findHitRemote()
-        local char = lplr.Character
-        if not char then return nil end
-        local gun = char:FindFirstChild("Gun")
-        if not gun then return nil end
-        return gun:FindFirstChild("Shoot")
-    end
-
-    -- Equips the Gun from the Backpack. Returns:
-    --   true   if it's now in the Character (was already, or we just equipped)
-    --   false  if no Gun anywhere (we're not the Sheriff)
-    local function ensureGunEquipped()
-        local char = lplr.Character; if not char then return false end
-        if char:FindFirstChild("Gun") then return true end
-        local bp = lplr:FindFirstChild("Backpack"); if not bp then return false end
-        local gun = bp:FindFirstChild("Gun")
-        if not gun or not gun:IsA("Tool") then return false end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum then return false end
-        pcall(function() hum:EquipTool(gun) end)
-        return true
+        local function pull(parent)
+            if not parent then return nil end
+            local gun = parent:FindFirstChild("Gun")
+            if not gun then return nil end
+            return gun:FindFirstChild("Shoot")
+        end
+        return pull(lplr.Character) or pull(lplr:FindFirstChild("Backpack"))
     end
 
     local mouseRef
@@ -5827,23 +5815,6 @@ F.games.mm2 = (function()
         return CFrame.new(hrp.Position)
     end
 
-    -- To guarantee the shot lands we report the shooter as being right
-    -- next to the target: 5 studs in front of them, on their horizontal
-    -- look-axis, same Y as the target. The server's line-of-sight ray
-    -- then travels ~5 studs through open air to the target's torso and
-    -- can't be obstructed by walls / cover. Identity rotation matches
-    -- the canonical payload's arg2 format.
-    local function adjacentShooterPos(targetPart)
-        local p  = targetPart.Position
-        local lk = targetPart.CFrame.LookVector
-        local horiz = Vector3.new(lk.X, 0, lk.Z)
-        if horiz.Magnitude > 0.01 then
-            horiz = horiz.Unit
-        else
-            horiz = Vector3.new(0, 0, 1)
-        end
-        return CFrame.new(p - horiz * 5)
-    end
 
     local function triggerStart()
         if triggerActive then return end
@@ -5860,16 +5831,11 @@ F.games.mm2 = (function()
             local myPos    = myPosCFrame()
             if not theirHit or not myPos then return end
             local remote = findHitRemote()
-            if not remote then
-                -- gun not equipped - best-effort equip and skip this
-                -- frame. Next frame (within the 0.4s cooldown anyway)
-                -- the Shoot remote should be mounted and we'll fire.
-                ensureGunEquipped()
-                return
-            end
-            -- override arg2 with target-adjacent position so the
-            -- server's LOS check always passes
-            pcall(function() remote:FireServer(theirHit.CFrame, adjacentShooterPos(theirHit)) end)
+            if not remote then return end  -- no Gun in Character or Backpack -> not Sheriff
+            -- Canonical payload from captures: arg1 = target's
+            -- LowerTorso CFrame, arg2 = our HRP position with
+            -- identity rotation.
+            pcall(function() remote:FireServer(theirHit.CFrame, myPos) end)
             triggerLastFire = tick()
         end)
     end
@@ -5910,24 +5876,17 @@ F.games.mm2 = (function()
         local theirHit = targetHitPart(victim.Character)
         if not theirHit then return false, "no_victim_hrp" end
 
+        -- Gun.Shoot remote works whether the Gun tool is equipped
+        -- (in Character) or stashed in Backpack. If neither, the
+        -- local player isn't the Sheriff.
         local remote = findHitRemote()
-        if remote then
-            -- gun equipped, fire immediately. Use target-adjacent
-            -- shooter position so the server's LOS check passes.
-            pcall(function() remote:FireServer(theirHit.CFrame, adjacentShooterPos(theirHit)) end)
-            return true
-        end
+        if not remote then return false, "no_gun" end
 
-        -- gun NOT equipped - try to equip from backpack, then delay-fire
-        if not ensureGunEquipped() then return false, "no_gun" end
-        task.delay(0.5, function()
-            local r = findHitRemote(); if not r then return end
-            -- re-resolve target since 0.5s passed (they may have moved
-            -- or respawned). Re-compute adjacent shooter pos too.
-            local tH = victim and victim.Parent and targetHitPart(victim.Character)
-            if not tH then return end
-            pcall(function() r:FireServer(tH.CFrame, adjacentShooterPos(tH)) end)
-        end)
+        -- Canonical payload from MM2 captures:
+        --   arg1 = target's LowerTorso CFrame (full rotation matrix)
+        --   arg2 = shooter HRP position with IDENTITY rotation
+        --          (CFrame.new(x, y, z) with default basis)
+        pcall(function() remote:FireServer(theirHit.CFrame, myPos) end)
         return true
     end
 
