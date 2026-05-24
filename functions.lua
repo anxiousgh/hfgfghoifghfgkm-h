@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.1"
+local SCRIPT_VERSION = "v1.3.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5600,6 +5600,21 @@ F.games.mm2 = (function()
     local PICKUP_HOLD_MS = 100   -- ms to stay at the drop
     local pickupActive = false
 
+    -- If any F.desync mode is active when we start the pickup, we
+    -- stop it for the duration so our HRP is actually at our REAL
+    -- position before the teleport (otherwise the server sees us in
+    -- the void / sky / wherever, never at the drop). We restart the
+    -- same mode once the pickup window closes.
+    local DESYNC_RESTARTERS = {
+        void      = "startVoid",
+        voidspam  = "startVoidspam",
+        sky       = "startSky",
+        spin      = "startSpin",
+        velocity  = "startVelocity",
+        raknet    = "startRaknet",
+        invisible = "startInvisible",
+    }
+
     -- Return values:
     --   true                success - teleport in progress
     --   false, "active"     a previous pickup is still mid-flight (silent)
@@ -5612,6 +5627,17 @@ F.games.mm2 = (function()
         local hrp  = char and char:FindFirstChild("HumanoidRootPart")
         if not hrp then return false, "no_hrp" end
 
+        -- snapshot + stop any active desync so we actually go to the
+        -- drop position rather than sitting at our spoofed location
+        local restartName
+        if F.desync and F.desync.getMode then
+            local m = F.desync.getMode()
+            if m and m ~= "off" and DESYNC_RESTARTERS[m] then
+                restartName = DESYNC_RESTARTERS[m]
+                F.desync.stop()
+            end
+        end
+
         pickupActive = true
         local realCF = hrp.CFrame
         pcall(function() hrp.CFrame = drop.CFrame end)
@@ -5620,6 +5646,10 @@ F.games.mm2 = (function()
                 pcall(function() hrp.CFrame = realCF end)
             end
             pickupActive = false
+            -- restore the desync mode that was active before pickup
+            if restartName and F.desync and F.desync[restartName] then
+                pcall(function() F.desync[restartName]() end)
+            end
         end)
         return true
     end
