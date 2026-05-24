@@ -1875,10 +1875,3 @@ ThemeManager:ApplyToTab(Tabs.Config)
 SaveManager:LoadAutoloadConfig()
 
 Library:Notify("cclosure.vip loaded — press End to toggle the menu", 4)
--- Version-stamp notification: bumped on every push so you can see at a
--- glance whether the GitHub raw URL served the latest commit.
-do
-    local v = (F.getVersion and F.getVersion()) or "unknown"
-    Library:Notify(("Version: %s"):format(v), 8)
-    print(("[cclosure.vip] version: %s"):format(v))
-end
