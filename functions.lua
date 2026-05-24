@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.4"
+local SCRIPT_VERSION = "v1.0.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5367,6 +5367,10 @@ F.desync = (function()
     -- the previous version did a write inside the namecall closure on
     -- every Shoot fire, which stalled / crashed the engine when
     -- ForceHit's autoshoot fired many shots per second.
+    --
+    -- Optional pre-window DELAY: wait SHOT_DELAY_MS after the click
+    -- before the sync window starts (i.e., delay how soon the void
+    -- spoof turns off). Default 0 = old behavior (immediate).
     if not getgenv()._F_DESYNC_INPUT_HOOK then
         getgenv()._F_DESYNC_INPUT_HOOK = true
         UserInputService.InputBegan:Connect(function(input, gp)
@@ -5374,15 +5378,30 @@ F.desync = (function()
             if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
             local s = getgenv()._F_DESYNC_STATE
             if not s or not s.active or s.mode ~= "voidspam" then return end
-            -- read the IIFE's current SHOT_SYNC_MS via a getgenv shim.
-            -- the IIFE writes this on init / setShotSyncMs.
-            local ms = getgenv()._F_DESYNC_SHOT_SYNC_MS or 100
-            getgenv()._F_DESYNC_SYNC_END = tick() + ms / 1000
+            -- read the IIFE's current SHOT_SYNC_MS / SHOT_DELAY_MS via
+            -- getgenv shims. The IIFE writes these on init / setters.
+            local syncMs  = getgenv()._F_DESYNC_SHOT_SYNC_MS  or 100
+            local delayMs = getgenv()._F_DESYNC_SHOT_DELAY_MS or 0
+            if delayMs <= 0 then
+                getgenv()._F_DESYNC_SYNC_END = tick() + syncMs / 1000
+            else
+                -- defer the spoof-off by delayMs. Re-check mode after
+                -- the wait so a quick toggle-off doesn't accidentally
+                -- re-open the window.
+                task.delay(delayMs / 1000, function()
+                    local s2 = getgenv()._F_DESYNC_STATE
+                    if s2 and s2.active and s2.mode == "voidspam" then
+                        local syncMs2 = getgenv()._F_DESYNC_SHOT_SYNC_MS or 100
+                        getgenv()._F_DESYNC_SYNC_END = tick() + syncMs2 / 1000
+                    end
+                end)
+            end
         end)
     end
     -- mirror SHOT_SYNC_MS into getgenv so the input listener (which is
     -- pinned across reloads) sees the current value
-    getgenv()._F_DESYNC_SHOT_SYNC_MS = SHOT_SYNC_MS
+    getgenv()._F_DESYNC_SHOT_SYNC_MS  = SHOT_SYNC_MS
+    getgenv()._F_DESYNC_SHOT_DELAY_MS = getgenv()._F_DESYNC_SHOT_DELAY_MS or 0
 
     -- ============================================================
     --  Server-position marker (lightweight)
@@ -5521,6 +5540,17 @@ F.desync = (function()
         setShotSyncMs   = function(n)
             SHOT_SYNC_MS = math.clamp(tonumber(n) or 100, 10, 1000)
             getgenv()._F_DESYNC_SHOT_SYNC_MS = SHOT_SYNC_MS
+        end,
+        -- Delay between MouseButton1 click and when the void spoof
+        -- actually turns off (sync window begins). 0 = immediate
+        -- (original behavior). Higher values let the user fire
+        -- while still spoofed, then drop to real position after N ms.
+        setShotDelayMs  = function(n)
+            local v = math.clamp(tonumber(n) or 0, 0, 2000)
+            getgenv()._F_DESYNC_SHOT_DELAY_MS = v
+        end,
+        getShotDelayMs  = function()
+            return getgenv()._F_DESYNC_SHOT_DELAY_MS or 0
         end,
         setSpinSpeed    = function(n)
             SPIN_STEP = math.clamp(tonumber(n) or 47, 1, 360)

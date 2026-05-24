@@ -1791,6 +1791,12 @@ do
         Default  = 100, Min = 10, Max = 500, Rounding = 0,
         Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
+    HC:AddSlider("HCVoidspamShotDelayMs", {
+        Text     = "Delay before spoof-off (ms)",
+        Tooltip  = "Wait this long after clicking before the void spoof actually turns off. 0 = immediate.",
+        Default  = 0, Min = 0, Max = 2000, Rounding = 0,
+        Callback = function(v) F.desync.setShotDelayMs(v) end,
+    })
 
     end -- close: if not inHoodCustoms() then ... else ...
 end
