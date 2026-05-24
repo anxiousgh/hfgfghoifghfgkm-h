@@ -1072,212 +1072,11 @@ local function startIce()
     end)
 end
 
--- ============================================================
---  STICKY EMOTES
--- ============================================================
---  Two filters keep us catching ONLY emotes, not weapon/tool anims:
---    1. Tool-ancestor filter — if the source Animation Instance is
---       parented under a Tool (or HopperBin) anywhere up the chain,
---       it's a tool/weapon animation (knife slash, gun fire) and we
---       skip it.
---    2. Builtin filter — Roblox's Animate LocalScript tracks
---       (WalkAnim, RunAnim, IdleAnim, ToolNoneAnim, etc.) are
---       excluded by exact-name + parent-folder + low-priority.
---  Anything that passes both is treated as an emote (catalog OR
---  game-custom). No-stacking via G._stickyTracks — we only ever
---  touch tracks we ourselves captured or spawned.
---
---  WRAPPED IN do ... end so all the helper locals (filter tables,
---  helper funcs, etc.) leave the chunk's register pool after the
---  block. Only stopStickyEmote / startStickyEmote stay as top-level
---  locals because they're referenced by makeToggle and stopAll
---  later in the file. Luau's per-function 200-local limit was hit
---  when these were declared individually at chunk top-level.
--- ============================================================
-local stopStickyEmote, startStickyEmote
-do
-    local BUILTIN_ANIM_NAMES = {
-        -- R15 standard Animate script
-        WalkAnim = true, RunAnim = true, JumpAnim = true, IdleAnim = true,
-        FallAnim = true, ClimbAnim = true, SwimAnim = true, SwimIdleAnim = true,
-        ToolNoneAnim = true, ToolSlashAnim = true, ToolLungeAnim = true,
-        -- R6 (space-separated)
-        ["Idle Anim"] = true, ["Walk Anim"] = true, ["Run Anim"] = true,
-        ["Jump Anim"] = true, ["Fall Anim"] = true, ["Climb Anim"] = true,
-        -- Misc internal
-        PoseAnim = true, DeathAnim = true, SitAnim = true,
-    }
-    local BUILTIN_PARENT_NAMES = {
-        walk = true, run = true, jump = true, idle = true, fall = true,
-        climb = true, swim = true, swimidle = true, sit = true,
-        toolnone = true, toolslash = true, toollunge = true,
-    }
-    local function getAnimator()
-        local c = lplr.Character
-        local hum = c and c:FindFirstChildOfClass("Humanoid")
-        return hum and hum:FindFirstChildOfClass("Animator")
-    end
-    -- True if the Animation Instance is anywhere under a Tool/HopperBin
-    -- in the parent chain. Tool/weapon anims live inside the Tool, so
-    -- this excludes knife slashes, gun fires, etc.
-    local function isToolAnim(track)
-        local a = track.Animation
-        if not a then return false end
-        local p = a.Parent
-        for _ = 1, 12 do
-            if not p or p == game then return false end
-            if p:IsA("Tool") or p:IsA("HopperBin") then return true end
-            p = p.Parent
-        end
-        return false
-    end
-    local function isBuiltin(track)
-        local a = track.Animation
-        if not a then return true end
-        if BUILTIN_ANIM_NAMES[a.Name or ""] then return true end
-        local parent = a.Parent
-        if parent then
-            if BUILTIN_PARENT_NAMES[(parent.Name or ""):lower()] then return true end
-            local grand = parent.Parent
-            if grand and grand.Name == "Animate" then return true end
-        end
-        local prio = track.Priority
-        if prio == Enum.AnimationPriority.Idle
-           or prio == Enum.AnimationPriority.Movement
-           or prio == Enum.AnimationPriority.Core then
-            return true
-        end
-        return false
-    end
-    local function shouldStick(track)
-        if isToolAnim(track) then return false end
-        if isBuiltin(track) then return false end
-        return true
-    end
-    local function stopOurs()
-        G._stickyTracks = G._stickyTracks or {}
-        for t, _ in pairs(G._stickyTracks) do
-            pcall(function() t:Stop(0) end)
-        end
-        table.clear(G._stickyTracks)
-    end
-    function stopStickyEmote()
-        G.stickyEmoteActive   = false
-        G._currentEmoteId     = nil
-        G._emoteStopRequested = false
-        if G._emoteAnimConn     then G._emoteAnimConn:Disconnect();     G._emoteAnimConn     = nil end
-        if G._emoteCharConn     then G._emoteCharConn:Disconnect();     G._emoteCharConn     = nil end
-        if G._emoteChatConn     then G._emoteChatConn:Disconnect();     G._emoteChatConn     = nil end
-        if G._emoteTextChatConn then G._emoteTextChatConn:Disconnect(); G._emoteTextChatConn = nil end
-        if G._emoteHbConn       then G._emoteHbConn:Disconnect();       G._emoteHbConn       = nil end
-        stopOurs()
-    end
-    function startStickyEmote()
-    G.stickyEmoteActive    = true
-    G._emoteStopRequested  = false
-    G._currentEmoteId      = nil
-    G._stickyTracks        = G._stickyTracks or {}
-
-    -- Capture any non-tool, non-builtin Action+ animation that starts.
-    -- New captures stop our previously-captured tracks first so emotes
-    -- don't stack.
-    local function hookChar(char)
-        if not char then return end
-        local hum = char:WaitForChild("Humanoid", 5); if not hum then return end
-        local animator = hum:WaitForChild("Animator", 5); if not animator then return end
-        if G._emoteAnimConn then G._emoteAnimConn:Disconnect() end
-        G._emoteAnimConn = animator.AnimationPlayed:Connect(function(track)
-            if not G.stickyEmoteActive or G._emoteStopRequested then return end
-            if not shouldStick(track) then return end
-            local a = track.Animation
-            if not a or a.AnimationId == "" then return end
-            -- if this is OUR own Heartbeat-spawned replay of the current
-            -- emote, just track it — don't run the supersede teardown
-            if G._currentEmoteId == a.AnimationId then
-                G._stickyTracks[track] = true
-                pcall(function() track.Priority = Enum.AnimationPriority.Action4 end)
-                return
-            end
-            -- different emote (or first one) — supersede the old set
-            stopOurs()
-            G._stickyTracks[track] = true
-            G._currentEmoteId = a.AnimationId
-            pcall(function() track.Priority = Enum.AnimationPriority.Action4 end)
-        end)
-    end
-    hookChar(lplr.Character)
-    if G._emoteCharConn then G._emoteCharConn:Disconnect() end
-    G._emoteCharConn = lplr.CharacterAdded:Connect(function(c)
-        if G.stickyEmoteActive then
-            G._currentEmoteId = nil
-            table.clear(G._stickyTracks)
-            hookChar(c)
-        end
-    end)
-
-    -- Heartbeat keep-alive: if the captured emote isn't currently
-    -- playing on any of OUR tracks, load a fresh copy from its asset
-    -- id and play at Action4. We only scan our own track set, so we
-    -- never trip on unrelated tool/weapon animations.
-    if G._emoteHbConn then G._emoteHbConn:Disconnect() end
-    G._emoteHbConn = RunService.Heartbeat:Connect(function()
-        if not G.stickyEmoteActive or G._emoteStopRequested then return end
-        local id = G._currentEmoteId
-        if not id or id == "" then return end
-        local animator = getAnimator()
-        if not animator then return end
-        -- prune dead tracks from our set
-        for t, _ in pairs(G._stickyTracks) do
-            if not t.IsPlaying and t.Parent ~= animator then
-                G._stickyTracks[t] = nil
-            end
-        end
-        -- one of our tracks already playing for this id?
-        for t, _ in pairs(G._stickyTracks) do
-            if t.IsPlaying and t.Animation and t.Animation.AnimationId == id then
-                if t.Priority ~= Enum.AnimationPriority.Action4 then
-                    pcall(function() t.Priority = Enum.AnimationPriority.Action4 end)
-                end
-                return
-            end
-        end
-        -- nope — load and play a fresh copy, add to our set
-        local anim = Instance.new("Animation")
-        anim.AnimationId = id
-        local newTrack
-        pcall(function() newTrack = animator:LoadAnimation(anim) end)
-        if newTrack then
-            pcall(function() newTrack.Priority = Enum.AnimationPriority.Action4 end)
-            pcall(function() newTrack:Play(0) end)
-            G._stickyTracks[newTrack] = true
-        end
-    end)
-
-    -- /e stop and /emote stop interception. Window the stop-flag
-    -- so in-flight Heartbeat ticks early-out before we re-arm.
-    local function onChat(msg)
-        if not G.stickyEmoteActive or type(msg) ~= "string" then return end
-        local m = msg:lower():gsub("^%s+", "")
-        if m:match("^/e%s+stop") or m:match("^/emote%s+stop") then
-            G._emoteStopRequested = true
-            G._currentEmoteId     = nil
-            stopOurs()
-            task.delay(0.5, function() G._emoteStopRequested = false end)
-        end
-    end
-    if G._emoteChatConn then G._emoteChatConn:Disconnect() end
-    G._emoteChatConn = lplr.Chatted:Connect(onChat)
-    if G._emoteTextChatConn then G._emoteTextChatConn:Disconnect() end
-    pcall(function()
-        local TCS = game:GetService("TextChatService")
-        if TCS and TCS.SendingMessage then
-            G._emoteTextChatConn = TCS.SendingMessage:Connect(function(message)
-                if message and message.Text then onChat(message.Text) end
-            end)
-        end
-    end)
-end
-end  -- end of "do" block that scopes sticky-emote helpers
+-- Sticky emotes module lives down by F.stickyEmote registration
+-- (search for "F.stickyEmote = (function()") so it can build the
+-- F.stickyEmote table directly without consuming top-level chunk
+-- locals. Luau has a 200-local-register-per-function limit and the
+-- chunk was right at it.
 
 local function cmdBlink()
     local char=lplr.Character; if not char then return end
@@ -2074,7 +1873,9 @@ end)
 
 local rbCachedTarget = nil
 local _rbFaceStepBound = false
-local _rbFaceSavedAutoRotate = nil  -- snapshot of Humanoid.AutoRotate before we forced it off
+-- Snapshot of Humanoid.AutoRotate before we forced it off lives on G
+-- (G._rbFaceSavedAutoRotate) to avoid eating a top-level local slot —
+-- the chunk function is right at Luau's 200-local-per-function limit.
 local rbOrbitAngle = 0
 
 -- target visualization
@@ -2357,10 +2158,10 @@ RunService.RenderStepped:Connect(function(dt)
                     -- restore the AutoRotate we forced off below
                     local c   = lplr.Character
                     local hum = c and c:FindFirstChildOfClass("Humanoid")
-                    if hum and _rbFaceSavedAutoRotate ~= nil then
-                        pcall(function() hum.AutoRotate = _rbFaceSavedAutoRotate end)
+                    if hum and G._rbFaceSavedAutoRotate ~= nil then
+                        pcall(function() hum.AutoRotate = G._rbFaceSavedAutoRotate end)
                     end
-                    _rbFaceSavedAutoRotate = nil
+                    G._rbFaceSavedAutoRotate = nil
                     return
                 end
                 local char2=lplr.Character; if not char2 then return end
@@ -2370,8 +2171,8 @@ RunService.RenderStepped:Connect(function(dt)
                 -- Capture the user's original value once so we can restore.
                 local hum = char2:FindFirstChildOfClass("Humanoid")
                 if hum then
-                    if _rbFaceSavedAutoRotate == nil then
-                        _rbFaceSavedAutoRotate = hum.AutoRotate
+                    if G._rbFaceSavedAutoRotate == nil then
+                        G._rbFaceSavedAutoRotate = hum.AutoRotate
                     end
                     if hum.AutoRotate then
                         pcall(function() hum.AutoRotate = false end)
@@ -2393,10 +2194,10 @@ RunService.RenderStepped:Connect(function(dt)
             -- restore AutoRotate when face-target toggles off via the outer
             -- guard (target lost, etc.), not via the inner self-unbind path
             local hum = lc:FindFirstChildOfClass("Humanoid")
-            if hum and _rbFaceSavedAutoRotate ~= nil then
-                pcall(function() hum.AutoRotate = _rbFaceSavedAutoRotate end)
+            if hum and G._rbFaceSavedAutoRotate ~= nil then
+                pcall(function() hum.AutoRotate = G._rbFaceSavedAutoRotate end)
             end
-            _rbFaceSavedAutoRotate = nil
+            G._rbFaceSavedAutoRotate = nil
         end
     end
 
@@ -2922,7 +2723,198 @@ F.backwards = makeToggle(startBackwards, stopBackwards, "backwardsActive")
 F.ice       = makeToggle(startIce,       stopIce,       "iceActive")
 F.ice.setSlide = function(n) ICE_SLIDE = math.clamp(tonumber(n) or ICE_SLIDE, 0, 0.999) end
 
-F.stickyEmote = makeToggle(startStickyEmote, stopStickyEmote, "stickyEmoteActive")
+-- ============================================================
+--  STICKY EMOTES  (entire module inlined here)
+-- ============================================================
+--  Two filters keep us catching ONLY emotes, not weapon/tool anims:
+--    1. Tool-ancestor filter — if the source Animation Instance is
+--       parented under a Tool (or HopperBin) anywhere up the chain,
+--       it's a tool/weapon animation (knife slash, gun fire) and we
+--       skip it.
+--    2. Builtin filter — Roblox's Animate LocalScript tracks
+--       (WalkAnim, RunAnim, IdleAnim, ToolNoneAnim, etc.) are
+--       excluded by exact-name + parent-folder + low-priority.
+--  Anything that passes both is treated as an emote (catalog OR
+--  game-custom). No-stacking via G._stickyTracks — we only ever
+--  touch tracks we ourselves captured or spawned.
+--
+--  Built as an IIFE that returns the {start,stop,toggle,isActive}
+--  table directly into F.stickyEmote. None of the helpers leak to
+--  the chunk's local register pool — that 200-local limit was hit
+--  when these were declared at chunk top level.
+-- ============================================================
+F.stickyEmote = (function()
+    local BUILTIN_ANIM_NAMES = {
+        WalkAnim = true, RunAnim = true, JumpAnim = true, IdleAnim = true,
+        FallAnim = true, ClimbAnim = true, SwimAnim = true, SwimIdleAnim = true,
+        ToolNoneAnim = true, ToolSlashAnim = true, ToolLungeAnim = true,
+        ["Idle Anim"] = true, ["Walk Anim"] = true, ["Run Anim"] = true,
+        ["Jump Anim"] = true, ["Fall Anim"] = true, ["Climb Anim"] = true,
+        PoseAnim = true, DeathAnim = true, SitAnim = true,
+    }
+    local BUILTIN_PARENT_NAMES = {
+        walk = true, run = true, jump = true, idle = true, fall = true,
+        climb = true, swim = true, swimidle = true, sit = true,
+        toolnone = true, toolslash = true, toollunge = true,
+    }
+    local function getAnimator()
+        local c = lplr.Character
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        return hum and hum:FindFirstChildOfClass("Animator")
+    end
+    local function isToolAnim(track)
+        local a = track.Animation
+        if not a then return false end
+        local p = a.Parent
+        for _ = 1, 12 do
+            if not p or p == game then return false end
+            if p:IsA("Tool") or p:IsA("HopperBin") then return true end
+            p = p.Parent
+        end
+        return false
+    end
+    local function isBuiltin(track)
+        local a = track.Animation
+        if not a then return true end
+        if BUILTIN_ANIM_NAMES[a.Name or ""] then return true end
+        local parent = a.Parent
+        if parent then
+            if BUILTIN_PARENT_NAMES[(parent.Name or ""):lower()] then return true end
+            local grand = parent.Parent
+            if grand and grand.Name == "Animate" then return true end
+        end
+        local prio = track.Priority
+        if prio == Enum.AnimationPriority.Idle
+           or prio == Enum.AnimationPriority.Movement
+           or prio == Enum.AnimationPriority.Core then
+            return true
+        end
+        return false
+    end
+    local function shouldStick(track)
+        if isToolAnim(track) then return false end
+        if isBuiltin(track) then return false end
+        return true
+    end
+    local function stopOurs()
+        G._stickyTracks = G._stickyTracks or {}
+        for t, _ in pairs(G._stickyTracks) do
+            pcall(function() t:Stop(0) end)
+        end
+        table.clear(G._stickyTracks)
+    end
+    local function stopFn()
+        G.stickyEmoteActive   = false
+        G._currentEmoteId     = nil
+        G._emoteStopRequested = false
+        if G._emoteAnimConn     then G._emoteAnimConn:Disconnect();     G._emoteAnimConn     = nil end
+        if G._emoteCharConn     then G._emoteCharConn:Disconnect();     G._emoteCharConn     = nil end
+        if G._emoteChatConn     then G._emoteChatConn:Disconnect();     G._emoteChatConn     = nil end
+        if G._emoteTextChatConn then G._emoteTextChatConn:Disconnect(); G._emoteTextChatConn = nil end
+        if G._emoteHbConn       then G._emoteHbConn:Disconnect();       G._emoteHbConn       = nil end
+        stopOurs()
+    end
+    local function startFn()
+        G.stickyEmoteActive   = true
+        G._emoteStopRequested = false
+        G._currentEmoteId     = nil
+        G._stickyTracks       = G._stickyTracks or {}
+
+        local function hookChar(char)
+            if not char then return end
+            local hum = char:WaitForChild("Humanoid", 5); if not hum then return end
+            local animator = hum:WaitForChild("Animator", 5); if not animator then return end
+            if G._emoteAnimConn then G._emoteAnimConn:Disconnect() end
+            G._emoteAnimConn = animator.AnimationPlayed:Connect(function(track)
+                if not G.stickyEmoteActive or G._emoteStopRequested then return end
+                if not shouldStick(track) then return end
+                local a = track.Animation
+                if not a or a.AnimationId == "" then return end
+                -- our own Heartbeat replay of the current emote — just track it
+                if G._currentEmoteId == a.AnimationId then
+                    G._stickyTracks[track] = true
+                    pcall(function() track.Priority = Enum.AnimationPriority.Action4 end)
+                    return
+                end
+                -- different emote — supersede old set so they don't stack
+                stopOurs()
+                G._stickyTracks[track] = true
+                G._currentEmoteId = a.AnimationId
+                pcall(function() track.Priority = Enum.AnimationPriority.Action4 end)
+            end)
+        end
+        hookChar(lplr.Character)
+        if G._emoteCharConn then G._emoteCharConn:Disconnect() end
+        G._emoteCharConn = lplr.CharacterAdded:Connect(function(c)
+            if G.stickyEmoteActive then
+                G._currentEmoteId = nil
+                table.clear(G._stickyTracks)
+                hookChar(c)
+            end
+        end)
+
+        -- Heartbeat keep-alive: re-create from AssetId when our tracks die
+        if G._emoteHbConn then G._emoteHbConn:Disconnect() end
+        G._emoteHbConn = RunService.Heartbeat:Connect(function()
+            if not G.stickyEmoteActive or G._emoteStopRequested then return end
+            local id = G._currentEmoteId
+            if not id or id == "" then return end
+            local animator = getAnimator()
+            if not animator then return end
+            for t, _ in pairs(G._stickyTracks) do
+                if not t.IsPlaying and t.Parent ~= animator then
+                    G._stickyTracks[t] = nil
+                end
+            end
+            for t, _ in pairs(G._stickyTracks) do
+                if t.IsPlaying and t.Animation and t.Animation.AnimationId == id then
+                    if t.Priority ~= Enum.AnimationPriority.Action4 then
+                        pcall(function() t.Priority = Enum.AnimationPriority.Action4 end)
+                    end
+                    return
+                end
+            end
+            local anim = Instance.new("Animation")
+            anim.AnimationId = id
+            local newTrack
+            pcall(function() newTrack = animator:LoadAnimation(anim) end)
+            if newTrack then
+                pcall(function() newTrack.Priority = Enum.AnimationPriority.Action4 end)
+                pcall(function() newTrack:Play(0) end)
+                G._stickyTracks[newTrack] = true
+            end
+        end)
+
+        -- /e stop interception, both chat systems
+        local function onChat(msg)
+            if not G.stickyEmoteActive or type(msg) ~= "string" then return end
+            local m = msg:lower():gsub("^%s+", "")
+            if m:match("^/e%s+stop") or m:match("^/emote%s+stop") then
+                G._emoteStopRequested = true
+                G._currentEmoteId     = nil
+                stopOurs()
+                task.delay(0.5, function() G._emoteStopRequested = false end)
+            end
+        end
+        if G._emoteChatConn then G._emoteChatConn:Disconnect() end
+        G._emoteChatConn = lplr.Chatted:Connect(onChat)
+        if G._emoteTextChatConn then G._emoteTextChatConn:Disconnect() end
+        pcall(function()
+            local TCS = game:GetService("TextChatService")
+            if TCS and TCS.SendingMessage then
+                G._emoteTextChatConn = TCS.SendingMessage:Connect(function(message)
+                    if message and message.Text then onChat(message.Text) end
+                end)
+            end
+        end)
+    end
+    return {
+        start    = startFn,
+        stop     = stopFn,
+        toggle   = function() if G.stickyEmoteActive then stopFn() else startFn() end end,
+        isActive = function() return G.stickyEmoteActive == true end,
+    }
+end)()
 
 F.respawn = { fire = cmdRe }
 F.blink   = {
@@ -5720,7 +5712,7 @@ F.disableAll = function()
     if F.forceChat and F.forceChat.stop then F.forceChat.stop() end
     stopNoclip(); stopFullbright(); stopFreecam()
     stopZoom(); stopSpin(); stopFlip(); stopTilt(); stopBackwards(); stopIce()
-    stopStickyEmote()
+    if F.stickyEmote then F.stickyEmote.stop() end
     AimbotSettings.Enabled=false; CamLockSettings.Enabled=false
     TrigSettings.Enabled=false
     RageSettings.SilentForce=false; RageSettings.AutoShoot=false
