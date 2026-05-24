@@ -2015,6 +2015,17 @@ do
             Default  = 25, Min = 0, Max = 500, Rounding = 0,
             Callback = function(v) F.desync.setInvisibleRadius(v) end,
         })
+        MM2:AddLabel("Invisible key"):AddKeyPicker("MM2InvisibleKey", {
+            Default = "V", Mode = "Toggle", Text = "Invisible",
+            Callback = function(state)
+                -- mirror the keybind state into the main MM2Invisible
+                -- toggle. SetValue will fire that toggle's Callback,
+                -- which starts/stops the desync + handles the mutex.
+                if Toggles.MM2Invisible then
+                    Toggles.MM2Invisible:SetValue(state)
+                end
+            end,
+        })
 
         MM2:AddDivider()
         MM2:AddLabel("Murderer trigger")
@@ -2040,11 +2051,17 @@ do
         end
         MM2:AddButton({ Text = "Shoot murderer", Func = tryShootMurderer })
         MM2:AddLabel("Shoot murderer key"):AddKeyPicker("MM2ShootMurdererKey", {
-            Default = "H", Mode = "Hold", Text = "Shoot murderer",
+            Default = "J", Mode = "Hold", Text = "Shoot murderer",
             Callback = function(state)
                 -- Hold mode fires the callback on key-down (true) and
                 -- key-up (false). One shot per press = only act on true.
-                if state then tryShootMurderer() end
+                -- Default changed from H to J because H is bound to
+                -- backpack-toggle / sprint in many games and the keybind
+                -- never reached our callback.
+                if state then
+                    print("[cclosure.vip] Shoot Murderer keybind fired")
+                    tryShootMurderer()
+                end
             end,
         })
     end
