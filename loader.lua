@@ -1799,16 +1799,33 @@ do
         Callback = function(v) F.desync.setShotDelayMs(v) end,
     })
     HC:AddToggle("HCKnifeAttach", { Text = "Attach to ragebot target",
-        Tooltip  = "Snap HRP to the ragebot's current target each frame and auto-click on a loop. While on, ragebot autoshoot + force-hit are forcibly disabled so the knife is the only weapon firing.",
+        Tooltip  = "Snap HRP to the ragebot's current target each frame and auto-click on a loop. While on, ragebot autoshoot + force-hit are forcibly disabled so the knife is the only weapon firing. When you toggle this off, autoshoot/force-hit get restored to whatever state they were in before.",
         Default  = false,
         Callback = function(v)
             if v then
+                -- snapshot prior ranged-toggle state so we can restore
+                -- it on attach-off. Stored in getgenv so a script reload
+                -- mid-session doesn't lose the prior state.
+                getgenv()._F_KNIFE_PREV_AUTOSHOOT =
+                    Toggles.RageAutoShoot and Toggles.RageAutoShoot.Value or false
+                getgenv()._F_KNIFE_PREV_FORCEHIT =
+                    Toggles.HCForceHit    and Toggles.HCForceHit.Value    or false
                 -- mute the ranged autos: knife only
                 if Toggles.RageAutoShoot then Toggles.RageAutoShoot:SetValue(false) end
                 if Toggles.HCForceHit    then Toggles.HCForceHit:SetValue(false)    end
                 F.games.hoodCustoms.knifeBot.attach.start()
             else
                 F.games.hoodCustoms.knifeBot.attach.stop()
+                -- restore whatever ranged-toggle state was active before
+                -- attach was enabled
+                if getgenv()._F_KNIFE_PREV_AUTOSHOOT and Toggles.RageAutoShoot then
+                    Toggles.RageAutoShoot:SetValue(true)
+                end
+                if getgenv()._F_KNIFE_PREV_FORCEHIT and Toggles.HCForceHit then
+                    Toggles.HCForceHit:SetValue(true)
+                end
+                getgenv()._F_KNIFE_PREV_AUTOSHOOT = nil
+                getgenv()._F_KNIFE_PREV_FORCEHIT = nil
             end
         end,
     })
