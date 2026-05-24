@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.2.9"
+local SCRIPT_VERSION = "v1.3.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5797,6 +5797,24 @@ F.games.mm2 = (function()
         return CFrame.new(hrp.Position)
     end
 
+    -- To guarantee the shot lands we report the shooter as being right
+    -- next to the target: 5 studs in front of them, on their horizontal
+    -- look-axis, same Y as the target. The server's line-of-sight ray
+    -- then travels ~5 studs through open air to the target's torso and
+    -- can't be obstructed by walls / cover. Identity rotation matches
+    -- the canonical payload's arg2 format.
+    local function adjacentShooterPos(targetPart)
+        local p  = targetPart.Position
+        local lk = targetPart.CFrame.LookVector
+        local horiz = Vector3.new(lk.X, 0, lk.Z)
+        if horiz.Magnitude > 0.01 then
+            horiz = horiz.Unit
+        else
+            horiz = Vector3.new(0, 0, 1)
+        end
+        return CFrame.new(p - horiz * 5)
+    end
+
     local function triggerStart()
         if triggerActive then return end
         triggerActive = true
@@ -5819,7 +5837,9 @@ F.games.mm2 = (function()
                 ensureGunEquipped()
                 return
             end
-            pcall(function() remote:FireServer(theirHit.CFrame, myPos) end)
+            -- override arg2 with target-adjacent position so the
+            -- server's LOS check always passes
+            pcall(function() remote:FireServer(theirHit.CFrame, adjacentShooterPos(theirHit)) end)
             triggerLastFire = tick()
         end)
     end
@@ -5862,8 +5882,9 @@ F.games.mm2 = (function()
 
         local remote = findHitRemote()
         if remote then
-            -- gun equipped, fire immediately
-            pcall(function() remote:FireServer(theirHit.CFrame, myPos) end)
+            -- gun equipped, fire immediately. Use target-adjacent
+            -- shooter position so the server's LOS check passes.
+            pcall(function() remote:FireServer(theirHit.CFrame, adjacentShooterPos(theirHit)) end)
             return true
         end
 
@@ -5871,12 +5892,11 @@ F.games.mm2 = (function()
         if not ensureGunEquipped() then return false, "no_gun" end
         task.delay(0.5, function()
             local r = findHitRemote(); if not r then return end
-            -- re-resolve target + self since 0.5s passed (we / they
-            -- may have moved or respawned)
-            local mP = myPosCFrame()
+            -- re-resolve target since 0.5s passed (they may have moved
+            -- or respawned). Re-compute adjacent shooter pos too.
             local tH = victim and victim.Parent and targetHitPart(victim.Character)
-            if not mP or not tH then return end
-            pcall(function() r:FireServer(tH.CFrame, mP) end)
+            if not tH then return end
+            pcall(function() r:FireServer(tH.CFrame, adjacentShooterPos(tH)) end)
         end)
         return true
     end
