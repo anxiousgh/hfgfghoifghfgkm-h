@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.12"
+local SCRIPT_VERSION = "v1.0.13"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5634,28 +5634,49 @@ F.desync = (function()
     -- Trigger: knife SWING ANIMATION (not MouseButton1). Click-based
     -- triggering doesn't account for ping — the actual server-side
     -- hit registration lines up with the swing animation playing,
-    -- which already includes the round-trip latency. Watching the
-    -- Animator's AnimationPlayed event is the precise timing signal.
+    -- which already includes the round-trip latency.
     --
-    -- Optional DELAY ms: wait this long after the swing anim plays
-    -- before the sync window opens (the void spoof turns off). Then
-    -- SYNC_WINDOW ms later, the spoof resumes.
+    -- Sync window is computed from the track's Length:
+    --   off-from  = anim_start + (START_FRAC * length)
+    --   off-until = anim_start + length + POST_MS / 1000
+    --
+    --   START_FRAC = _F_DESYNC_SHOT_DELAY_MS / 100  (% of anim,
+    --                so the existing 0-100 slider doubles as the
+    --                start-fraction control)
+    --   POST_MS    = _F_DESYNC_SHOT_SYNC_MS  (ms after anim ends
+    --                that the spoof stays off; the existing sync
+    --                window slider, 90-200ms)
+    --
+    -- Example: anim length 0.5s, start frac 0.4, post 0.2s
+    --   off from t=0.2s to t=0.7s (relative to anim start)
     local KNIFE_SWING_ANIM_ID = "rbxassetid://15862130681"
 
-    local function _voidspamOpenSyncWindow()
-        local syncMs  = getgenv()._F_DESYNC_SHOT_SYNC_MS  or 100
-        local delayMs = getgenv()._F_DESYNC_SHOT_DELAY_MS or 0
-        if delayMs <= 0 then
-            getgenv()._F_DESYNC_SYNC_END = tick() + syncMs / 1000
-        else
-            task.delay(delayMs / 1000, function()
-                local s2 = getgenv()._F_DESYNC_STATE
-                if s2 and s2.active and s2.mode == "voidspam" then
-                    local syncMs2 = getgenv()._F_DESYNC_SHOT_SYNC_MS or 100
-                    getgenv()._F_DESYNC_SYNC_END = tick() + syncMs2 / 1000
-                end
-            end)
+    local function _voidspamArmFromAnim(track)
+        local L = track.Length
+        if not L or L <= 0 then
+            -- Length isn't published yet (e.g., first play). Fall back
+            -- to assuming a 0.5s anim — the post-anim ms still adds on
+            -- top so the spoof stays off long enough either way.
+            L = 0.5
         end
+        local startFrac = (getgenv()._F_DESYNC_SHOT_DELAY_MS or 40) / 100
+        local postMs    = getgenv()._F_DESYNC_SHOT_SYNC_MS  or 200
+        startFrac = math.clamp(startFrac, 0, 1)
+        local startAt = startFrac * L            -- seconds from anim start
+        local endAt   = L + postMs / 1000        -- seconds from anim start
+        local hold    = math.max(0, endAt - startAt)
+
+        task.delay(startAt, function()
+            local s2 = getgenv()._F_DESYNC_STATE
+            if not s2 or not s2.active or s2.mode ~= "voidspam" then return end
+            local endTime = tick() + hold
+            -- extend SYNC_END if the new end is later; never shrink
+            -- (so overlapping swings don't accidentally close the
+            -- window early)
+            if endTime > (getgenv()._F_DESYNC_SYNC_END or 0) then
+                getgenv()._F_DESYNC_SYNC_END = endTime
+            end
+        end)
     end
 
     if not getgenv()._F_DESYNC_ANIM_HOOK then
@@ -5669,7 +5690,7 @@ F.desync = (function()
                 if not s or not s.active or s.mode ~= "voidspam" then return end
                 local a = track.Animation
                 if not a or a.AnimationId ~= KNIFE_SWING_ANIM_ID then return end
-                _voidspamOpenSyncWindow()
+                _voidspamArmFromAnim(track)
             end)
         end
 
@@ -5686,7 +5707,7 @@ F.desync = (function()
     -- mirror SHOT_SYNC_MS into getgenv so the input listener (which is
     -- pinned across reloads) sees the current value
     getgenv()._F_DESYNC_SHOT_SYNC_MS  = SHOT_SYNC_MS
-    getgenv()._F_DESYNC_SHOT_DELAY_MS = getgenv()._F_DESYNC_SHOT_DELAY_MS or 0
+    getgenv()._F_DESYNC_SHOT_DELAY_MS = getgenv()._F_DESYNC_SHOT_DELAY_MS or 40
 
     -- ============================================================
     --  Server-position marker (lightweight)
@@ -5883,16 +5904,22 @@ F.desync = (function()
             VOID_MIN = math.max(100, tonumber(minV) or VOID_MIN)
             VOID_MAX = math.max(VOID_MIN + 1, tonumber(maxV) or VOID_MAX)
         end,
+        -- Now interpreted as "post-animation duration (ms)" — how
+        -- long the spoof stays off after the swing animation ends.
         setShotSyncMs   = function(n)
-            SHOT_SYNC_MS = math.clamp(tonumber(n) or 120, 90, 200)
+            SHOT_SYNC_MS = math.clamp(tonumber(n) or 200, 0, 1000)
             getgenv()._F_DESYNC_SHOT_SYNC_MS = SHOT_SYNC_MS
         end,
         -- Delay between MouseButton1 click and when the void spoof
         -- actually turns off (sync window begins). 0 = immediate
         -- (original behavior). Higher values let the user fire
         -- while still spoofed, then drop to real position after N ms.
+        -- Now interpreted as "start at % of anim" — what fraction
+        -- of the swing animation has played before the spoof goes
+        -- off. 40 = spoof off starts at 40% of the swing.
+        -- (Slider value is 0-100, used as a percent.)
         setShotDelayMs  = function(n)
-            local v = math.clamp(tonumber(n) or 0, 0, 100)
+            local v = math.clamp(tonumber(n) or 40, 0, 100)
             getgenv()._F_DESYNC_SHOT_DELAY_MS = v
         end,
         getShotDelayMs  = function()

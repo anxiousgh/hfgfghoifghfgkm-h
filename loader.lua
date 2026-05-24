@@ -1787,17 +1787,17 @@ do
             end
         end,
     })
-    HC:AddSlider("HCVoidspamShotSyncMs", {
-        Text     = "Stab sync window (ms)",
-        Tooltip  = "How long the void spoof stays off after the swing animation triggers.",
-        Default  = 120, Min = 90, Max = 200, Rounding = 0,
-        Callback = function(v) F.desync.setShotSyncMs(v) end,
-    })
     HC:AddSlider("HCVoidspamShotDelayMs", {
-        Text     = "Delay (ms)",
-        Tooltip  = "Wait this long after the swing animation plays before the void spoof actually turns off. 0 = immediate.",
-        Default  = 0, Min = 0, Max = 100, Rounding = 0,
+        Text     = "Start at % of anim",
+        Tooltip  = "Within the swing animation, when does the void spoof go off? 40 = 40% of the way through. 0 = the instant the swing starts. 100 = at the end of the swing.",
+        Default  = 40, Min = 0, Max = 100, Rounding = 0,
         Callback = function(v) F.desync.setShotDelayMs(v) end,
+    })
+    HC:AddSlider("HCVoidspamShotSyncMs", {
+        Text     = "Post-anim duration (ms)",
+        Tooltip  = "How long the void spoof stays off AFTER the swing animation ends. Default 200 (0.2s).",
+        Default  = 200, Min = 0, Max = 1000, Rounding = 0,
+        Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
     HC:AddToggle("HCVoidspamSyncVisual", { Text = "Show sync window visualizer",
         Tooltip  = "Show a red \"VULNERABLE\" banner at the top of the screen while the void spoof is currently OFF (sync window active).",
