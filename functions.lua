@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.3"
+local SCRIPT_VERSION = "v1.3.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6023,9 +6023,9 @@ F.desync = (function()
     local VOID_MAX     = 20000
     -- Knife Voidspam has its own tighter range so the spoofed
     -- position stays in a smaller cluster (less server detection
-    -- + easier to reason about). User specified 5k-15k.
+    -- + easier to reason about). User specified 5k-10k.
     local VOIDSPAM_MIN = 5000
-    local VOIDSPAM_MAX = 15000
+    local VOIDSPAM_MAX = 10000
     local SHOT_SYNC_MS = 100
     local SPIN_STEP    = 47
     local VEL_MAGNITUDE = 16384
