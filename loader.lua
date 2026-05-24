@@ -1940,19 +1940,25 @@ do
                 else      F.games.mm2.triggerMurderer.stop() end
             end,
         })
-        MM2:AddButton({ Text = "Shoot murderer", Func = function()
-            local ok = F.games.mm2.shootMurderer.fire()
+        local SHOOT_MURDERER_ERR = {
+            no_remote     = "Shoot remote not found. Executor may not expose getnilinstances, or the remote name isn't 'shoot' / not nil-parented.",
+            no_my_hrp     = "Your character isn't loaded yet.",
+            no_murderer   = "No player is holding the [Knife] tool right now.",
+            no_victim_hrp = "Murderer's character isn't loaded.",
+        }
+        local function tryShootMurderer()
+            local ok, reason = F.games.mm2.shootMurderer.fire()
             if not ok then
-                Library:Notify("No murderer identified yet (need identity ESP active or a player with the Knife)", 3)
+                Library:Notify(SHOOT_MURDERER_ERR[reason] or ("Shoot failed: " .. tostring(reason)), 3)
             end
-        end })
+        end
+        MM2:AddButton({ Text = "Shoot murderer", Func = tryShootMurderer })
         MM2:AddLabel("Shoot murderer key"):AddKeyPicker("MM2ShootMurdererKey", {
             Default = "H", Mode = "Hold", Text = "Shoot murderer",
             Callback = function(state)
-                -- Hold mode: fires the callback with true on key-down
-                -- and false on key-up. We want one shot per press, so
-                -- only fire on the true edge.
-                if state then F.games.mm2.shootMurderer.fire() end
+                -- Hold mode fires the callback on key-down (true) and
+                -- key-up (false). One shot per press = only act on true.
+                if state then tryShootMurderer() end
             end,
         })
     end

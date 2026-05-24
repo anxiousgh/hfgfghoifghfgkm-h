@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.1.7"
+local SCRIPT_VERSION = "v1.1.9"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5468,8 +5468,12 @@ F.games.mm2 = (function()
     local identityDraws = {}  -- [Player] = Drawing.new("Text")
     local identityCache = {}  -- [Player] = "Sheriff"|"Murderer"|nil
 
+    -- Reads a player's identity from their Character + Backpack tools.
+    -- Callers that want to skip the local player must filter
+    -- themselves — autoPickupGun uses this to detect "am I the
+    -- murderer" so it can skip pickups.
     local function getIdentity(plr)
-        if not plr or plr == lplr then return nil end
+        if not plr then return nil end
         local function scan(parent)
             if not parent then return nil end
             for _, t in ipairs(parent:GetChildren()) do
@@ -5805,29 +5809,32 @@ F.games.mm2 = (function()
     -- ---------- Shoot murderer (one-shot, no hover required) ----------
     -- Scans every player for "Murderer" identity, picks the first one
     -- alive, fires the shoot remote with their HRP CFrame as the hit
-    -- position. Useful when the murderer is across the map / behind
-    -- cover and the hover-trigger can't see them.
+    -- position.
+    --
+    -- Returns (true) on success or (false, reason) on failure where
+    -- reason is one of: "no_remote", "no_my_hrp", "no_murderer",
+    -- "no_victim_hrp". The loader uses the reason for a specific
+    -- notify message.
+    --
+    -- Always does a LIVE getIdentity() scan rather than reading the
+    -- identityCache — the cache is only populated while identityEsp
+    -- is running, and we want shoot to work even when ESP is off.
     local function shootMurdererFire()
-        local remote = findHitRemote(); if not remote then return false end
+        local remote = findHitRemote()
+        if not remote then return false, "no_remote" end
         local myChar = lplr.Character
         local myHRP  = myChar and myChar:FindFirstChild("HumanoidRootPart")
-        if not myHRP then return false end
-        -- find a player whose current identity is Murderer
+        if not myHRP then return false, "no_my_hrp" end
         local victim
         for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= lplr then
-                local id = identityCache[plr]
-                if id ~= "Sheriff" and id ~= "Murderer" then
-                    -- cache might be stale; do a live scan
-                    id = getIdentity(plr)
-                end
-                if id == "Murderer" then victim = plr; break end
+            if plr ~= lplr and getIdentity(plr) == "Murderer" then
+                victim = plr; break
             end
         end
-        if not victim then return false end
+        if not victim then return false, "no_murderer" end
         local vChar = victim.Character
         local vHRP  = vChar and vChar:FindFirstChild("HumanoidRootPart")
-        if not vHRP then return false end
+        if not vHRP then return false, "no_victim_hrp" end
         pcall(function() remote:FireServer(vHRP.CFrame, myHRP.CFrame) end)
         return true
     end
@@ -5843,11 +5850,12 @@ F.games.mm2 = (function()
         autoThread = task.spawn(function()
             while autoActive do
                 local drop = findGunDrop()
-                if drop then
+                -- skip pickup if we're the murderer (have Knife) — we
+                -- don't want to grab the sheriff's gun and reveal our
+                -- identity, and we can't use it anyway
+                local myIdentity = getIdentity(lplr)
+                if drop and myIdentity ~= "Murderer" then
                     pickupOnce()
-                    -- wait through the pickup attempt + a cooldown so we
-                    -- don't keep retriggering on the same drop's brief
-                    -- existence
                     task.wait(2)
                 else
                     task.wait(0.5)
