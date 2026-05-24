@@ -1940,6 +1940,12 @@ do
                 else      F.games.mm2.triggerMurderer.stop() end
             end,
         })
+        MM2:AddButton({ Text = "Shoot murderer", Func = function()
+            local ok = F.games.mm2.shootMurderer.fire()
+            if not ok then
+                Library:Notify("No murderer identified yet (need identity ESP active or a player with the Knife)", 3)
+            end
+        end })
     end
 end
 

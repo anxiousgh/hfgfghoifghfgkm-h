@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.1.5"
+local SCRIPT_VERSION = "v1.1.6"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5584,7 +5584,14 @@ F.games.mm2 = (function()
         return nil
     end
 
-    local pickupActive = false  -- a single fire() in progress
+    -- Actual teleport pickup: save HRP CFrame, write GunDrop CFrame,
+    -- wait PICKUP_HOLD_MS, write the saved CFrame back. The brief
+    -- physical presence at the drop triggers MM2's proximity-based
+    -- pickup remote. The previous Heartbeat-write/RenderStep-restore
+    -- "desync" never put us PHYSICALLY there at all (just spoofed
+    -- replication briefly), so the pickup never fired.
+    local PICKUP_HOLD_MS = 100   -- ms to stay at the drop
+    local pickupActive = false
 
     local function pickupOnce()
         if pickupActive then return false end
@@ -5594,36 +5601,14 @@ F.games.mm2 = (function()
         if not hrp then return false end
 
         pickupActive = true
-        local RESTORE_BIND = "_F_MM2_PICKUP_RESTORE"
-        local realCF       = hrp.CFrame
-        local startTime    = tick()
-        local maxDuration  = 1.5
-        local hbConn
-
-        local function teardown()
+        local realCF = hrp.CFrame
+        pcall(function() hrp.CFrame = drop.CFrame end)
+        task.delay(PICKUP_HOLD_MS / 1000, function()
+            if hrp.Parent then
+                pcall(function() hrp.CFrame = realCF end)
+            end
             pickupActive = false
-            if hbConn then hbConn:Disconnect(); hbConn = nil end
-            pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
-            -- final restore in case toggled off mid-frame
-            if hrp.Parent and realCF then
-                pcall(function() hrp.CFrame = realCF end)
-            end
-        end
-
-        hbConn = RunService.Heartbeat:Connect(function()
-            if not hrp.Parent or not drop.Parent or tick() - startTime > maxDuration then
-                teardown(); return
-            end
-            realCF = hrp.CFrame
-            pcall(function() hrp.CFrame = drop.CFrame end)
         end)
-
-        RunService:BindToRenderStep(RESTORE_BIND, Enum.RenderPriority.First.Value, function()
-            if hrp.Parent and realCF then
-                pcall(function() hrp.CFrame = realCF end)
-            end
-        end)
-
         return true
     end
 
@@ -5817,6 +5802,36 @@ F.games.mm2 = (function()
         if triggerConn then triggerConn:Disconnect(); triggerConn = nil end
     end
 
+    -- ---------- Shoot murderer (one-shot, no hover required) ----------
+    -- Scans every player for "Murderer" identity, picks the first one
+    -- alive, fires the shoot remote with their HRP CFrame as the hit
+    -- position. Useful when the murderer is across the map / behind
+    -- cover and the hover-trigger can't see them.
+    local function shootMurdererFire()
+        local remote = findHitRemote(); if not remote then return false end
+        local myChar = lplr.Character
+        local myHRP  = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myHRP then return false end
+        -- find a player whose current identity is Murderer
+        local victim
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= lplr then
+                local id = identityCache[plr]
+                if id ~= "Sheriff" and id ~= "Murderer" then
+                    -- cache might be stale; do a live scan
+                    id = getIdentity(plr)
+                end
+                if id == "Murderer" then victim = plr; break end
+            end
+        end
+        if not victim then return false end
+        local vChar = victim.Character
+        local vHRP  = vChar and vChar:FindFirstChild("HumanoidRootPart")
+        if not vHRP then return false end
+        pcall(function() remote:FireServer(vHRP.CFrame, myHRP.CFrame) end)
+        return true
+    end
+
     -- ---------- Auto-pickup ----------
     local autoActive = false
     local autoThread
@@ -5869,6 +5884,9 @@ F.games.mm2 = (function()
             start    = triggerStart,
             stop     = triggerStop,
             isActive = function() return triggerActive end,
+        },
+        shootMurderer = {
+            fire = shootMurdererFire,
         },
     }
 end)()
