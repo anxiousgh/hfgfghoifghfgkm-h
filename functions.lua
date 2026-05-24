@@ -4600,96 +4600,100 @@ end)()
 -- function's own register pool — none of them count against the file-
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
-    -- HC godmode = LIMB CFrame desync. Confirmed: it's legs + arms only.
-    -- Mechanism abuses the anti-cheat's backtrack detector — when a shooter
-    -- clicks on our visible limb position, the server compares against its
-    -- own snapshot (limb at void), the discrepancy exceeds the per-tick
-    -- movement budget, the shot is rejected and the shooter sees a
-    -- "backtrack" error.
+    -- HC godmode via LIMB DETACHMENT.
     --
-    -- Pattern (frame order: RenderStepped → Stepped → Physics → Heartbeat):
-    --   Heartbeat:     save each limb's natural CFrame, write VOID. The
-    --                  spoofed CFrame is what replicates to the server.
-    --   RenderStepped: restore the saved natural CFrame BEFORE physics +
-    --                  render run this frame. Locally the animator drives
-    --                  joints normally, no rig drag.
+    -- We break the four limb Motor6D joints (LeftHip, RightHip,
+    -- LeftShoulder, RightShoulder) by setting their Part0 to nil. The
+    -- arms and legs become physically detached parts and fall off, but
+    -- the HRP -> LowerTorso -> UpperTorso -> Head chain stays fully
+    -- intact, so walking / running / jumping / animation all keep
+    -- working exactly as before. HC's hit detection can no longer
+    -- register hits on the detached limbs because they're no longer
+    -- mounted to the character rig the server tracks.
     --
-    -- Motors stay attached so animations / walking work locally. The void
-    -- write happens AFTER physics each frame so joint impulses never see
-    -- the limb at the void position — no flinging.
-    local R15_LIMBS = { "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
-                        "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand" }
-    local R6_LIMBS  = { "Left Leg","Right Leg","Left Arm","Right Arm" }
-    local VOID = CFrame.new(0, 9999, 0)
+    -- We re-detach every Heartbeat in case the game's character init,
+    -- ragdoll system, or animation system re-attaches a joint. On
+    -- toggle off we restore the original Part0/Part1 from the saved
+    -- snapshot.
+    --
+    -- Joints NOT touched (so movement stays fully intact):
+    --   Root  (HRP -> LowerTorso)  — physics anchor / walking
+    --   Waist (LowerTorso -> UpperTorso) — torso stays solid
+    --   Neck  (UpperTorso -> Head) — head stays put
+    local LIMB_JOINTS = {
+        -- R15
+        LeftHip       = true, RightHip       = true,
+        LeftShoulder  = true, RightShoulder  = true,
+        -- R6 (space-separated)
+        ["Left Hip"]      = true, ["Right Hip"]      = true,
+        ["Left Shoulder"] = true, ["Right Shoulder"] = true,
+    }
 
-    local hbConn, rsConn, charConn
-    local currentLimbs = {}
-    local saved        = {}     -- limb -> CFrame snapshot from this frame
-    local spoofing     = false
+    local saved  = {}   -- [Motor6D] = { p0, p1 }
+    local cached = {}   -- list of Motor6Ds we manage for this character
+    local hbConn, charConn
 
-    local function findLimbs(c)
-        if not c then return {} end
-        local names = c:FindFirstChild("LowerTorso") and R15_LIMBS or R6_LIMBS
-        local list  = {}
-        for _, n in ipairs(names) do
-            local p = c:FindFirstChild(n)
-            if p and p:IsA("BasePart") then table.insert(list, p) end
-        end
-        return list
-    end
-
-    local function spoofLimbs()
-        if not G.hcGmActive then return end
-        local c = lplr.Character; if not c then return end
-        if currentLimbs[1] == nil or currentLimbs[1].Parent ~= c then
-            currentLimbs = findLimbs(c)
-        end
-        for i = 1, #currentLimbs do
-            local p = currentLimbs[i]
-            if p.Parent then
-                saved[p] = p.CFrame
-                pcall(function() p.CFrame = VOID end)
+    local function snapshot(char)
+        if not char then return end
+        for _, d in ipairs(char:GetDescendants()) do
+            if d:IsA("Motor6D") and LIMB_JOINTS[d.Name] then
+                if not saved[d] then
+                    saved[d] = { p0 = d.Part0, p1 = d.Part1 }
+                end
+                local already = false
+                for _, m in ipairs(cached) do
+                    if m == d then already = true; break end
+                end
+                if not already then table.insert(cached, d) end
             end
         end
-        spoofing = true
     end
 
-    local function restoreLimbs()
-        if not spoofing then return end
-        for p, cf in pairs(saved) do
-            if p.Parent then pcall(function() p.CFrame = cf end) end
+    local function detachAll()
+        for _, m in ipairs(cached) do
+            if m.Parent and m.Part0 ~= nil then
+                pcall(function() m.Part0 = nil end)
+            end
         end
-        spoofing = false
     end
 
-    local function bind()
-        if hbConn then hbConn:Disconnect() end
-        if rsConn then rsConn:Disconnect() end
-        currentLimbs = findLimbs(lplr.Character)
-        hbConn = RunService.Heartbeat:Connect(spoofLimbs)
-        rsConn = RunService.RenderStepped:Connect(restoreLimbs)
+    local function reattachAll()
+        for m, s in pairs(saved) do
+            if m.Parent then
+                pcall(function()
+                    m.Part0 = s.p0
+                    m.Part1 = s.p1
+                end)
+            end
+        end
+        saved, cached = {}, {}
     end
 
     return makeToggle(
         function()
             G.hcGmActive = true
-            if charConn then charConn:Disconnect() end
-            charConn = lplr.CharacterAdded:Connect(function()
-                task.wait(0.3)
-                if G.hcGmActive then bind() end
+            snapshot(lplr.Character)
+            detachAll()
+            if hbConn then hbConn:Disconnect() end
+            hbConn = RunService.Heartbeat:Connect(function()
+                if not G.hcGmActive then return end
+                detachAll()  -- cheap: 4-8 motors, idempotent if already detached
             end)
-            bind()
+            if charConn then charConn:Disconnect() end
+            charConn = lplr.CharacterAdded:Connect(function(c)
+                if not G.hcGmActive then return end
+                -- fresh character, fresh joints. let HC's setup settle first.
+                saved, cached = {}, {}
+                task.wait(0.3)
+                snapshot(c)
+                detachAll()
+            end)
         end,
         function()
             G.hcGmActive = false
             if hbConn   then hbConn:Disconnect();   hbConn   = nil end
-            if rsConn   then rsConn:Disconnect();   rsConn   = nil end
             if charConn then charConn:Disconnect(); charConn = nil end
-            -- final restore in case toggled off mid-frame between spoof and restore
-            for p, cf in pairs(saved) do
-                if p.Parent then pcall(function() p.CFrame = cf end) end
-            end
-            saved, currentLimbs, spoofing = {}, {}, false
+            reattachAll()
         end,
         "hcGmActive"
     )
@@ -5277,10 +5281,26 @@ F.desync = (function()
             local s = getgenv()._F_DESYNC_STATE
             if not s or not s.active or s.mode ~= "raknet" then return end
             if packet.PacketId == 0x1B then
-                local ok, buf = pcall(function() return packet.AsBuffer end)
-                if not ok or not buf then return end
-                pcall(function() buffer.writeu32(buf, 1, 0xFFFFFFFF) end)
-                pcall(function() packet:SetData(buf) end)
+                -- BLOCK the outbound physics replication packet entirely
+                -- instead of corrupting bytes. The previous version wrote
+                -- 0xFFFFFFFF at offset 1 of packet.AsBuffer which, on
+                -- Potassium, overlapped RakNet's sequence/control bytes
+                -- and made the executor's send queue choke — local
+                -- movement froze because the engine was waiting for acks
+                -- that never came. Blocking is cleaner:
+                --   * server stops receiving position updates -> we appear
+                --     frozen to other players (the desync we want)
+                --   * the rest of the connection (chat, remotes, etc.)
+                --     keeps working because RakNet itself is untouched
+                --   * local engine still updates our HRP each frame so we
+                --     can walk around normally
+                -- Try every block API we know about; return false is the
+                -- convention most executors use.
+                pcall(function() packet:SetCanBeSent(false) end)
+                pcall(function() packet:Drop() end)
+                pcall(function() packet:Block() end)
+                pcall(function() packet:Ignore() end)
+                return false
             end
         end
         pcall(function()
