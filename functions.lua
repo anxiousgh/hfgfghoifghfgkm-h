@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.1.2"
+local SCRIPT_VERSION = "v1.1.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5728,32 +5728,29 @@ F.games.mm2 = (function()
     local triggerLastFire = 0
     local TRIGGER_COOLDOWN = 0.4
 
-    -- Cached lookup of the nil RemoteEvent. Re-resolves if it goes
-    -- nil (e.g. server destroys + recreates it).
+    -- Cached lookup of the nil-parented RemoteEvent named "shoot"
+    -- (MM2's canonical hit/shoot remote). Re-resolves if the cached
+    -- ref goes invalid (e.g. server destroys + recreates it).
+    local HIT_REMOTE_NAME = "shoot"
     local cachedHitRemote
     local function findHitRemote()
-        if cachedHitRemote and typeof(cachedHitRemote) == "Instance" and cachedHitRemote.Parent ~= nil then
-            -- it got parented somewhere — no longer the nil one we want
+        if cachedHitRemote then
+            local ok, name = pcall(function() return cachedHitRemote.Name end)
+            if ok and name == HIT_REMOTE_NAME then return cachedHitRemote end
             cachedHitRemote = nil
         end
-        if cachedHitRemote then return cachedHitRemote end
         if not getnilinstances then return nil end
         local ok, all = pcall(getnilinstances)
         if not ok or not all then return nil end
-        -- prefer an unnamed RemoteEvent (matches the canonical MM2 hit
-        -- remote which is nil-parented + unnamed)
-        local fallback
         for _, v in ipairs(all) do
-            if typeof(v) == "Instance" and v:IsA("RemoteEvent") then
-                if v.Name == "" then
-                    cachedHitRemote = v
-                    return v
-                end
-                fallback = fallback or v
+            if typeof(v) == "Instance"
+                and v:IsA("RemoteEvent")
+                and v.Name == HIT_REMOTE_NAME then
+                cachedHitRemote = v
+                return v
             end
         end
-        cachedHitRemote = fallback
-        return fallback
+        return nil
     end
 
     local mouseRef
