@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.1"
+local SCRIPT_VERSION = "v1.0.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4600,158 +4600,165 @@ end)()
 -- function's own register pool — none of them count against the file-
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
-    -- HC godmode via LIMB DETACHMENT.
+    -- ============================================================
+    -- HC godmode (rebuilt 2026-05-24 from character dump analysis):
     --
-    -- We break the four limb Motor6D joints (LeftHip, RightHip,
-    -- LeftShoulder, RightShoulder) by setting their Part0 to nil. The
-    -- arms and legs become physically detached parts and fall off, but
-    -- the HRP -> LowerTorso -> UpperTorso -> Head chain stays fully
-    -- intact, so walking / running / jumping / animation all keep
-    -- working exactly as before. HC's hit detection can no longer
-    -- register hits on the detached limbs because they're no longer
-    -- mounted to the character rig the server tracks.
+    -- HC has a 'SpecialParts' Folder under the character with a
+    -- MeshPart duplicate of every body part, each welded to the real
+    -- part via Weld Part0=<real> Part1=<special>. These are HC's
+    -- HIT-DETECTION HITBOXES — raycasts target the SpecialParts,
+    -- not the visible limbs. There are also *Fake children inside
+    -- the real limbs (LeftLowerArmFake etc.) that act as extra
+    -- hitboxes for melee.
     --
-    -- We re-detach every Heartbeat in case the game's character init,
-    -- ragdoll system, or animation system re-attaches a joint. On
-    -- toggle off we restore the original Part0/Part1 from the saved
-    -- snapshot.
+    -- The prior Motor6D-detach approach made the limbs wiggle
+    -- because HC also has a 'RagdollConstraints' folder with 14
+    -- BallSocketConstraints. The moment Motor6Ds break, those
+    -- constraints take over and ragdoll the limbs.
     --
-    -- Joints NOT touched (so movement stays fully intact):
-    --   Root  (HRP -> LowerTorso)  — physics anchor / walking
-    --   Waist (LowerTorso -> UpperTorso) — torso stays solid
-    --   Neck  (UpperTorso -> Head) — head stays put
-    -- Detach EVERY joint in the limb chain — not just the top one.
-    -- Just breaking LeftShoulder while LeftElbow/LeftWrist stayed
-    -- intact let the animator keep driving the lower arm relative
-    -- to the upper arm. That's what caused the "wiggle" the user
-    -- saw. Breaking the whole chain stops the animator on every
-    -- segment.
-    local LIMB_JOINTS = {
-        -- R15 full arm chain
-        LeftShoulder  = true, LeftElbow  = true, LeftWrist  = true,
-        RightShoulder = true, RightElbow = true, RightWrist = true,
-        -- R15 full leg chain
-        LeftHip  = true, LeftKnee  = true, LeftAnkle  = true,
-        RightHip = true, RightKnee = true, RightAnkle = true,
-        -- R6 (only top joints exist on R6 rigs)
-        ["Left Hip"]      = true, ["Right Hip"]      = true,
-        ["Left Shoulder"] = true, ["Right Shoulder"] = true,
+    -- New strategy — DON'T touch Motor6Ds at all:
+    --   1. Hide the visible limb MeshParts (Transparency=1). They
+    --      "disappear" while staying attached to the rig.
+    --   2. Break each SpecialParts/<limb>/Weld (Part0=nil) and TP
+    --      that SpecialPart to Y=-50000. HC's raycasts now miss
+    --      because the hitbox is in the void.
+    --   3. Same treatment for the *Fake hitbox children of the
+    --      real limbs.
+    --
+    -- Movement stays fully intact because every Motor6D is
+    -- untouched and RagdollConstraints never activate (no broken
+    -- Motor6D to react to).
+    --
+    -- Heartbeat re-asserts state in case HC's anti-cheat restores
+    -- a weld or re-positions a SpecialPart. Snapshot-based restore
+    -- on toggle off.
+    --
+    -- SpecialParts NOT touched (so torso/head still hittable —
+    -- this is limb-only godmode by design, matching the user's
+    -- description "detaches all the limbs from my body"):
+    --   HumanoidRootPart, UpperTorso, LowerTorso, Head,
+    --   BUBBLE_CHAT_PART
+    -- ============================================================
+    local LIMB_NAMES = {
+        LeftHand = true,     RightHand = true,
+        LeftLowerArm = true, RightLowerArm = true,
+        LeftUpperArm = true, RightUpperArm = true,
+        LeftFoot = true,     RightFoot = true,
+        LeftLowerLeg = true, RightLowerLeg = true,
+        LeftUpperLeg = true, RightUpperLeg = true,
     }
-    -- Limb parts we tag Massless + CanCollide=false on so the
-    -- detached limbs don't fight gravity or bump into the torso.
-    local LIMB_PARTS = {
-        LeftUpperArm  = true, LeftLowerArm  = true, LeftHand = true,
-        RightUpperArm = true, RightLowerArm = true, RightHand = true,
-        LeftUpperLeg  = true, LeftLowerLeg  = true, LeftFoot = true,
-        RightUpperLeg = true, RightLowerLeg = true, RightFoot = true,
-        ["Left Arm"]  = true, ["Right Arm"]  = true,
-        ["Left Leg"]  = true, ["Right Leg"]  = true,
-    }
+    local VOID = CFrame.new(0, -50000, 0)
 
-    local savedJoints = {}   -- [Motor6D] = { p0, p1 }
-    local savedParts  = {}   -- [BasePart] = { massless, cancollide }
-    local cachedJ     = {}   -- Motor6D list for this character
-    local cachedP     = {}   -- limb BasePart list
+    local savedParts = {}  -- [BasePart] = { transparency, anchored, cancollide }
+    local savedWelds = {}  -- [Weld]     = { part0, part1 }
     local hbConn, charConn
 
-    local function snapshot(char)
+    local function savePart(p)
+        if savedParts[p] then return end
+        savedParts[p] = {
+            transparency = p.Transparency,
+            anchored     = p.Anchored,
+            cancollide   = p.CanCollide,
+        }
+    end
+    local function saveWeld(w)
+        if savedWelds[w] then return end
+        savedWelds[w] = { part0 = w.Part0, part1 = w.Part1 }
+    end
+    local function hideLimb(p)
+        savePart(p)
+        if p.Transparency ~= 1 then pcall(function() p.Transparency = 1 end) end
+        if p.CanCollide        then pcall(function() p.CanCollide   = false end) end
+    end
+    local function voidPart(p)
+        savePart(p)
+        if not p.Anchored        then pcall(function() p.Anchored = true end) end
+        if p.Position.Y > -10000 then pcall(function() p.CFrame   = VOID end) end
+    end
+    local function breakWelds(p)
+        for _, w in ipairs(p:GetChildren()) do
+            if w:IsA("Weld") or w:IsA("WeldConstraint") then
+                saveWeld(w)
+                if w.Part0 ~= nil then pcall(function() w.Part0 = nil end) end
+            end
+        end
+    end
+
+    local function processChar(char)
         if not char then return end
-        for _, d in ipairs(char:GetDescendants()) do
-            if d:IsA("Motor6D") and LIMB_JOINTS[d.Name] then
-                if not savedJoints[d] then
-                    savedJoints[d] = { p0 = d.Part0, p1 = d.Part1 }
+        -- (1) hide visible limb MeshParts + break/void any *Fake hitboxes
+        for _, p in ipairs(char:GetChildren()) do
+            if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
+                hideLimb(p)
+                for _, sub in ipairs(p:GetDescendants()) do
+                    if sub:IsA("BasePart") and sub.Name:match("Fake$") then
+                        hideLimb(sub)
+                        breakWelds(sub)
+                        voidPart(sub)
+                    end
                 end
-                local already = false
-                for _, m in ipairs(cachedJ) do
-                    if m == d then already = true; break end
-                end
-                if not already then table.insert(cachedJ, d) end
             end
         end
-        for _, d in ipairs(char:GetChildren()) do
-            if d:IsA("BasePart") and LIMB_PARTS[d.Name] then
-                if not savedParts[d] then
-                    savedParts[d] = { massless = d.Massless, cancollide = d.CanCollide }
+        -- (2) break SpecialParts limb welds + void those SpecialParts
+        local sp = char:FindFirstChild("SpecialParts")
+        if sp then
+            for _, p in ipairs(sp:GetChildren()) do
+                if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
+                    breakWelds(p)
+                    voidPart(p)
                 end
-                local already = false
-                for _, p in ipairs(cachedP) do
-                    if p == d then already = true; break end
-                end
-                if not already then table.insert(cachedP, d) end
-            end
-        end
-    end
-
-    local function detachAll()
-        -- Fully break each joint: nil BOTH Part0 AND Part1, not just
-        -- Part0. With Part1 still set, the animator kept writing to
-        -- Motor6D.Transform, which (combined with the lower joints
-        -- still being intact in the chain) drove the limb each frame.
-        for _, m in ipairs(cachedJ) do
-            if m.Parent and (m.Part0 ~= nil or m.Part1 ~= nil) then
-                pcall(function()
-                    m.Part0 = nil
-                    m.Part1 = nil
-                end)
-            end
-        end
-        for _, p in ipairs(cachedP) do
-            if p.Parent then
-                if not p.Massless   then pcall(function() p.Massless   = true  end) end
-                if     p.CanCollide then pcall(function() p.CanCollide = false end) end
             end
         end
     end
 
-    local function reattachAll()
-        for m, s in pairs(savedJoints) do
-            if m.Parent then
+    local function restoreChar()
+        for w, s in pairs(savedWelds) do
+            if w.Parent then
                 pcall(function()
-                    m.Part0 = s.p0
-                    m.Part1 = s.p1
+                    w.Part0 = s.part0
+                    w.Part1 = s.part1
                 end)
             end
         end
         for p, s in pairs(savedParts) do
             if p.Parent then
                 pcall(function()
-                    p.Massless   = s.massless
-                    p.CanCollide = s.cancollide
+                    p.Transparency = s.transparency
+                    p.Anchored     = s.anchored
+                    p.CanCollide   = s.cancollide
                 end)
             end
         end
-        savedJoints, savedParts, cachedJ, cachedP = {}, {}, {}, {}
+        savedParts, savedWelds = {}, {}
     end
 
     return makeToggle(
         function()
             G.hcGmActive = true
-            snapshot(lplr.Character)
-            detachAll()
+            processChar(lplr.Character)
             if hbConn then hbConn:Disconnect() end
             hbConn = RunService.Heartbeat:Connect(function()
                 if not G.hcGmActive then return end
-                detachAll()  -- cheap: 4-8 motors, idempotent if already detached
+                processChar(lplr.Character)
             end)
             if charConn then charConn:Disconnect() end
             charConn = lplr.CharacterAdded:Connect(function(c)
                 if not G.hcGmActive then return end
-                -- fresh character, fresh joints. let HC's setup settle first.
-                savedJoints, savedParts, cachedJ, cachedP = {}, {}, {}, {}
-                task.wait(0.3)
-                snapshot(c)
-                detachAll()
+                savedParts, savedWelds = {}, {}
+                task.wait(0.5)  -- let HC build SpecialParts after spawn
+                processChar(c)
             end)
         end,
         function()
             G.hcGmActive = false
             if hbConn   then hbConn:Disconnect();   hbConn   = nil end
             if charConn then charConn:Disconnect(); charConn = nil end
-            reattachAll()
+            restoreChar()
         end,
         "hcGmActive"
     )
 end)()
+
 
 -- ============================================================
 --  GAMES: HOOD CUSTOMS - FORCE HIT  (single-fire, shotgun WIP)
