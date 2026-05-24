@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.1.3"
+local SCRIPT_VERSION = "v1.1.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -2447,8 +2447,14 @@ local function updateEspForPlayer(plr)
     local hrp=char and char:FindFirstChild("HumanoidRootPart")
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum or hum.Health<=0 then hideEsp(d); return end
-    local rootPos,onScreen=Camera:WorldToViewportPoint(hrp.Position)
-    if not onScreen then hideEsp(d); return end
+    local rootPos,_onScreen=Camera:WorldToViewportPoint(hrp.Position)
+    -- Hide only when the player is BEHIND the camera (sp.Z <= 0).
+    -- Previously we hid whenever sp.X/sp.Y fell outside the viewport,
+    -- which made ESP flicker / disappear for players near screen edges
+    -- or close to the camera (head/feet projected off-screen). The
+    -- Drawing API clips off-viewport coords automatically, so it's
+    -- safe to keep drawing with out-of-bounds X/Y.
+    if rootPos.Z <= 0 then hideEsp(d); return end
     if EspSettings.TracerHistory then
         if not _tracerHistory[plr] then _tracerHistory[plr]={} end
         table.insert(_tracerHistory[plr],{pos=hrp.Position,t=tick()})
@@ -2480,9 +2486,12 @@ local function updateEspForPlayer(plr)
     if dist>1000 then hideEsp(d); return end
     local col=espColor(plr)
     local size=char:GetExtentsSize(); local cf=hrp.CFrame
-    local topV,topOn=Camera:WorldToViewportPoint((cf*CFrame.new(0,size.Y/2,0)).Position)
-    local botV,botOn=Camera:WorldToViewportPoint((cf*CFrame.new(0,-size.Y/2,0)).Position)
-    if not topOn or not botOn then hideEsp(d); return end
+    local topV,_topOn=Camera:WorldToViewportPoint((cf*CFrame.new(0,size.Y/2,0)).Position)
+    local botV,_botOn=Camera:WorldToViewportPoint((cf*CFrame.new(0,-size.Y/2,0)).Position)
+    -- Same fix as above: only hide when the body's top or bottom is
+    -- BEHIND the camera (Z <= 0). Off-viewport X/Y is fine — let
+    -- the box / lines extend past the screen edge.
+    if topV.Z <= 0 or botV.Z <= 0 then hideEsp(d); return end
     local bH=botV.Y-topV.Y; local bW=bH*0.55; local bX=topV.X-bW/2; local bY=topV.Y; local cS=math.max(4,bW*0.22)
 
     if EspSettings.BoxESP then
@@ -2560,8 +2569,10 @@ local function updateEspForPlayer(plr)
         for i,pair in ipairs(joints) do
             local pA=char:FindFirstChild(pair[1]); local pB=char:FindFirstChild(pair[2]); local line=d.skeleton[i]
             if pA and pB and line then
-                local sA,onA=Camera:WorldToViewportPoint(pA.Position); local sB,onB=Camera:WorldToViewportPoint(pB.Position)
-                if onA and onB then line.From=Vector2.new(sA.X,sA.Y); line.To=Vector2.new(sB.X,sB.Y); line.Color=col; line.Thickness=1; line.Transparency=1; line.Visible=true
+                local sA=Camera:WorldToViewportPoint(pA.Position); local sB=Camera:WorldToViewportPoint(pB.Position)
+                -- Only hide when EITHER joint is behind the camera (Z<=0).
+                -- Off-viewport X/Y is fine — Drawing clips automatically.
+                if sA.Z>0 and sB.Z>0 then line.From=Vector2.new(sA.X,sA.Y); line.To=Vector2.new(sB.X,sB.Y); line.Color=col; line.Thickness=1; line.Transparency=1; line.Visible=true
                 else line.Visible=false end
             elseif line then line.Visible=false end
         end
