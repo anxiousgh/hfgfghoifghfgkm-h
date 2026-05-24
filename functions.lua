@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.7"
+local SCRIPT_VERSION = "v1.3.8"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5795,15 +5795,24 @@ F.games.mm2 = (function()
         return Players:GetPlayerFromCharacter(model)
     end
 
-    -- Hit-position resolver: HC's Shoot remote canonically takes the
-    -- TARGET's LowerTorso CFrame (full rotation matrix preserved).
-    -- R6 fallback to Torso; final fallback HRP so we still fire if
-    -- the rig is weird mid-respawn.
-    local function targetHitPart(char)
+    -- Hit-position resolver. User's MM2 captures show arg1 is a
+    -- fixed point per target regardless of where on the body they
+    -- clicked, so the canonical value is the character's PIVOT
+    -- CFrame (= HumanoidRootPart.CFrame for standard rigs).
+    -- We fall back to a part lookup if GetPivot isn't available
+    -- (very old Roblox API).
+    local function targetHitCF(char)
         if not char then return nil end
-        return char:FindFirstChild("LowerTorso")
-            or char:FindFirstChild("Torso")
-            or char:FindFirstChild("HumanoidRootPart")
+        if char.GetPivot then
+            local ok, cf = pcall(function() return char:GetPivot() end)
+            if ok and cf then return cf end
+        end
+        local p = char:FindFirstChild("HumanoidRootPart")
+              or char:FindFirstChild("LowerTorso")
+              or char:FindFirstChild("Torso")
+              or char:FindFirstChild("UpperTorso")
+              or char:FindFirstChild("Head")
+        return p and p.CFrame or nil
     end
     -- Second arg is "my position" with identity rotation - matches the
     -- canonical payload exactly (CFrame.new(x, y, z) without basis
@@ -5827,15 +5836,15 @@ F.games.mm2 = (function()
             if not plr or plr == lplr then return end
             if F.whitelist and F.whitelist.contains(plr) then return end
             if identityCache[plr] ~= "Murderer" and getIdentity(plr) ~= "Murderer" then return end
-            local theirHit = targetHitPart(plr.Character)
-            local myPos    = myPosCFrame()
-            if not theirHit or not myPos then return end
+            local theirCF = targetHitCF(plr.Character)
+            local myPos   = myPosCFrame()
+            if not theirCF or not myPos then return end
             local remote = findHitRemote()
             if not remote then return end  -- no Gun in Character or Backpack -> not Sheriff
-            -- Canonical payload from captures: arg1 = target's
-            -- LowerTorso CFrame, arg2 = our HRP position with
+            -- Canonical payload from captures: arg1 = target's pivot
+            -- CFrame (= HRP.CFrame), arg2 = our HRP position with
             -- identity rotation.
-            pcall(function() remote:FireServer(theirHit.CFrame, myPos) end)
+            pcall(function() remote:FireServer(theirCF, myPos) end)
             triggerLastFire = tick()
         end)
     end
@@ -5884,8 +5893,8 @@ F.games.mm2 = (function()
             end
         end
         if not victim then return false, "no_murderer" end
-        local theirHit = targetHitPart(victim.Character)
-        if not theirHit then return false, "no_victim_hrp" end
+        local theirCF = targetHitCF(victim.Character)
+        if not theirCF then return false, "no_victim_hrp" end
 
         local remote = findHitRemote()
         if not remote then return false, "no_gun" end
@@ -5913,10 +5922,11 @@ F.games.mm2 = (function()
         end
 
         -- Canonical payload from MM2 captures:
-        --   arg1 = target's LowerTorso CFrame (full rotation matrix)
+        --   arg1 = target's pivot CFrame (= HRP.CFrame) - fixed per
+        --          target, not per-click-spot
         --   arg2 = shooter HRP position with IDENTITY rotation
         --          (CFrame.new(x, y, z) with default basis)
-        pcall(function() remote:FireServer(theirHit.CFrame, myPos) end)
+        pcall(function() remote:FireServer(theirCF, myPos) end)
 
         -- restart desync after a brief grace period so the shot has
         -- time to register server-side before we vanish again
