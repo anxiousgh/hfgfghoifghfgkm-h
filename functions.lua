@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.2"
+local SCRIPT_VERSION = "v1.3.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6021,6 +6021,11 @@ end)()
 F.desync = (function()
     local VOID_MIN     = 5000
     local VOID_MAX     = 20000
+    -- Knife Voidspam has its own tighter range so the spoofed
+    -- position stays in a smaller cluster (less server detection
+    -- + easier to reason about). User specified 5k-15k.
+    local VOIDSPAM_MIN = 5000
+    local VOIDSPAM_MAX = 15000
     local SHOT_SYNC_MS = 100
     local SPIN_STEP    = 47
     local VEL_MAGNITUDE = 16384
@@ -6061,8 +6066,17 @@ F.desync = (function()
     -- compute the spoofed HRP state for the current mode. Caller is
     -- responsible for capturing realCF/realLV/realAV before this runs.
     local function applySpoof(hrp)
-        if mode == "void" or mode == "voidspam" then
+        if mode == "void" then
             hrp.CFrame = CFrame.new(randVoidPos())
+        elseif mode == "voidspam" then
+            -- Tighter range than regular void (VOIDSPAM_MIN..MAX,
+            -- default 5k-15k). Inline so we don't touch the shared
+            -- randVoidPos() that startVoid uses.
+            local function axis()
+                local m = VOIDSPAM_MIN + math.random() * (VOIDSPAM_MAX - VOIDSPAM_MIN)
+                return (math.random() < 0.5) and -m or m
+            end
+            hrp.CFrame = CFrame.new(Vector3.new(axis(), axis(), axis()))
         elseif mode == "sky" then
             -- preserve XZ + rotation, push Y up by SKY_HEIGHT. server sees
             -- us floating in the sky directly above our real position.
