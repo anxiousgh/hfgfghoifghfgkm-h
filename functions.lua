@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.6"
+local SCRIPT_VERSION = "v1.3.7"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5860,10 +5860,21 @@ F.games.mm2 = (function()
     --   false, "no_victim_hrp"   target's HRP missing
     --   false, "no_gun"          no Gun in Character or Backpack
     --                            (we're not the Sheriff)
-    local function shootMurdererFire()
-        local myPos = myPosCFrame()
-        if not myPos then return false, "no_my_hrp" end
+    -- Same desync-stop-restart pattern as pickup. If we're spoofed
+    -- to the void at fire time, the server's shooter-position
+    -- validation rejects the hit because arg2 (our real HRP) won't
+    -- match where the server thinks we are.
+    local SHOOT_DESYNC_RESTARTERS = {
+        void      = "startVoid",
+        voidspam  = "startVoidspam",
+        sky       = "startSky",
+        spin      = "startSpin",
+        velocity  = "startVelocity",
+        raknet    = "startRaknet",
+        invisible = "startInvisible",
+    }
 
+    local function shootMurdererFire()
         local victim
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= lplr
@@ -5876,17 +5887,46 @@ F.games.mm2 = (function()
         local theirHit = targetHitPart(victim.Character)
         if not theirHit then return false, "no_victim_hrp" end
 
-        -- Gun.Shoot remote works whether the Gun tool is equipped
-        -- (in Character) or stashed in Backpack. If neither, the
-        -- local player isn't the Sheriff.
         local remote = findHitRemote()
         if not remote then return false, "no_gun" end
+
+        -- snapshot + stop any active desync so our HRP is at the real
+        -- position before the shot. Server-side shooter-position
+        -- validation rejects the hit otherwise.
+        local restartName
+        if F.desync and F.desync.getMode then
+            local m = F.desync.getMode()
+            if m and m ~= "off" and SHOOT_DESYNC_RESTARTERS[m] then
+                restartName = SHOOT_DESYNC_RESTARTERS[m]
+                F.desync.stop()
+            end
+        end
+
+        -- Now read myPos AFTER the desync stopped (HRP is back at the
+        -- real position) so arg2 matches what the server has for us.
+        local myPos = myPosCFrame()
+        if not myPos then
+            if restartName and F.desync and F.desync[restartName] then
+                pcall(function() F.desync[restartName]() end)
+            end
+            return false, "no_my_hrp"
+        end
 
         -- Canonical payload from MM2 captures:
         --   arg1 = target's LowerTorso CFrame (full rotation matrix)
         --   arg2 = shooter HRP position with IDENTITY rotation
         --          (CFrame.new(x, y, z) with default basis)
         pcall(function() remote:FireServer(theirHit.CFrame, myPos) end)
+
+        -- restart desync after a brief grace period so the shot has
+        -- time to register server-side before we vanish again
+        if restartName then
+            task.delay(0.2, function()
+                if F.desync and F.desync[restartName] then
+                    pcall(function() F.desync[restartName]() end)
+                end
+            end)
+        end
         return true
     end
 
