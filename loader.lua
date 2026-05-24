@@ -1141,6 +1141,39 @@ do
         Default  = 5000, Min = 50, Max = 100000, Rounding = 0,
         Callback = function(v) F.desync.setSkyHeight(v) end,
     })
+
+    -- =================== PULSE LAGSWITCH ===================
+    -- Drops outgoing physics packet (0x1B) on an on/off duty cycle.
+    -- ONLY character position is affected — chat, remotes, hit
+    -- registrations, etc. all replicate normally. Server sees you
+    -- stuttering between frozen and your real position; combined
+    -- with movement, this is nearly impossible to aim at.
+    local Pulse = Tabs.Movement:AddRightGroupbox("Pulse lagswitch")
+    Pulse:AddToggle("PulseLagswitch", { Text = "Enable",
+        Default = false,
+        Tooltip = "Only desyncs character position. Chat / remotes / shots are unaffected.",
+        Callback = function(v)
+            if v then
+                local ok = F.pulseLagswitch.start()
+                if not ok then
+                    Toggles.PulseLagswitch:SetValue(false)
+                    Library:Notify("Pulse lagswitch unavailable: executor doesn't expose `raknet`", 4)
+                end
+            else
+                F.pulseLagswitch.stop()
+            end
+        end,
+    })
+    Pulse:AddSlider("PulseLagswitchOnMs", {
+        Text     = "Blocked phase (ms)",
+        Default  = 200, Min = 10, Max = 2000, Rounding = 0,
+        Callback = function(v) F.pulseLagswitch.setOnMs(v) end,
+    })
+    Pulse:AddSlider("PulseLagswitchOffMs", {
+        Text     = "Released phase (ms)",
+        Default  = 100, Min = 10, Max = 2000, Rounding = 0,
+        Callback = function(v) F.pulseLagswitch.setOffMs(v) end,
+    })
 end
 
 -- ============================================================
@@ -1325,7 +1358,7 @@ do
             F.disableAll()
             for _, name in ipairs({
                 "Fly","Speed","Walkspeed","JumpPowerToggle","Bhop","InfJump","AntiAfk","ClickTp","Noclip","AutoRespawn",
-                "Fullbright","Freecam","Zoom","Spin","Flip","Ice","StickyEmote",
+                "Fullbright","Freecam","Zoom","Spin","Flip","Ice","StickyEmote","PulseLagswitch",
                 "AimEnabled","TrigEnabled","CamEnabled",
                 "RageSilentForce","RageAutoShoot","RageOrbit","RageFaceTarget","RageCamSnap",
                 "EspEnabled",

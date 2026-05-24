@@ -5736,6 +5736,100 @@ F.desync = (function()
     }
 end)()
 
+-- ============================================================
+--  PULSE LAGSWITCH
+-- ============================================================
+--  Selectively blocks outgoing PHYSICS REPLICATION packets
+--  (PacketId 0x1B) on a configurable on/off duty cycle. Only
+--  character position/velocity is affected — chat, RemoteEvents,
+--  Shoot fires, hit registrations, etc. all pass through normally.
+--
+--  Server sees your position in stuttered bursts (e.g. on 200ms,
+--  off 100ms): from its POV you're frozen for 200ms, jump to the
+--  new position, frozen again, jump, etc. Combined with movement,
+--  this makes you nearly impossible to track for human shooters
+--  and silent-aim alike.
+--
+--  Installs its OWN raknet send_hook independent of F.desync's, so
+--  the two can coexist (though combining is weird). Hook is pinned
+--  in getgenv so script reload doesn't double-stack.
+-- ============================================================
+F.pulseLagswitch = (function()
+    local PHYSICS_PACKET_ID = 0x1B
+    local active = false
+    local onMs   = 200   -- ms in the blocked phase
+    local offMs  = 100   -- ms in the released phase
+    local pulseTask
+
+    -- Live flag the send_hook reads. On getgenv so reload-time
+    -- module re-creation doesn't strand the hook reading a stale
+    -- upvalue.
+    getgenv()._F_PLS_BLOCKING = getgenv()._F_PLS_BLOCKING or false
+
+    local function findRaknet()
+        local r = rawget(getgenv(), "raknet")
+        if r then return r end
+        local ok, val = pcall(function() return raknet end)
+        if ok and val then return val end
+        return nil
+    end
+
+    local function ensureHook()
+        if getgenv()._F_PLS_HOOKED then return true end
+        local r = findRaknet()
+        if not r or not r.add_send_hook then return false end
+        getgenv()._F_PLS_HOOKED = true
+        getgenv()._F_PLS_FN = function(packet)
+            if not getgenv()._F_PLS_BLOCKING then return end
+            if packet.PacketId ~= PHYSICS_PACKET_ID then return end
+            -- block physics packet only; everything else passes through
+            pcall(function() packet:SetCanBeSent(false) end)
+            pcall(function() packet:Drop() end)
+            pcall(function() packet:Block() end)
+            pcall(function() packet:Ignore() end)
+            return false
+        end
+        pcall(function() r.add_send_hook(getgenv()._F_PLS_FN) end)
+        return true
+    end
+
+    local function start()
+        if active then return true end
+        if not ensureHook() then return false end
+        active = true
+        if pulseTask then pcall(task.cancel, pulseTask); pulseTask = nil end
+        pulseTask = task.spawn(function()
+            while active do
+                getgenv()._F_PLS_BLOCKING = true
+                task.wait(onMs / 1000)
+                if not active then break end
+                getgenv()._F_PLS_BLOCKING = false
+                task.wait(offMs / 1000)
+            end
+            getgenv()._F_PLS_BLOCKING = false
+        end)
+        return true
+    end
+
+    local function stop()
+        active = false
+        getgenv()._F_PLS_BLOCKING = false
+        if pulseTask then pcall(task.cancel, pulseTask); pulseTask = nil end
+    end
+
+    return {
+        start    = start,
+        stop     = stop,
+        toggle   = function() if active then stop() else return start() end end,
+        isActive = function() return active end,
+        setOnMs  = function(n) onMs  = math.clamp(tonumber(n) or onMs,  10, 5000) end,
+        setOffMs = function(n) offMs = math.clamp(tonumber(n) or offMs, 10, 5000) end,
+        getOnMs  = function() return onMs  end,
+        getOffMs = function() return offMs end,
+        isRaknetAvailable = function() return findRaknet() ~= nil end,
+    }
+end)()
+
 -- bulk teardown (call this when your GUI closes)
 F.disableAll = function()
     stopFly(); stopCframeSpeed(); stopWalkspeed(); stopJumpPower(); stopBhop(); stopInfJump(); stopForceJump(); stopAntiAfk()
@@ -5746,6 +5840,7 @@ F.disableAll = function()
     F.games.hoodCustoms.forceHit.stop()
     F.games.hoodCustoms.knifeReach.stop()
     if F.desync then F.desync.stop() end
+    if F.pulseLagswitch then F.pulseLagswitch.stop() end
     if F.antiFling then F.antiFling.stop() end
     if F.rocketJump and F.rocketJump.stop then F.rocketJump.stop() end
     if F.prompts then
