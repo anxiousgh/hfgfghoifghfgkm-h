@@ -2006,7 +2006,7 @@ do
             end,
         })
         local SHOOT_MURDERER_ERR = {
-            no_remote     = "Shoot remote not found. Executor may not expose getnilinstances, or the remote name isn't 'shoot' / not nil-parented.",
+            no_gun        = "You don't have the Gun. Only the Sheriff can shoot.",
             no_my_hrp     = "Your character isn't loaded yet.",
             no_murderer   = "No player is holding the [Knife] tool right now.",
             no_victim_hrp = "Murderer's character isn't loaded.",

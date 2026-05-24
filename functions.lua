@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.2.2"
+local SCRIPT_VERSION = "v1.2.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5731,41 +5731,30 @@ F.games.mm2 = (function()
     local triggerLastFire = 0
     local TRIGGER_COOLDOWN = 0.4
 
-    -- Cached lookup of the nil-parented "shoot" RemoteEvent.
-    -- Case-insensitive: "shoot", "Shoot", "SHOOT", etc all match.
-    -- Falls back to any nil RemoteEvent if no name match.
-    -- Re-resolves if the cached ref goes invalid.
-    local HIT_REMOTE_NAME_LOWER = "shoot"
-    local cachedHitRemote
-
-    local function _validateCached()
-        if not cachedHitRemote then return false end
-        -- guard against ref pointing at a destroyed/parented instance
-        local ok, isRE = pcall(function()
-            return typeof(cachedHitRemote) == "Instance" and cachedHitRemote:IsA("RemoteEvent")
-        end)
-        if not ok or not isRE then cachedHitRemote = nil; return false end
-        return true
+    -- The shoot remote lives at lplr.Character.Gun.Shoot — only
+    -- exists while the Gun tool is equipped (in the Character, not
+    -- the Backpack). Returns nil if the gun isn't equipped.
+    local function findHitRemote()
+        local char = lplr.Character
+        if not char then return nil end
+        local gun = char:FindFirstChild("Gun")
+        if not gun then return nil end
+        return gun:FindFirstChild("Shoot")
     end
 
-    local function findHitRemote()
-        if _validateCached() then return cachedHitRemote end
-        if not getnilinstances then return nil end
-        local ok, all = pcall(getnilinstances)
-        if not ok or not all then return nil end
-        local nameMatch, anyRE
-        for _, v in ipairs(all) do
-            if typeof(v) == "Instance" and v:IsA("RemoteEvent") then
-                anyRE = anyRE or v
-                local n = (v.Name or ""):lower()
-                if n == HIT_REMOTE_NAME_LOWER then
-                    nameMatch = v
-                    break
-                end
-            end
-        end
-        cachedHitRemote = nameMatch or anyRE
-        return cachedHitRemote
+    -- Equips the Gun from the Backpack. Returns:
+    --   true   if it's now in the Character (was already, or we just equipped)
+    --   false  if no Gun anywhere (we're not the Sheriff)
+    local function ensureGunEquipped()
+        local char = lplr.Character; if not char then return false end
+        if char:FindFirstChild("Gun") then return true end
+        local bp = lplr:FindFirstChild("Backpack"); if not bp then return false end
+        local gun = bp:FindFirstChild("Gun")
+        if not gun or not gun:IsA("Tool") then return false end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return false end
+        pcall(function() hum:EquipTool(gun) end)
+        return true
     end
 
     local mouseRef
@@ -5799,7 +5788,14 @@ F.games.mm2 = (function()
             local myChar    = lplr.Character
             local myHRP     = myChar and myChar:FindFirstChild("HumanoidRootPart")
             if not theirHRP or not myHRP then return end
-            local remote = findHitRemote(); if not remote then return end
+            local remote = findHitRemote()
+            if not remote then
+                -- gun not equipped — best-effort equip and skip this
+                -- frame. Next frame (within the 0.4s cooldown anyway)
+                -- the Shoot remote should be mounted and we'll fire.
+                ensureGunEquipped()
+                return
+            end
             pcall(function() remote:FireServer(theirHRP.CFrame, myHRP.CFrame) end)
             triggerLastFire = tick()
         end)
@@ -5811,24 +5807,25 @@ F.games.mm2 = (function()
     end
 
     -- ---------- Shoot murderer (one-shot, no hover required) ----------
-    -- Scans every player for "Murderer" identity, picks the first one
-    -- alive, fires the shoot remote with their HRP CFrame as the hit
-    -- position.
+    -- Resolves the Murderer from a live getIdentity() scan, then fires
+    -- the Gun's Shoot remote with (theirHRP.CFrame, myHRP.CFrame).
     --
-    -- Returns (true) on success or (false, reason) on failure where
-    -- reason is one of: "no_remote", "no_my_hrp", "no_murderer",
-    -- "no_victim_hrp". The loader uses the reason for a specific
-    -- notify message.
+    -- If the Gun isn't equipped but we have it in our Backpack
+    -- (we're the Sheriff), auto-equips it and delays the fire by
+    -- 0.5s so the Gun child + its Shoot remote have time to mount.
     --
-    -- Always does a LIVE getIdentity() scan rather than reading the
-    -- identityCache — the cache is only populated while identityEsp
-    -- is running, and we want shoot to work even when ESP is off.
+    -- Return values (loader uses reason for specific notify):
+    --   true                     success (immediate or deferred)
+    --   false, "no_my_hrp"       local HRP missing
+    --   false, "no_murderer"     no player holds the Knife
+    --   false, "no_victim_hrp"   target's HRP missing
+    --   false, "no_gun"          no Gun in Character or Backpack
+    --                            (we're not the Sheriff)
     local function shootMurdererFire()
-        local remote = findHitRemote()
-        if not remote then return false, "no_remote" end
         local myChar = lplr.Character
         local myHRP  = myChar and myChar:FindFirstChild("HumanoidRootPart")
         if not myHRP then return false, "no_my_hrp" end
+
         local victim
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= lplr
@@ -5841,7 +5838,26 @@ F.games.mm2 = (function()
         local vChar = victim.Character
         local vHRP  = vChar and vChar:FindFirstChild("HumanoidRootPart")
         if not vHRP then return false, "no_victim_hrp" end
-        pcall(function() remote:FireServer(vHRP.CFrame, myHRP.CFrame) end)
+
+        local remote = findHitRemote()
+        if remote then
+            -- gun equipped, fire immediately
+            pcall(function() remote:FireServer(vHRP.CFrame, myHRP.CFrame) end)
+            return true
+        end
+
+        -- gun NOT equipped — try to equip from backpack, then delay-fire
+        if not ensureGunEquipped() then return false, "no_gun" end
+        task.delay(0.5, function()
+            local r = findHitRemote(); if not r then return end
+            -- re-resolve target + self CFrames since 0.5s passed
+            local mC = lplr.Character
+            local mH = mC and mC:FindFirstChild("HumanoidRootPart")
+            local vC = victim and victim.Parent and victim.Character
+            local vH = vC and vC:FindFirstChild("HumanoidRootPart")
+            if not mH or not vH then return end
+            pcall(function() r:FireServer(vH.CFrame, mH.CFrame) end)
+        end)
         return true
     end
 
