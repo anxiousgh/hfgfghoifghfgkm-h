@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.11"
+local SCRIPT_VERSION = "v1.0.12"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5801,6 +5801,67 @@ F.desync = (function()
         mode = "off"
     end
 
+    -- ============================================================
+    --  Sync window visualizer
+    --  When the void spoof is OFF (i.e., tick() < SYNC_END), render
+    --  a "VULNERABLE" banner at the top-center of the screen so the
+    --  user can see at a glance when they're hittable.
+    --  Pure Drawing API — one Text + one filled Square, no GUI.
+    -- ============================================================
+    local syncVisualEnabled = false
+    local syncVisualText, syncVisualBg, syncVisualConn
+
+    local function syncVisualRemove()
+        if syncVisualConn then syncVisualConn:Disconnect(); syncVisualConn = nil end
+        if syncVisualText then pcall(function() syncVisualText:Remove() end); syncVisualText = nil end
+        if syncVisualBg   then pcall(function() syncVisualBg:Remove()   end); syncVisualBg   = nil end
+    end
+
+    local function syncVisualCreate()
+        if syncVisualText then return end
+        if not Drawing or not Drawing.new then return end
+        syncVisualBg = Drawing.new("Square")
+        syncVisualBg.Visible      = false
+        syncVisualBg.Color        = Color3.fromRGB(220, 40, 40)
+        syncVisualBg.Filled       = true
+        syncVisualBg.Transparency = 0.55
+        syncVisualBg.Thickness    = 1
+
+        syncVisualText = Drawing.new("Text")
+        syncVisualText.Visible      = false
+        syncVisualText.Center       = true
+        syncVisualText.Outline      = true
+        syncVisualText.OutlineColor = Color3.new(0, 0, 0)
+        syncVisualText.Color        = Color3.fromRGB(255, 230, 230)
+        syncVisualText.Size         = 22
+        syncVisualText.Font         = 2  -- bold
+        syncVisualText.Text         = "VULNERABLE"
+
+        syncVisualConn = RunService.RenderStepped:Connect(function()
+            if not syncVisualEnabled then
+                if syncVisualText then syncVisualText.Visible = false end
+                if syncVisualBg   then syncVisualBg.Visible   = false end
+                return
+            end
+            local active = tick() < (getgenv()._F_DESYNC_SYNC_END or 0)
+            if active then
+                local cam = workspace.CurrentCamera
+                local vs  = cam and cam.ViewportSize or Vector2.new(800, 600)
+                local cx  = vs.X * 0.5
+                local cy  = 60
+                local w, h = 200, 30
+                syncVisualBg.Position   = Vector2.new(cx - w * 0.5, cy - 4)
+                syncVisualBg.Size       = Vector2.new(w, h)
+                syncVisualBg.Visible    = true
+                syncVisualText.Position = Vector2.new(cx, cy)
+                syncVisualText.Visible  = true
+            else
+                syncVisualText.Visible = false
+                syncVisualBg.Visible   = false
+            end
+        end)
+    end
+
     return {
         -- mode starters - mutually exclusive (calling one auto-stops any
         -- previous mode by re-binding the same Heartbeat)
@@ -5823,7 +5884,7 @@ F.desync = (function()
             VOID_MAX = math.max(VOID_MIN + 1, tonumber(maxV) or VOID_MAX)
         end,
         setShotSyncMs   = function(n)
-            SHOT_SYNC_MS = math.clamp(tonumber(n) or 50, 0, 100)
+            SHOT_SYNC_MS = math.clamp(tonumber(n) or 120, 90, 200)
             getgenv()._F_DESYNC_SHOT_SYNC_MS = SHOT_SYNC_MS
         end,
         -- Delay between MouseButton1 click and when the void spoof
@@ -5837,6 +5898,14 @@ F.desync = (function()
         getShotDelayMs  = function()
             return getgenv()._F_DESYNC_SHOT_DELAY_MS or 0
         end,
+        -- Sync window visualizer: shows a "VULNERABLE" banner at the
+        -- top of the screen while the void spoof is currently off
+        -- (i.e., tick() < SYNC_END). Pure Drawing API, no GUI.
+        setSyncVisualEnabled = function(v)
+            syncVisualEnabled = v == true
+            if syncVisualEnabled then syncVisualCreate() else syncVisualRemove() end
+        end,
+        getSyncVisualEnabled = function() return syncVisualEnabled end,
         setSpinSpeed    = function(n)
             SPIN_STEP = math.clamp(tonumber(n) or 47, 1, 360)
         end,

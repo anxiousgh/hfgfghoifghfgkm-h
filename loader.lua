@@ -1790,7 +1790,7 @@ do
     HC:AddSlider("HCVoidspamShotSyncMs", {
         Text     = "Stab sync window (ms)",
         Tooltip  = "How long the void spoof stays off after the swing animation triggers.",
-        Default  = 50, Min = 0, Max = 100, Rounding = 0,
+        Default  = 120, Min = 90, Max = 200, Rounding = 0,
         Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
     HC:AddSlider("HCVoidspamShotDelayMs", {
@@ -1798,6 +1798,11 @@ do
         Tooltip  = "Wait this long after the swing animation plays before the void spoof actually turns off. 0 = immediate.",
         Default  = 0, Min = 0, Max = 100, Rounding = 0,
         Callback = function(v) F.desync.setShotDelayMs(v) end,
+    })
+    HC:AddToggle("HCVoidspamSyncVisual", { Text = "Show sync window visualizer",
+        Tooltip  = "Show a red \"VULNERABLE\" banner at the top of the screen while the void spoof is currently OFF (sync window active).",
+        Default  = false,
+        Callback = function(v) F.desync.setSyncVisualEnabled(v) end,
     })
     HC:AddToggle("HCKnifeAttach", { Text = "Attach to ragebot target",
         Tooltip  = "Snap HRP to the ragebot's current target each frame and auto-click on a loop. While on, ragebot autoshoot + force-hit are forcibly disabled so the knife is the only weapon firing. When you toggle this off, autoshoot/force-hit get restored to whatever state they were in before.",
