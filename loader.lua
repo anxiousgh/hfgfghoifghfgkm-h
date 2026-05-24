@@ -2015,16 +2015,19 @@ do
             Default  = 25, Min = 0, Max = 500, Rounding = 0,
             Callback = function(v) F.desync.setInvisibleRadius(v) end,
         })
+        -- Toggle-mode KeyPicker's Callback DOES fire on label-attached
+        -- pickers (unlike Hold-mode, which needs bindFireKey). Use the
+        -- picker's own state directly — pressing V flips it, the
+        -- Callback mirrors that state into the main MM2Invisible
+        -- toggle, which handles start/stop + mutex.
         MM2:AddLabel("Invisible key"):AddKeyPicker("MM2InvisibleKey", {
             Default = "V", Mode = "Toggle", Text = "Invisible",
+            Callback = function(state)
+                if Toggles.MM2Invisible then
+                    Toggles.MM2Invisible:SetValue(state)
+                end
+            end,
         })
-        -- One-press = flip the MM2Invisible toggle. SetValue fires
-        -- the toggle's Callback (mutex + start/stop).
-        bindFireKey("MM2InvisibleKey", function()
-            if Toggles.MM2Invisible then
-                Toggles.MM2Invisible:SetValue(not Toggles.MM2Invisible.Value)
-            end
-        end)
 
         MM2:AddDivider()
         MM2:AddLabel("Murderer trigger")
