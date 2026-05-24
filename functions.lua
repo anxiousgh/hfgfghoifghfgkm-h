@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.8"
+local SCRIPT_VERSION = "v1.3.9"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5528,10 +5528,19 @@ F.games.mm2 = (function()
                 for _, plr in ipairs(Players:GetPlayers()) do
                     if plr ~= lplr then
                         live[plr] = true
-                        identityCache[plr] = getIdentity(plr)
+                        local id = getIdentity(plr)
+                        identityCache[plr] = id
+                        -- IDENTITY LOST: nuke the draw too. Without
+                        -- this, the render loop stops iterating this
+                        -- player (cache nil = no entry) and the
+                        -- drawing stays stuck at its last position.
+                        if not id and identityDraws[plr] then
+                            removeDraw(plr)
+                        end
                     end
                 end
-                -- prune draws for players who left
+                -- PLAYER LEFT: prune draws (and cache entries) for any
+                -- player no longer in Players:GetPlayers().
                 for plr, _ in pairs(identityDraws) do
                     if not live[plr] then removeDraw(plr) end
                 end
@@ -5567,7 +5576,10 @@ F.games.mm2 = (function()
                         end
                     end
                 elseif d then
-                    d.Visible = false
+                    -- character / head missing OR identity nil: remove
+                    -- the draw entirely so it can't get stuck visible.
+                    -- A fresh one rebuilds next time identity returns.
+                    removeDraw(plr)
                 end
             end
         end)
