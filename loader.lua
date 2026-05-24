@@ -41,7 +41,7 @@ local LocalPlayer = Players.LocalPlayer
 -- ============================================================
 --  one-shot keybind infrastructure
 --  fires on press for any KeyPicker registered via bindFireKey, regardless
---  of the picker's mode — so one-shot actions don't visually toggle on/off
+--  of the picker's mode - so one-shot actions don't visually toggle on/off
 -- ============================================================
 local _fireKeys = {}
 local function bindFireKey(optKey, fn) _fireKeys[optKey] = fn end
@@ -496,7 +496,7 @@ do
         Callback = function(v) F.autoEquip.setName(v) end,
     })
 
-    -- Preserve current selection on refresh — equipping moves a tool from the
+    -- Preserve current selection on refresh - equipping moves a tool from the
     -- backpack into the character, so the list rebuilds and the user's pick
     -- would otherwise jump to whatever ends up alphabetically first. Also
     -- repopulates the auto-weapon-switch dropdowns (close/medium/long) with
@@ -1144,7 +1144,7 @@ do
 
     -- =================== PULSE LAGSWITCH ===================
     -- Drops outgoing physics packet (0x1B) on an on/off duty cycle.
-    -- ONLY character position is affected — chat, remotes, hit
+    -- ONLY character position is affected - chat, remotes, hit
     -- registrations, etc. all replicate normally. Server sees you
     -- stuttering between frozen and your real position; combined
     -- with movement, this is nearly impossible to aim at.
@@ -1415,13 +1415,13 @@ do
     Act:AddButton({ Text = "Anti VC ban", DoubleClick = true,
         Func = function()
             F.antiVcBan.fire()
-            Library:Notify("Anti VC ban running — wait ~7s", 5)
+            Library:Notify("Anti VC ban running - wait ~7s", 5)
         end,
     })
 
     Act:AddDivider()
 
-    Act:AddButton({ Text = "PANIC — disable everything", DoubleClick = true,
+    Act:AddButton({ Text = "PANIC - disable everything", DoubleClick = true,
         Func = function()
             F.disableAll()
             for _, name in ipairs({
@@ -1792,7 +1792,7 @@ do
         Default  = 0.20, Min = 0, Max = 2, Rounding = 2,
         Callback = function(v) F.games.hoodCustoms.forceHit.setCooldown(v) end,
     })
-    -- Shotgun mode dropdown removed — forceHit always uses synth
+    -- Shotgun mode dropdown removed - forceHit always uses synth
     -- (direct FireServer with the canonical HC Shoot payload).
 
     -- Tracer + hit sound. FireServer doesn't render bullet visuals
@@ -1963,9 +1963,9 @@ do
             end,
         })
         local PICKUP_ERR = {
-            no_drop = "Can't pick up yet — Sheriff hasn't dropped the gun.",
+            no_drop = "Can't pick up yet - Sheriff hasn't dropped the gun.",
             no_hrp  = "Your character isn't loaded.",
-            -- "active" is silent — pickup is already in progress
+            -- "active" is silent - pickup is already in progress
         }
         local function tryPickupGun()
             local ok, reason = F.games.mm2.pickupGun.fire()
@@ -2007,7 +2007,7 @@ do
         })
         -- Toggle-mode KeyPicker's Callback DOES fire on label-attached
         -- pickers (unlike Hold-mode, which needs bindFireKey). Use the
-        -- picker's own state directly — pressing V flips it, the
+        -- picker's own state directly - pressing V flips it, the
         -- Callback mirrors that state into the main MM2Invisible
         -- toggle, which handles start/stop + mutex.
         MM2:AddLabel("Invisible key"):AddKeyPicker("MM2InvisibleKey", {
@@ -2056,7 +2056,7 @@ end
 -- ============================================================
 Library:SetWatermarkVisibility(true)
 
--- only update watermark text once per second instead of every frame —
+-- only update watermark text once per second instead of every frame -
 -- reading Stats.Network + string.format + label rewrite was happening
 -- every render frame, wasted at 240 fps.
 local FrameTimer, FrameCounter, FPS = tick(), 0, 60
@@ -2127,4 +2127,4 @@ ThemeManager:ApplyToTab(Tabs.Config)
 
 SaveManager:LoadAutoloadConfig()
 
-Library:Notify("cclosure.vip loaded — press End to toggle the menu", 4)
+Library:Notify("cclosure.vip loaded - press End to toggle the menu", 4)

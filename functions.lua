@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.0"
+local SCRIPT_VERSION = "v1.3.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -730,7 +730,7 @@ end
 -- ============================================================
 -- Standard noclip: just override CanCollide=false every Heartbeat while
 -- active. We deliberately do NOT use getconnections():Disable() on the
--- engine's CanCollide listeners — that left collision in a broken state
+-- engine's CanCollide listeners - that left collision in a broken state
 -- on toggle off (engine internals stay desynced even after Enable()).
 -- Per-frame override is enough; on stop we just stop overriding and the
 -- engine takes back over.
@@ -1327,7 +1327,7 @@ local function followPlayer(plr)
     -- Worker task: ONE tight loop that recomputes the path every tick
     -- and steers via Humanoid:Move(direction). Move() applies a
     -- continuous direction vector that DOESN'T stop on its own (unlike
-    -- MoveTo, which halts the instant a waypoint is reached — that
+    -- MoveTo, which halts the instant a waypoint is reached - that
     -- was causing the "walk, stop, walk, stop" stutter between ticks).
     -- The character keeps moving in the last-set direction between
     -- loop iterations, so the motion is smooth.
@@ -1399,7 +1399,7 @@ local function followPlayer(plr)
                 steerTo(thrp.Position, false)
             end
 
-            task.wait(0.1)  -- loop tick — recompute ~10x per second
+            task.wait(0.1)  -- loop tick - recompute ~10x per second
         end
         -- on exit, halt movement
         local hum = _followGetLocal()
@@ -1795,7 +1795,7 @@ RunService.Heartbeat:Connect(function()
 
     -- early-out: if nothing is asking for a target this frame, skip the
     -- per-player + per-part scan entirely. Without this gate the trigger-
-    -- bot did a full server scan every Heartbeat even when disabled —
+    -- bot did a full server scan every Heartbeat even when disabled -
     -- the #1 freeze cause per the audit.
     if not TrigSettings.Enabled and not TrigSettings.ShowTarget then
         if TB_targetBox then TB_targetBox.Visible = false end
@@ -1874,7 +1874,7 @@ end)
 local rbCachedTarget = nil
 local _rbFaceStepBound = false
 -- Snapshot of Humanoid.AutoRotate before we forced it off lives on G
--- (G._rbFaceSavedAutoRotate) to avoid eating a top-level local slot —
+-- (G._rbFaceSavedAutoRotate) to avoid eating a top-level local slot -
 -- the chunk function is right at Luau's 200-local-per-function limit.
 local rbOrbitAngle = 0
 
@@ -2056,7 +2056,7 @@ end
 
 -- ragebot per-frame: face target / orbit / cam snap / speed panic
 RunService.RenderStepped:Connect(function(dt)
-    -- early-out when nothing is asking for ragebot work — skips the
+    -- early-out when nothing is asking for ragebot work - skips the
     -- rbGetTarget() player-iteration each frame at idle. Audit flagged
     -- this as an always-on RenderStepped consumer.
     if not RageSettings.SilentForce
@@ -2080,7 +2080,7 @@ RunService.RenderStepped:Connect(function(dt)
     rbCachedTarget = hrp
 
     -- target line origin: Bottom / Center / Top / Mouse
-    -- Always draw — even when target is off-screen or behind the camera
+    -- Always draw - even when target is off-screen or behind the camera
     -- we project onto the screen edge so the line still points at them.
     if RB_targetLine then
         local function isFinite(n) return type(n) == "number" and n == n and n ~= math.huge and n ~= -math.huge end
@@ -2220,7 +2220,7 @@ RunService.RenderStepped:Connect(function(dt)
 end)
 
 -- silent force hooks (independent of aimbot).
--- Guard against re-stacking on script reload — ragebot's namecall+index
+-- Guard against re-stacking on script reload - ragebot's namecall+index
 -- hooks compound the same freezing problem the aimbot ones did.
 if hookmetamethod and not getgenv()._F_RB_NAMECALL_HOOKED then
     getgenv()._F_RB_NAMECALL_HOOKED = true
@@ -2357,7 +2357,7 @@ RunService.Heartbeat:Connect(function()
     if (now - _rbEquipTime) < RageSettings.EquipDelay then return end
     if (now - _rbLastShot) < (RageSettings.AutoShootCooldown / 1000) then return end
     local plr = rbGetTarget(); if not plr then return end
-    -- skip knocked targets if the toggle is on (HC: BodyEffects K.O) — only auto-shoot,
+    -- skip knocked targets if the toggle is on (HC: BodyEffects K.O) - only auto-shoot,
     -- silent aim still tracks them so you can keep targeting them visually
     if RageSettings.SkipKnocked
         and F.games and F.games.hoodCustoms and F.games.hoodCustoms.isKnocked
@@ -2492,7 +2492,7 @@ local function updateEspForPlayer(plr)
     local topV,_topOn=Camera:WorldToViewportPoint((cf*CFrame.new(0,size.Y/2,0)).Position)
     local botV,_botOn=Camera:WorldToViewportPoint((cf*CFrame.new(0,-size.Y/2,0)).Position)
     -- Same fix as above: only hide when the body's top or bottom is
-    -- BEHIND the camera (Z <= 0). Off-viewport X/Y is fine — let
+    -- BEHIND the camera (Z <= 0). Off-viewport X/Y is fine - let
     -- the box / lines extend past the screen edge.
     if topV.Z <= 0 or botV.Z <= 0 then hideEsp(d); return end
     local bH=botV.Y-topV.Y; local bW=bH*0.55; local bX=topV.X-bW/2; local bY=topV.Y; local cS=math.max(4,bW*0.22)
@@ -2574,7 +2574,7 @@ local function updateEspForPlayer(plr)
             if pA and pB and line then
                 local sA=Camera:WorldToViewportPoint(pA.Position); local sB=Camera:WorldToViewportPoint(pB.Position)
                 -- Only hide when EITHER joint is behind the camera (Z<=0).
-                -- Off-viewport X/Y is fine — Drawing clips automatically.
+                -- Off-viewport X/Y is fine - Drawing clips automatically.
                 if sA.Z>0 and sB.Z>0 then line.From=Vector2.new(sA.X,sA.Y); line.To=Vector2.new(sB.X,sB.Y); line.Color=col; line.Thickness=1; line.Transparency=1; line.Visible=true
                 else line.Visible=false end
             elseif line then line.Visible=false end
@@ -2699,7 +2699,7 @@ F.jumpPower = {
 }
 
 -- CFrame-based "speed hack" (camera-WASD-driven HRP nudge).
--- Doesn't touch Humanoid.WalkSpeed — use F.walkspeed for that.
+-- Doesn't touch Humanoid.WalkSpeed - use F.walkspeed for that.
 F.cframeSpeed = {
     start  = function(mult) startCframeSpeed(mult) end,
     stop   = stopCframeSpeed,
@@ -2741,20 +2741,20 @@ F.ice.setSlide = function(n) ICE_SLIDE = math.clamp(tonumber(n) or ICE_SLIDE, 0,
 --  STICKY EMOTES  (entire module inlined here)
 -- ============================================================
 --  Two filters keep us catching ONLY emotes, not weapon/tool anims:
---    1. Tool-ancestor filter — if the source Animation Instance is
+--    1. Tool-ancestor filter - if the source Animation Instance is
 --       parented under a Tool (or HopperBin) anywhere up the chain,
 --       it's a tool/weapon animation (knife slash, gun fire) and we
 --       skip it.
---    2. Builtin filter — Roblox's Animate LocalScript tracks
+--    2. Builtin filter - Roblox's Animate LocalScript tracks
 --       (WalkAnim, RunAnim, IdleAnim, ToolNoneAnim, etc.) are
 --       excluded by exact-name + parent-folder + low-priority.
 --  Anything that passes both is treated as an emote (catalog OR
---  game-custom). No-stacking via G._stickyTracks — we only ever
+--  game-custom). No-stacking via G._stickyTracks - we only ever
 --  touch tracks we ourselves captured or spawned.
 --
 --  Built as an IIFE that returns the {start,stop,toggle,isActive}
 --  table directly into F.stickyEmote. None of the helpers leak to
---  the chunk's local register pool — that 200-local limit was hit
+--  the chunk's local register pool - that 200-local limit was hit
 --  when these were declared at chunk top level.
 -- ============================================================
 F.stickyEmote = (function()
@@ -2844,13 +2844,13 @@ F.stickyEmote = (function()
                 if not shouldStick(track) then return end
                 local a = track.Animation
                 if not a or a.AnimationId == "" then return end
-                -- our own Heartbeat replay of the current emote — just track it
+                -- our own Heartbeat replay of the current emote - just track it
                 if G._currentEmoteId == a.AnimationId then
                     G._stickyTracks[track] = true
                     pcall(function() track.Priority = Enum.AnimationPriority.Action4 end)
                     return
                 end
-                -- different emote — supersede old set so they don't stack
+                -- different emote - supersede old set so they don't stack
                 stopOurs()
                 G._stickyTracks[track] = true
                 G._currentEmoteId = a.AnimationId
@@ -3840,7 +3840,7 @@ F.ragebot.tpShoot = function()
             -- wait for the TARGET's BodyEffects.Dead to become true.
             -- check both plr.Character.BodyEffects.Dead and the workspace
             -- mirror at workspace.Players.Characters.<name>.BodyEffects.Dead
-            -- (whichever the game uses) — 10s safety cap.
+            -- (whichever the game uses) - 10s safety cap.
             local deadline = tick() + 10
             local function targetDead()
                 local function isTrue(node)
@@ -4542,7 +4542,7 @@ F.games.hoodCustoms.antiAfkTag = (function()
         if charConn then charConn:Disconnect(); charConn = nil end
     end
 
-    -- always-on by default — but only auto-start in Hood Customs.
+    -- always-on by default - but only auto-start in Hood Customs.
     -- Outside HC, hook() does WaitForChild("CharacterAFK", 5) which times
     -- out (5s noise) on every character spawn for no reason.
     local _HC_PLACE_IDS = { [138995385694035] = true, [9825515356] = true }
@@ -4557,7 +4557,7 @@ end)()
 --  MainEvent:FireServer("RequestAFKDisplay", true) so the server
 --  also flags you as AFK to other players. Re-asserts whenever
 --  anything sets Enabled back to false. Survives respawn.
---  Mutually exclusive with antiAfkTag — turning this on disables
+--  Mutually exclusive with antiAfkTag - turning this on disables
 --  the anti tag, and vice versa (the loader handles that wiring).
 -- ============================================================
 F.games.hoodCustoms.forceAfkTag = (function()
@@ -4604,20 +4604,20 @@ F.games.hoodCustoms.forceAfkTag = (function()
         if propConn then propConn:Disconnect(); propConn = nil end
         if charConn then charConn:Disconnect(); charConn = nil end
         -- restore the badge to whatever the server thinks (don't force off
-        -- here — antiAfkTag is the explicit "always off" toggle)
+        -- here - antiAfkTag is the explicit "always off" toggle)
     end
 
     return makeToggle(start, stop, "hcForceAfkTagActive")
 end)()
 
 -- HC godmode: built inside an IIFE so all its locals live in the inner
--- function's own register pool — none of them count against the file-
+-- function's own register pool - none of them count against the file-
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
     -- ============================================================
     -- HC godmode = DETACH-AND-VOID THE LIMBS.
     --
-    -- v1.0.6 was insufficient — voiding only the SpecialParts had
+    -- v1.0.6 was insufficient - voiding only the SpecialParts had
     -- no effect, which means HC's hit detection actually targets
     -- the REAL limb MeshParts, not the SpecialPart hitboxes.
     --
@@ -4875,7 +4875,7 @@ F.games.hoodCustoms.forceHit = (function()
     --                apart, sub-stud anti-zero-spread jitter inside each.
     -- shotgunMode used to be "click" vs "synth"; click let the gun's own
     -- script fire via VirtualInputManager. Removed entirely per user
-    -- request — fireShoot (the synth path) is the only path now since
+    -- request - fireShoot (the synth path) is the only path now since
     -- the canonical HC Shoot payload it sends doesn't kick.
 
     -- visual / audio feedback (FireServer doesn't render bullet visuals
@@ -4981,7 +4981,7 @@ F.games.hoodCustoms.forceHit = (function()
     --   origin = local player's HRP.Position
     --   aim    = local player's HRP.Position  (yes, identical to origin)
     --   stamp  = workspace:GetServerTimeNow()
-    -- No MainFunction:InvokeServer("GunCheck") follow-up — that extra
+    -- No MainFunction:InvokeServer("GunCheck") follow-up - that extra
     -- remote call was part of what was tripping HC's anti-cheat. The
     -- "Normal" field is set to the head position (NOT a unit vector);
     -- the reference impl does this and the server accepts it, so we
@@ -5227,7 +5227,7 @@ F.games.hoodCustoms.forceHit = (function()
     t.setHitPart    = function(name) hitPartName = name or "Head" end
     t.getHitPart    = function() return hitPartName end
     t.setCooldown   = function(n) cooldown = math.max(0, tonumber(n) or 0.2) end
-    -- setShotgunMode / getShotgunMode removed — there's only one path now
+    -- setShotgunMode / getShotgunMode removed - there's only one path now
     -- (synth, the canonical-payload direct FireServer). Kept as no-op
     -- stubs so the loader doesn't crash if it still tries to call them.
     t.setShotgunMode = function() end
@@ -5473,7 +5473,7 @@ F.games.mm2 = (function()
 
     -- Reads a player's identity from their Character + Backpack tools.
     -- Callers that want to skip the local player must filter
-    -- themselves — autoPickupGun uses this to detect "am I the
+    -- themselves - autoPickupGun uses this to detect "am I the
     -- murderer" so it can skip pickups.
     local function getIdentity(plr)
         if not plr then return nil end
@@ -5601,7 +5601,7 @@ F.games.mm2 = (function()
     local pickupActive = false
 
     -- Return values:
-    --   true                success — teleport in progress
+    --   true                success - teleport in progress
     --   false, "active"     a previous pickup is still mid-flight (silent)
     --   false, "no_drop"    no GunDrop exists in the workspace (notify)
     --   false, "no_hrp"     local character isn't loaded
@@ -5736,7 +5736,7 @@ F.games.mm2 = (function()
     local triggerLastFire = 0
     local TRIGGER_COOLDOWN = 0.4
 
-    -- The shoot remote lives at lplr.Character.Gun.Shoot — only
+    -- The shoot remote lives at lplr.Character.Gun.Shoot - only
     -- exists while the Gun tool is equipped (in the Character, not
     -- the Backpack). Returns nil if the gun isn't equipped.
     local function findHitRemote()
@@ -5787,7 +5787,7 @@ F.games.mm2 = (function()
             or char:FindFirstChild("Torso")
             or char:FindFirstChild("HumanoidRootPart")
     end
-    -- Second arg is "my position" with identity rotation — matches the
+    -- Second arg is "my position" with identity rotation - matches the
     -- canonical payload exactly (CFrame.new(x, y, z) without basis
     -- vectors).
     local function myPosCFrame()
@@ -5831,7 +5831,7 @@ F.games.mm2 = (function()
             if not theirHit or not myPos then return end
             local remote = findHitRemote()
             if not remote then
-                -- gun not equipped — best-effort equip and skip this
+                -- gun not equipped - best-effort equip and skip this
                 -- frame. Next frame (within the 0.4s cooldown anyway)
                 -- the Shoot remote should be mounted and we'll fire.
                 ensureGunEquipped()
@@ -5888,7 +5888,7 @@ F.games.mm2 = (function()
             return true
         end
 
-        -- gun NOT equipped — try to equip from backpack, then delay-fire
+        -- gun NOT equipped - try to equip from backpack, then delay-fire
         if not ensureGunEquipped() then return false, "no_gun" end
         task.delay(0.5, function()
             local r = findHitRemote(); if not r then return end
@@ -5912,7 +5912,7 @@ F.games.mm2 = (function()
         autoThread = task.spawn(function()
             while autoActive do
                 local drop = findGunDrop()
-                -- skip pickup if we're the murderer (have Knife) — we
+                -- skip pickup if we're the murderer (have Knife) - we
                 -- don't want to grab the sheriff's gun and reveal our
                 -- identity, and we can't use it anyway
                 local myIdentity = getIdentity(lplr)
@@ -6138,7 +6138,7 @@ F.desync = (function()
                 -- instead of corrupting bytes. The previous version wrote
                 -- 0xFFFFFFFF at offset 1 of packet.AsBuffer which, on
                 -- Potassium, overlapped RakNet's sequence/control bytes
-                -- and made the executor's send queue choke — local
+                -- and made the executor's send queue choke - local
                 -- movement froze because the engine was waiting for acks
                 -- that never came. Blocking is cleaner:
                 --   * server stops receiving position updates -> we appear
@@ -6206,7 +6206,7 @@ F.desync = (function()
     -- ForceHit's autoshoot fired many shots per second.
     --
     -- Trigger: knife SWING ANIMATION (not MouseButton1). Click-based
-    -- triggering doesn't account for ping — the actual server-side
+    -- triggering doesn't account for ping - the actual server-side
     -- hit registration lines up with the swing animation playing,
     -- which already includes the round-trip latency.
     --
@@ -6229,7 +6229,7 @@ F.desync = (function()
         local L = track.Length
         if not L or L <= 0 then
             -- Length isn't published yet (e.g., first play). Fall back
-            -- to assuming a 0.5s anim — the post-anim ms still adds on
+            -- to assuming a 0.5s anim - the post-anim ms still adds on
             -- top so the spoof stays off long enough either way.
             L = 0.5
         end
@@ -6288,9 +6288,9 @@ F.desync = (function()
     -- ============================================================
     --  Same approach as F.pulseLagswitch's visualizer: ONE Part + ONE
     --  Highlight. No character clone, no Animator, no particles, no
-    --  Model. The previous "ghost" — a full :Clone() of the character
+    --  Model. The previous "ghost" - a full :Clone() of the character
     --  with attachments, particle emitters, animated rings, and a
-    --  per-frame VFX loop — froze the client for hundreds of ms on
+    --  per-frame VFX loop - froze the client for hundreds of ms on
     --  low-end devices and tripped some games' anti-cheat that scans
     --  for new player-shaped Models. This version doesn't.
     --
@@ -6401,7 +6401,7 @@ F.desync = (function()
     --  When the void spoof is OFF (i.e., tick() < SYNC_END), render
     --  a "VULNERABLE" banner at the top-center of the screen so the
     --  user can see at a glance when they're hittable.
-    --  Pure Drawing API — one Text + one filled Square, no GUI.
+    --  Pure Drawing API - one Text + one filled Square, no GUI.
     -- ============================================================
     local syncVisualEnabled = false
     local syncVisualText, syncVisualBg, syncVisualConn
@@ -6489,7 +6489,7 @@ F.desync = (function()
             INVIS_RADIUS = math.clamp(tonumber(n) or 25, 0, 500)
         end,
         getInvisibleRadius = function() return INVIS_RADIUS end,
-        -- Now interpreted as "post-animation duration (ms)" — how
+        -- Now interpreted as "post-animation duration (ms)" - how
         -- long the spoof stays off after the swing animation ends.
         setShotSyncMs   = function(n)
             SHOT_SYNC_MS = math.clamp(tonumber(n) or 200, 0, 1000)
@@ -6499,7 +6499,7 @@ F.desync = (function()
         -- actually turns off (sync window begins). 0 = immediate
         -- (original behavior). Higher values let the user fire
         -- while still spoofed, then drop to real position after N ms.
-        -- Now interpreted as "start at % of anim" — what fraction
+        -- Now interpreted as "start at % of anim" - what fraction
         -- of the swing animation has played before the spoof goes
         -- off. 40 = spoof off starts at 40% of the swing.
         -- (Slider value is 0-100, used as a percent.)
@@ -6548,7 +6548,7 @@ end)()
 -- ============================================================
 --  Selectively blocks outgoing PHYSICS REPLICATION packets
 --  (PacketId 0x1B) on a configurable on/off duty cycle. Only
---  character position/velocity is affected — chat, RemoteEvents,
+--  character position/velocity is affected - chat, RemoteEvents,
 --  Shoot fires, hit registrations, etc. all pass through normally.
 --
 --  Server sees your position in stuttered bursts (e.g. on 200ms,
@@ -6612,7 +6612,7 @@ F.pulseLagswitch = (function()
     -- a humanoid, attachments, particle emitters, animated rings, and
     -- a per-frame render loop. On low-end devices and in games that
     -- scan for new Models (anti-cheat), spawning that clone could
-    -- freeze the client for hundreds of ms — which is what the user
+    -- freeze the client for hundreds of ms - which is what the user
     -- was hitting. This version sidesteps all of that.
     --
     -- Behavior: only visible during BLOCKED phases (when server's
@@ -6687,7 +6687,7 @@ F.pulseLagswitch = (function()
         if pulseTask then pcall(task.cancel, pulseTask); pulseTask = nil end
         pulseTask = task.spawn(function()
             while active do
-                -- Snapshot HRP just before entering the blocked phase —
+                -- Snapshot HRP just before entering the blocked phase -
                 -- this is approximately the position the server has
                 -- stored from our last successful 0x1B packet.
                 local c   = lplr.Character
