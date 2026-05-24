@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.8"
+local SCRIPT_VERSION = "v1.0.9"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5251,12 +5251,15 @@ end)()
 -- ============================================================
 F.games.hoodCustoms.knifeBot = (function()
     local KNIFE_NAME = "[Knife]"
-    local CLICK_INTERVAL = 1.0  -- seconds between auto-clicks
 
     -- -------- attach --------
-    local attachDistance = 3   -- studs behind target
+    local attachDistance = 3      -- studs from target
+    local clickInterval  = 0.6    -- seconds between auto-clicks
+    local orbitActive    = false  -- rotate around target while attached
+    local orbitSpeed     = 180    -- degrees / second
+    local orbitAngle     = 0      -- internal accumulator
     local attachHbConn, attachClickThread
-    local attachActive = false
+    local attachActive   = false
 
     local function getTargetHRP()
         if not rbGetTarget then return nil end
@@ -5266,23 +5269,52 @@ F.games.hoodCustoms.knifeBot = (function()
         return char and char:FindFirstChild("HumanoidRootPart")
     end
 
+    -- forcibly disable ragebot autoshoot + HC forcehit so they don't
+    -- fire alongside the knife. Setting RageSettings.AutoShoot = false
+    -- + G.hcForceHitActive = false here is the engine-level mute;
+    -- the loader also flips the UI toggles off so the GUI matches.
+    local function muteRangedAutos()
+        pcall(function()
+            if RageSettings then RageSettings.AutoShoot = false end
+        end)
+        G.hcForceHitActive = false
+        pcall(function()
+            if F.games and F.games.hoodCustoms and F.games.hoodCustoms.forceHit then
+                F.games.hoodCustoms.forceHit.stop()
+            end
+        end)
+    end
+
     local function attachStart()
         if attachActive then return end
         attachActive = true
         G.hcKnifeAttachActive = true
+        orbitAngle = 0
+        muteRangedAutos()
 
         if attachHbConn then attachHbConn:Disconnect() end
-        attachHbConn = RunService.Heartbeat:Connect(function()
+        attachHbConn = RunService.Heartbeat:Connect(function(dt)
             if not attachActive then return end
+            -- keep ragebot autoshoot + forcehit muted every frame in
+            -- case something else flips them back on
+            muteRangedAutos()
+
             local c = lplr.Character
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
             local tHrp = getTargetHRP()
             if not tHrp then return end
-            -- snap to `distance` studs in front of the target
-            -- (so the equipped knife's swing arc lands on them)
-            local forward = tHrp.CFrame.LookVector
-            local pos = tHrp.Position - forward * attachDistance + Vector3.new(0, 0, 0)
+
+            local pos
+            if orbitActive then
+                orbitAngle = (orbitAngle + orbitSpeed * dt) % 360
+                local rad = math.rad(orbitAngle)
+                pos = tHrp.Position + Vector3.new(math.cos(rad), 0, math.sin(rad)) * attachDistance
+            else
+                -- snap behind the target (so the knife swing arc lands)
+                local forward = tHrp.CFrame.LookVector
+                pos = tHrp.Position - forward * attachDistance
+            end
             pcall(function()
                 hrp.CFrame = CFrame.new(pos, tHrp.Position)
             end)
@@ -5298,7 +5330,9 @@ F.games.hoodCustoms.knifeBot = (function()
                         VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                     end)
                 end
-                task.wait(CLICK_INTERVAL)
+                -- read the live value so slider changes take effect
+                -- immediately without needing a toggle off/on
+                task.wait(clickInterval)
             end
         end)
     end
@@ -5312,12 +5346,11 @@ F.games.hoodCustoms.knifeBot = (function()
 
     -- -------- auto-equip --------
     local autoEquipActive = false
-    local autoEquipCharConn, autoEquipHbConn
+    local autoEquipCharConn, autoEquipThread
 
     local function tryEquipKnife()
         local char = lplr.Character; if not char then return false end
         local hum  = char:FindFirstChildOfClass("Humanoid"); if not hum then return false end
-        -- already equipped?
         if char:FindFirstChild(KNIFE_NAME) then return true end
         local bp = lplr:FindFirstChild("Backpack")
         if not bp then return false end
@@ -5333,7 +5366,6 @@ F.games.hoodCustoms.knifeBot = (function()
         G.hcKnifeAutoEquipActive = true
         tryEquipKnife()
 
-        -- re-equip on respawn
         if autoEquipCharConn then autoEquipCharConn:Disconnect() end
         autoEquipCharConn = lplr.CharacterAdded:Connect(function()
             if not autoEquipActive then return end
@@ -5342,11 +5374,12 @@ F.games.hoodCustoms.knifeBot = (function()
             if autoEquipActive then tryEquipKnife() end
         end)
 
-        -- also re-check every 2s in case knife gets unequipped
-        if autoEquipHbConn then pcall(task.cancel, autoEquipHbConn) end
-        autoEquipHbConn = task.spawn(function()
+        -- aggressive re-check: every 0.2s so a brief unequip
+        -- (tool switch, animation interrupt) is corrected fast.
+        if autoEquipThread then pcall(task.cancel, autoEquipThread) end
+        autoEquipThread = task.spawn(function()
             while autoEquipActive do
-                task.wait(2)
+                task.wait(0.2)
                 if autoEquipActive then tryEquipKnife() end
             end
         end)
@@ -5356,16 +5389,22 @@ F.games.hoodCustoms.knifeBot = (function()
         autoEquipActive = false
         G.hcKnifeAutoEquipActive = false
         if autoEquipCharConn then autoEquipCharConn:Disconnect(); autoEquipCharConn = nil end
-        if autoEquipHbConn then pcall(task.cancel, autoEquipHbConn); autoEquipHbConn = nil end
+        if autoEquipThread then pcall(task.cancel, autoEquipThread); autoEquipThread = nil end
     end
 
     return {
         attach = {
-            start         = attachStart,
-            stop          = attachStop,
-            isActive      = function() return attachActive end,
-            setDistance   = function(n) attachDistance = math.clamp(tonumber(n) or 3, 0, 50) end,
-            getDistance   = function() return attachDistance end,
+            start            = attachStart,
+            stop             = attachStop,
+            isActive         = function() return attachActive end,
+            setDistance      = function(n) attachDistance = math.clamp(tonumber(n) or 3, 0, 50) end,
+            getDistance      = function() return attachDistance end,
+            setClickInterval = function(n) clickInterval = math.clamp(tonumber(n) or 0.6, 0.05, 5) end,
+            getClickInterval = function() return clickInterval end,
+            setOrbit         = function(v) orbitActive = v == true end,
+            getOrbit         = function() return orbitActive end,
+            setOrbitSpeed    = function(n) orbitSpeed = math.clamp(tonumber(n) or 180, 0, 720) end,
+            getOrbitSpeed    = function() return orbitSpeed end,
         },
         autoEquip = {
             start    = autoEquipStart,

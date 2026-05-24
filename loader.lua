@@ -1799,11 +1799,17 @@ do
         Callback = function(v) F.desync.setShotDelayMs(v) end,
     })
     HC:AddToggle("HCKnifeAttach", { Text = "Attach to ragebot target",
-        Tooltip  = "Snap HRP to the ragebot's current target each frame and auto-click once per second.",
+        Tooltip  = "Snap HRP to the ragebot's current target each frame and auto-click on a loop. While on, ragebot autoshoot + force-hit are forcibly disabled so the knife is the only weapon firing.",
         Default  = false,
         Callback = function(v)
-            if v then F.games.hoodCustoms.knifeBot.attach.start()
-            else      F.games.hoodCustoms.knifeBot.attach.stop() end
+            if v then
+                -- mute the ranged autos: knife only
+                if Toggles.RageAutoShoot then Toggles.RageAutoShoot:SetValue(false) end
+                if Toggles.HCForceHit    then Toggles.HCForceHit:SetValue(false)    end
+                F.games.hoodCustoms.knifeBot.attach.start()
+            else
+                F.games.hoodCustoms.knifeBot.attach.stop()
+            end
         end,
     })
     HC:AddSlider("HCKnifeAttachDistance", {
@@ -1811,8 +1817,24 @@ do
         Default  = 3, Min = 0, Max = 50, Rounding = 1,
         Callback = function(v) F.games.hoodCustoms.knifeBot.attach.setDistance(v) end,
     })
+    HC:AddSlider("HCKnifeClickInterval", {
+        Text     = "Click interval (s)",
+        Tooltip  = "Seconds between auto-clicks. Default 0.6.",
+        Default  = 0.6, Min = 0.05, Max = 5, Rounding = 2,
+        Callback = function(v) F.games.hoodCustoms.knifeBot.attach.setClickInterval(v) end,
+    })
+    HC:AddToggle("HCKnifeOrbit", { Text = "Orbit target",
+        Tooltip  = "Rotate around the target while attached instead of staying behind them.",
+        Default  = false,
+        Callback = function(v) F.games.hoodCustoms.knifeBot.attach.setOrbit(v) end,
+    })
+    HC:AddSlider("HCKnifeOrbitSpeed", {
+        Text     = "Orbit speed (deg/s)",
+        Default  = 180, Min = 0, Max = 720, Rounding = 0,
+        Callback = function(v) F.games.hoodCustoms.knifeBot.attach.setOrbitSpeed(v) end,
+    })
     HC:AddToggle("HCKnifeAutoEquip", { Text = "Auto-equip [Knife]",
-        Tooltip  = "Equip the [Knife] tool from your backpack on toggle-on and on every respawn.",
+        Tooltip  = "Equip the [Knife] tool from your backpack on toggle-on, on every respawn, and re-check every 0.2s.",
         Default  = false,
         Callback = function(v)
             if v then F.games.hoodCustoms.knifeBot.autoEquip.start()
