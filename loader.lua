@@ -1166,12 +1166,12 @@ do
     })
     Pulse:AddSlider("PulseLagswitchOnMs", {
         Text     = "Blocked phase (ms)",
-        Default  = 200, Min = 10, Max = 10000, Rounding = 0,
+        Default  = 200, Min = 10, Max = 60000, Rounding = 0,
         Callback = function(v) F.pulseLagswitch.setOnMs(v) end,
     })
     Pulse:AddSlider("PulseLagswitchOffMs", {
         Text     = "Released phase (ms)",
-        Default  = 100, Min = 10, Max = 10000, Rounding = 0,
+        Default  = 100, Min = 10, Max = 60000, Rounding = 0,
         Callback = function(v) F.pulseLagswitch.setOffMs(v) end,
     })
 end
