@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.1.1"
+local SCRIPT_VERSION = "v1.1.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5446,11 +5446,19 @@ F.games.mm2 = (function()
     }
 
     -- ---------- Identity ESP ----------
+    -- Uses Drawing.new("Text") (matches the main ESP look) instead
+    -- of BillboardGui. Position is projected from each player's
+    -- head every RenderStepped so labels follow heads smoothly.
+    -- Identity (Gun -> Sheriff, Knife -> Murderer) is re-scanned
+    -- in a separate thread every 0.25s.
     local identityActive = false
-    local identityThread
-    local identityGuis = {}  -- [Player] = BillboardGui
+    local identityScanThread
+    local identityRenderConn
+    local identityDraws = {}  -- [Player] = Drawing.new("Text")
+    local identityCache = {}  -- [Player] = "Sheriff"|"Murderer"|nil
 
     local function getIdentity(plr)
+        if not plr or plr == lplr then return nil end
         local function scan(parent)
             if not parent then return nil end
             for _, t in ipairs(parent:GetChildren()) do
@@ -5463,76 +5471,95 @@ F.games.mm2 = (function()
         return scan(plr.Character) or scan(plr:FindFirstChild("Backpack"))
     end
 
-    local function buildGui()
-        local bg = Instance.new("BillboardGui")
-        bg.Name           = "_mm2_identity"
-        bg.AlwaysOnTop    = true
-        bg.Size           = UDim2.fromOffset(140, 30)
-        bg.StudsOffset    = Vector3.new(0, 3, 0)
-        bg.LightInfluence = 0
-        local label = Instance.new("TextLabel")
-        label.Name                   = "Label"
-        label.BackgroundTransparency = 1
-        label.Size                   = UDim2.fromScale(1, 1)
-        label.Font                   = Enum.Font.GothamBold
-        label.TextSize               = 18
-        label.TextStrokeTransparency = 0
-        label.TextColor3             = Color3.fromRGB(255, 255, 255)
-        label.Text                   = ""
-        label.Parent                 = bg
-        return bg, label
+    local function buildDraw()
+        if not Drawing or not Drawing.new then return nil end
+        local t = Drawing.new("Text")
+        t.Visible      = false
+        t.Center       = true
+        t.Outline      = true
+        t.OutlineColor = Color3.new(0, 0, 0)
+        t.Color        = Color3.fromRGB(255, 255, 255)
+        t.Size         = 13         -- matches main ESP name size
+        t.Font         = 2          -- bold
+        t.Text         = ""
+        return t
     end
 
-    local function updatePlayer(plr)
-        if plr == lplr then return end
-        local char = plr.Character
-        local head = char and char:FindFirstChild("Head")
-        local id   = getIdentity(plr)
-        local gui  = identityGuis[plr]
-
-        if id and head then
-            if not gui or not gui.Parent then
-                gui = buildGui()
-                identityGuis[plr] = gui
-            end
-            gui.Adornee = head
-            gui.Parent  = head
-            local label = gui:FindFirstChild("Label")
-            if label then
-                label.Text      = id
-                label.TextColor3 = COLORS[id] or Color3.fromRGB(255, 255, 255)
-            end
-        elseif gui then
-            pcall(function() gui:Destroy() end)
-            identityGuis[plr] = nil
-        end
+    local function removeDraw(plr)
+        local d = identityDraws[plr]
+        if d then pcall(function() d:Remove() end) end
+        identityDraws[plr] = nil
+        identityCache[plr] = nil
     end
 
-    local function clearAllGuis()
-        for _, gui in pairs(identityGuis) do
-            pcall(function() if gui.Parent then gui:Destroy() end end)
+    local function clearAllDraws()
+        for plr, _ in pairs(identityDraws) do
+            removeDraw(plr)
         end
-        identityGuis = {}
     end
 
     local function identityStart()
         if identityActive then return end
         identityActive = true
-        if identityThread then pcall(task.cancel, identityThread) end
-        identityThread = task.spawn(function()
+
+        -- background scan: refresh identity cache every 0.25s
+        if identityScanThread then pcall(task.cancel, identityScanThread) end
+        identityScanThread = task.spawn(function()
             while identityActive do
+                local live = {}
                 for _, plr in ipairs(Players:GetPlayers()) do
-                    pcall(updatePlayer, plr)
+                    if plr ~= lplr then
+                        live[plr] = true
+                        identityCache[plr] = getIdentity(plr)
+                    end
                 end
-                task.wait(0.5)
+                -- prune draws for players who left
+                for plr, _ in pairs(identityDraws) do
+                    if not live[plr] then removeDraw(plr) end
+                end
+                task.wait(0.25)
+            end
+        end)
+
+        -- render loop: project head -> screen, position label,
+        -- runs every frame so labels follow movement smoothly.
+        if identityRenderConn then identityRenderConn:Disconnect() end
+        identityRenderConn = RunService.RenderStepped:Connect(function()
+            if not identityActive then return end
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            for plr, id in pairs(identityCache) do
+                local d = identityDraws[plr]
+                local char = plr.Character
+                local head = char and char:FindFirstChild("Head")
+                if id and head then
+                    if not d then
+                        d = buildDraw()
+                        identityDraws[plr] = d
+                    end
+                    if d then
+                        local sp, onScreen = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 2.6, 0))
+                        if onScreen then
+                            d.Position = Vector2.new(sp.X, sp.Y)
+                            d.Text     = id
+                            d.Color    = COLORS[id] or Color3.fromRGB(255, 255, 255)
+                            d.Visible  = true
+                        else
+                            d.Visible = false
+                        end
+                    end
+                elseif d then
+                    d.Visible = false
+                end
             end
         end)
     end
 
     local function identityStop()
         identityActive = false
-        if identityThread then pcall(task.cancel, identityThread); identityThread = nil end
-        clearAllGuis()
+        if identityScanThread then pcall(task.cancel, identityScanThread); identityScanThread = nil end
+        if identityRenderConn then identityRenderConn:Disconnect(); identityRenderConn = nil end
+        clearAllDraws()
     end
 
     -- ---------- Pickup gun ----------
@@ -5590,71 +5617,66 @@ F.games.mm2 = (function()
     end
 
     -- ---------- Dropped-gun ESP ----------
-    -- Adds a Highlight + a BillboardGui ("GUN") above any BasePart
-    -- named "GunDrop" in the workspace. Polls every 0.3s to catch
-    -- newly spawned drops; auto-cleans guis whose drop went away.
+    -- Highlight on the drop part (so you can see through walls) +
+    -- a Drawing.new("Text") "GUN" label above it (matches main ESP).
+    -- Scan every 0.3s for new/removed drops; project the label
+    -- position every RenderStepped.
     local dropEspActive = false
-    local dropEspThread
-    local dropEspAdorned = {}  -- [drop part] = { hl, bg }
+    local dropEspScanThread
+    local dropEspRenderConn
+    local dropEspAdorned = {}  -- [drop part] = { hl, draw }
 
-    local function buildDropMarker(drop)
+    local function buildDropDraw()
+        if not Drawing or not Drawing.new then return nil end
+        local t = Drawing.new("Text")
+        t.Visible      = false
+        t.Center       = true
+        t.Outline      = true
+        t.OutlineColor = Color3.new(0, 0, 0)
+        t.Color        = Color3.fromRGB(255, 215, 60)
+        t.Size         = 13
+        t.Font         = 2
+        t.Text         = "GUN"
+        return t
+    end
+
+    local function attachDropMarker(drop)
         local hl = Instance.new("Highlight")
-        hl.Name              = "_mm2_dropgun_hl"
-        hl.FillColor         = Color3.fromRGB(255, 215,  60)
-        hl.OutlineColor      = Color3.fromRGB(255, 255, 255)
-        hl.FillTransparency  = 0.45
+        hl.Name                = "_mm2_dropgun_hl"
+        hl.FillColor           = Color3.fromRGB(255, 215,  60)
+        hl.OutlineColor        = Color3.fromRGB(255, 255, 255)
+        hl.FillTransparency    = 0.45
         hl.OutlineTransparency = 0
-        hl.DepthMode         = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Adornee           = drop
-        hl.Parent            = drop
+        hl.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Adornee             = drop
+        hl.Parent              = drop
+        return hl, buildDropDraw()
+    end
 
-        local bg = Instance.new("BillboardGui")
-        bg.Name           = "_mm2_dropgun_bg"
-        bg.AlwaysOnTop    = true
-        bg.LightInfluence = 0
-        bg.Size           = UDim2.fromOffset(80, 24)
-        bg.StudsOffset    = Vector3.new(0, 1.5, 0)
-        bg.Adornee        = drop
-        local label = Instance.new("TextLabel")
-        label.Name                   = "Label"
-        label.BackgroundTransparency = 1
-        label.Size                   = UDim2.fromScale(1, 1)
-        label.Font                   = Enum.Font.GothamBold
-        label.TextSize               = 16
-        label.TextColor3             = Color3.fromRGB(255, 215, 60)
-        label.TextStrokeTransparency = 0
-        label.Text                   = "GUN"
-        label.Parent                 = bg
-        bg.Parent = drop
-
-        return hl, bg
+    local function removeDropMarker(m)
+        if m.hl   and m.hl.Parent   then pcall(function() m.hl:Destroy() end) end
+        if m.draw                   then pcall(function() m.draw:Remove() end) end
     end
 
     local function dropEspClearAll()
-        for drop, m in pairs(dropEspAdorned) do
-            pcall(function() if m.hl and m.hl.Parent then m.hl:Destroy() end end)
-            pcall(function() if m.bg and m.bg.Parent then m.bg:Destroy() end end)
-        end
+        for _, m in pairs(dropEspAdorned) do removeDropMarker(m) end
         dropEspAdorned = {}
     end
 
-    local function dropEspTick()
-        -- collect current drops by reference
+    local function dropEspScanTick()
         local seen = {}
         for _, d in ipairs(workspace:GetDescendants()) do
             if d:IsA("BasePart") and d.Name == "GunDrop" then
                 seen[d] = true
                 if not dropEspAdorned[d] then
-                    local hl, bg = buildDropMarker(d)
-                    dropEspAdorned[d] = { hl = hl, bg = bg }
+                    local hl, draw = attachDropMarker(d)
+                    dropEspAdorned[d] = { hl = hl, draw = draw }
                 end
             end
         end
-        -- prune drops that no longer exist (picked up / destroyed)
         for drop, m in pairs(dropEspAdorned) do
             if not seen[drop] or not drop.Parent then
-                pcall(function() if m.hl and m.hl.Parent then m.hl:Destroy() end end)
-                pcall(function() if m.bg and m.bg.Parent then m.bg:Destroy() end end)
+                removeDropMarker(m)
                 dropEspAdorned[drop] = nil
             end
         end
@@ -5663,19 +5685,116 @@ F.games.mm2 = (function()
     local function dropEspStart()
         if dropEspActive then return end
         dropEspActive = true
-        if dropEspThread then pcall(task.cancel, dropEspThread) end
-        dropEspThread = task.spawn(function()
+        if dropEspScanThread then pcall(task.cancel, dropEspScanThread) end
+        dropEspScanThread = task.spawn(function()
             while dropEspActive do
-                pcall(dropEspTick)
+                pcall(dropEspScanTick)
                 task.wait(0.3)
+            end
+        end)
+        if dropEspRenderConn then dropEspRenderConn:Disconnect() end
+        dropEspRenderConn = RunService.RenderStepped:Connect(function()
+            if not dropEspActive then return end
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            for drop, m in pairs(dropEspAdorned) do
+                if drop.Parent and m.draw then
+                    local sp, onScreen = cam:WorldToViewportPoint(drop.Position + Vector3.new(0, 1.5, 0))
+                    if onScreen then
+                        m.draw.Position = Vector2.new(sp.X, sp.Y)
+                        m.draw.Visible  = true
+                    else
+                        m.draw.Visible = false
+                    end
+                end
             end
         end)
     end
 
     local function dropEspStop()
         dropEspActive = false
-        if dropEspThread then pcall(task.cancel, dropEspThread); dropEspThread = nil end
+        if dropEspScanThread then pcall(task.cancel, dropEspScanThread); dropEspScanThread = nil end
+        if dropEspRenderConn then dropEspRenderConn:Disconnect(); dropEspRenderConn = nil end
         dropEspClearAll()
+    end
+
+    -- ---------- Murderer trigger (hover -> fire nil RemoteEvent) ----------
+    -- When mouse hovers over the player identified as Murderer, fire a
+    -- nil-parented RemoteEvent with (theirHRP.CFrame, myHRP.CFrame).
+    -- Args format matches the canonical MM2 hit payload the user
+    -- provided. Throttled per-fire so we don't spam the remote.
+    local triggerActive = false
+    local triggerConn
+    local triggerLastFire = 0
+    local TRIGGER_COOLDOWN = 0.4
+
+    -- Cached lookup of the nil RemoteEvent. Re-resolves if it goes
+    -- nil (e.g. server destroys + recreates it).
+    local cachedHitRemote
+    local function findHitRemote()
+        if cachedHitRemote and typeof(cachedHitRemote) == "Instance" and cachedHitRemote.Parent ~= nil then
+            -- it got parented somewhere — no longer the nil one we want
+            cachedHitRemote = nil
+        end
+        if cachedHitRemote then return cachedHitRemote end
+        if not getnilinstances then return nil end
+        local ok, all = pcall(getnilinstances)
+        if not ok or not all then return nil end
+        -- prefer an unnamed RemoteEvent (matches the canonical MM2 hit
+        -- remote which is nil-parented + unnamed)
+        local fallback
+        for _, v in ipairs(all) do
+            if typeof(v) == "Instance" and v:IsA("RemoteEvent") then
+                if v.Name == "" then
+                    cachedHitRemote = v
+                    return v
+                end
+                fallback = fallback or v
+            end
+        end
+        cachedHitRemote = fallback
+        return fallback
+    end
+
+    local mouseRef
+    local function getMouse()
+        if mouseRef then return mouseRef end
+        mouseRef = lplr:GetMouse()
+        return mouseRef
+    end
+
+    local function getHoveredPlayer()
+        local m = getMouse(); if not m then return nil end
+        local target = m.Target; if not target then return nil end
+        local model = target:FindFirstAncestorOfClass("Model")
+        if not model then return nil end
+        return Players:GetPlayerFromCharacter(model)
+    end
+
+    local function triggerStart()
+        if triggerActive then return end
+        triggerActive = true
+        if triggerConn then triggerConn:Disconnect() end
+        triggerConn = RunService.RenderStepped:Connect(function()
+            if not triggerActive then return end
+            if tick() - triggerLastFire < TRIGGER_COOLDOWN then return end
+            local plr = getHoveredPlayer()
+            if not plr or plr == lplr then return end
+            if identityCache[plr] ~= "Murderer" and getIdentity(plr) ~= "Murderer" then return end
+            local theirChar = plr.Character
+            local theirHRP  = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
+            local myChar    = lplr.Character
+            local myHRP     = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            if not theirHRP or not myHRP then return end
+            local remote = findHitRemote(); if not remote then return end
+            pcall(function() remote:FireServer(theirHRP.CFrame, myHRP.CFrame) end)
+            triggerLastFire = tick()
+        end)
+    end
+
+    local function triggerStop()
+        triggerActive = false
+        if triggerConn then triggerConn:Disconnect(); triggerConn = nil end
     end
 
     -- ---------- Auto-pickup ----------
@@ -5725,6 +5844,11 @@ F.games.mm2 = (function()
             start    = dropEspStart,
             stop     = dropEspStop,
             isActive = function() return dropEspActive end,
+        },
+        triggerMurderer = {
+            start    = triggerStart,
+            stop     = triggerStop,
+            isActive = function() return triggerActive end,
         },
     }
 end)()
@@ -6481,6 +6605,7 @@ F.disableAll = function()
         F.games.mm2.identityEsp.stop()
         F.games.mm2.autoPickupGun.stop()
         F.games.mm2.dropEsp.stop()
+        F.games.mm2.triggerMurderer.stop()
     end
     if F.desync then F.desync.stop() end
     if F.pulseLagswitch then F.pulseLagswitch.stop() end

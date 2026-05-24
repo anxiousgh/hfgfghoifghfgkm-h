@@ -1910,8 +1910,11 @@ do
             end,
         })
         MM2:AddLabel("Pickup gun key"):AddKeyPicker("MM2PickupGunKey", {
-            Default = "G", Mode = "Toggle", Text = "Pickup gun",
+            Default = "G", Mode = "Hold", Text = "Pickup gun",
             Callback = function(state)
+                -- Hold mode fires the callback with `true` on key-down
+                -- and `false` on key-up. We want a single pickup attempt
+                -- the instant the key is pressed, so fire only on true.
                 if state then F.games.mm2.pickupGun.fire() end
             end,
         })
@@ -1924,6 +1927,17 @@ do
             Callback = function(v)
                 if v then F.games.mm2.autoPickupGun.start()
                 else      F.games.mm2.autoPickupGun.stop() end
+            end,
+        })
+
+        MM2:AddDivider()
+        MM2:AddLabel("Murderer trigger")
+        MM2:AddToggle("MM2TriggerMurderer", { Text = "Hover-fire on Murderer",
+            Tooltip  = "When your mouse hovers over the player identified as Murderer, automatically fire the nil-parented MM2 hit RemoteEvent with (theirHRP.CFrame, myHRP.CFrame). Throttled to ~2.5Hz so the remote doesn't get spammed.",
+            Default  = false,
+            Callback = function(v)
+                if v then F.games.mm2.triggerMurderer.start()
+                else      F.games.mm2.triggerMurderer.stop() end
             end,
         })
     end
