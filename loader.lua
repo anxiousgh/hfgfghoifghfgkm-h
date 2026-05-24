@@ -1535,22 +1535,39 @@ end
 --  GAMES TAB  (per-game features)
 -- ============================================================
 do
-    local HC_PLACE_IDS = { 138995385694035, 9825515356 }
-    local function inHoodCustoms()
-        for _, id in ipairs(HC_PLACE_IDS) do
-            if game.PlaceId == id then return true end
+    -- All supported games keyed by display name -> list of PlaceIds.
+    -- Add new entries here when adding a new game block below.
+    local SUPPORTED_GAMES = {
+        ["Hood Customs"]      = { 138995385694035, 9825515356 },
+        ["Murder Mystery 2"]  = { 142823291 },
+    }
+    local function findCurrentGame()
+        for name, ids in pairs(SUPPORTED_GAMES) do
+            for _, id in ipairs(ids) do
+                if game.PlaceId == id then return name end
+            end
         end
-        return false
+        return nil
+    end
+    local _currentGame = findCurrentGame()
+
+    -- Unsupported-game message: single groupbox listing every game
+    -- we DO support so the user can see what they're missing.
+    if not _currentGame then
+        local names = {}
+        for n in pairs(SUPPORTED_GAMES) do table.insert(names, n) end
+        table.sort(names)
+        local g = Tabs.Games:AddLeftGroupbox("Games")
+        g:AddLabel(
+            ("No Supported games Found, current supported games: '%s'."):format(
+                table.concat(names, ", ")),
+            true)
     end
 
-    local HC = Tabs.Games:AddLeftGroupbox("Hood Customs")
+    -- ---------------- HOOD CUSTOMS ----------------
+    local HC = (_currentGame == "Hood Customs") and Tabs.Games:AddLeftGroupbox("Hood Customs") or nil
 
-    if not inHoodCustoms() then
-        HC:AddLabel(
-            ("Hood Customs only.\nCurrent place: %d\nValid: %d, %d"):format(
-                game.PlaceId, HC_PLACE_IDS[1], HC_PLACE_IDS[2]),
-            true)
-    else
+    if _currentGame == "Hood Customs" then
 
     -- ---- Ragebot (HC-specific) ----
     HC:AddLabel("Ragebot")
@@ -1865,7 +1882,43 @@ do
         end,
     })
 
-    end -- close: if not inHoodCustoms() then ... else ...
+    end -- close: if _currentGame == "Hood Customs" then ...
+
+    -- ---------------- MURDER MYSTERY 2 ----------------
+    if _currentGame == "Murder Mystery 2" then
+        local MM2 = Tabs.Games:AddLeftGroupbox("Murder Mystery 2")
+
+        MM2:AddLabel("Identity ESP")
+        MM2:AddToggle("MM2IdentityEsp", { Text = "Sheriff / Murderer labels",
+            Tooltip  = "Scans every other player's Backpack + Character for Gun/Knife tools and renders a label above their head. Gun -> Sheriff (blue), Knife -> Murderer (red).",
+            Default  = false,
+            Callback = function(v)
+                if v then F.games.mm2.identityEsp.start()
+                else      F.games.mm2.identityEsp.stop() end
+            end,
+        })
+
+        MM2:AddDivider()
+
+        MM2:AddLabel("Gun pickup")
+        MM2:AddLabel("Pickup gun key"):AddKeyPicker("MM2PickupGunKey", {
+            Default = "G", Mode = "Toggle", Text = "Pickup gun",
+            Callback = function(state)
+                if state then F.games.mm2.pickupGun.fire() end
+            end,
+        })
+        MM2:AddButton({ Text = "Pickup gun now", Func = function()
+            F.games.mm2.pickupGun.fire()
+        end })
+        MM2:AddToggle("MM2AutoPickupGun", { Text = "Auto pickup gun",
+            Tooltip  = "Polls every 0.5s for a 'GunDrop' part. When one exists, briefly desyncs your HRP to the drop position so the server-side proximity pickup triggers. Locally your character stays in place.",
+            Default  = false,
+            Callback = function(v)
+                if v then F.games.mm2.autoPickupGun.start()
+                else      F.games.mm2.autoPickupGun.stop() end
+            end,
+        })
+    end
 end
 
 -- ============================================================

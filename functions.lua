@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.13"
+local SCRIPT_VERSION = "v1.1.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5415,6 +5415,227 @@ F.games.hoodCustoms.knifeBot = (function()
 end)()
 
 -- ============================================================
+--  GAMES: MURDER MYSTERY 2 (MM2)
+-- ============================================================
+--  Three features bundled under F.games.mm2:
+--
+--    identityEsp.start() / .stop()
+--      Scans every player's Character + Backpack for tools named
+--      "Gun" or "Knife". Above their head, renders a BillboardGui
+--      label saying "Sheriff" (Gun) or "Murderer" (Knife). Other
+--      players show no label. Updates every 0.5s.
+--
+--    pickupGun.fire()
+--      Locates a BasePart named "GunDrop" in workspace. Spoofs our
+--      HRP.CFrame to the drop's position on Heartbeat (write) +
+--      RenderStep First (restore real CFrame so locally we stay
+--      put). Server sees us at the drop -> auto-pickup proximity
+--      triggers. Stops after ~1.5s or when the drop disappears.
+--
+--    autoPickupGun.start() / .stop()
+--      Polls every 0.5s for a GunDrop. When one exists, calls
+--      pickupGun.fire() then waits 1.5s before the next check
+--      to avoid re-triggering on the same drop.
+-- ============================================================
+F.games.mm2 = (function()
+    local Players = game:GetService("Players")
+    local IDENTITY = { Gun = "Sheriff", Knife = "Murderer" }
+    local COLORS = {
+        Sheriff  = Color3.fromRGB( 80, 160, 255),
+        Murderer = Color3.fromRGB(255,  80,  80),
+    }
+
+    -- ---------- Identity ESP ----------
+    local identityActive = false
+    local identityThread
+    local identityGuis = {}  -- [Player] = BillboardGui
+
+    local function getIdentity(plr)
+        local function scan(parent)
+            if not parent then return nil end
+            for _, t in ipairs(parent:GetChildren()) do
+                if t:IsA("Tool") and IDENTITY[t.Name] then
+                    return IDENTITY[t.Name]
+                end
+            end
+            return nil
+        end
+        return scan(plr.Character) or scan(plr:FindFirstChild("Backpack"))
+    end
+
+    local function buildGui()
+        local bg = Instance.new("BillboardGui")
+        bg.Name           = "_mm2_identity"
+        bg.AlwaysOnTop    = true
+        bg.Size           = UDim2.fromOffset(140, 30)
+        bg.StudsOffset    = Vector3.new(0, 3, 0)
+        bg.LightInfluence = 0
+        local label = Instance.new("TextLabel")
+        label.Name                   = "Label"
+        label.BackgroundTransparency = 1
+        label.Size                   = UDim2.fromScale(1, 1)
+        label.Font                   = Enum.Font.GothamBold
+        label.TextSize               = 18
+        label.TextStrokeTransparency = 0
+        label.TextColor3             = Color3.fromRGB(255, 255, 255)
+        label.Text                   = ""
+        label.Parent                 = bg
+        return bg, label
+    end
+
+    local function updatePlayer(plr)
+        if plr == lplr then return end
+        local char = plr.Character
+        local head = char and char:FindFirstChild("Head")
+        local id   = getIdentity(plr)
+        local gui  = identityGuis[plr]
+
+        if id and head then
+            if not gui or not gui.Parent then
+                gui = buildGui()
+                identityGuis[plr] = gui
+            end
+            gui.Adornee = head
+            gui.Parent  = head
+            local label = gui:FindFirstChild("Label")
+            if label then
+                label.Text      = id
+                label.TextColor3 = COLORS[id] or Color3.fromRGB(255, 255, 255)
+            end
+        elseif gui then
+            pcall(function() gui:Destroy() end)
+            identityGuis[plr] = nil
+        end
+    end
+
+    local function clearAllGuis()
+        for _, gui in pairs(identityGuis) do
+            pcall(function() if gui.Parent then gui:Destroy() end end)
+        end
+        identityGuis = {}
+    end
+
+    local function identityStart()
+        if identityActive then return end
+        identityActive = true
+        if identityThread then pcall(task.cancel, identityThread) end
+        identityThread = task.spawn(function()
+            while identityActive do
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    pcall(updatePlayer, plr)
+                end
+                task.wait(0.5)
+            end
+        end)
+    end
+
+    local function identityStop()
+        identityActive = false
+        if identityThread then pcall(task.cancel, identityThread); identityThread = nil end
+        clearAllGuis()
+    end
+
+    -- ---------- Pickup gun ----------
+    local function findGunDrop()
+        -- search workspace + descendants for any BasePart named "GunDrop"
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("BasePart") and d.Name == "GunDrop" then
+                return d
+            end
+        end
+        return nil
+    end
+
+    local pickupActive = false  -- a single fire() in progress
+
+    local function pickupOnce()
+        if pickupActive then return false end
+        local drop = findGunDrop(); if not drop then return false end
+        local char = lplr.Character
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return false end
+
+        pickupActive = true
+        local RESTORE_BIND = "_F_MM2_PICKUP_RESTORE"
+        local realCF       = hrp.CFrame
+        local startTime    = tick()
+        local maxDuration  = 1.5
+        local hbConn
+
+        local function teardown()
+            pickupActive = false
+            if hbConn then hbConn:Disconnect(); hbConn = nil end
+            pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
+            -- final restore in case toggled off mid-frame
+            if hrp.Parent and realCF then
+                pcall(function() hrp.CFrame = realCF end)
+            end
+        end
+
+        hbConn = RunService.Heartbeat:Connect(function()
+            if not hrp.Parent or not drop.Parent or tick() - startTime > maxDuration then
+                teardown(); return
+            end
+            realCF = hrp.CFrame
+            pcall(function() hrp.CFrame = drop.CFrame end)
+        end)
+
+        RunService:BindToRenderStep(RESTORE_BIND, Enum.RenderPriority.First.Value, function()
+            if hrp.Parent and realCF then
+                pcall(function() hrp.CFrame = realCF end)
+            end
+        end)
+
+        return true
+    end
+
+    -- ---------- Auto-pickup ----------
+    local autoActive = false
+    local autoThread
+
+    local function autoStart()
+        if autoActive then return end
+        autoActive = true
+        if autoThread then pcall(task.cancel, autoThread) end
+        autoThread = task.spawn(function()
+            while autoActive do
+                local drop = findGunDrop()
+                if drop then
+                    pickupOnce()
+                    -- wait through the pickup attempt + a cooldown so we
+                    -- don't keep retriggering on the same drop's brief
+                    -- existence
+                    task.wait(2)
+                else
+                    task.wait(0.5)
+                end
+            end
+        end)
+    end
+
+    local function autoStop()
+        autoActive = false
+        if autoThread then pcall(task.cancel, autoThread); autoThread = nil end
+    end
+
+    return {
+        identityEsp = {
+            start    = identityStart,
+            stop     = identityStop,
+            isActive = function() return identityActive end,
+        },
+        pickupGun = {
+            fire = pickupOnce,
+        },
+        autoPickupGun = {
+            start    = autoStart,
+            stop     = autoStop,
+            isActive = function() return autoActive end,
+        },
+    }
+end)()
+
+-- ============================================================
 --  MOVEMENT: DESYNC  (multiple spoof methods)
 --
 --  Shared frame pattern:
@@ -6161,6 +6382,10 @@ F.disableAll = function()
     if F.games.hoodCustoms.knifeBot then
         F.games.hoodCustoms.knifeBot.attach.stop()
         F.games.hoodCustoms.knifeBot.autoEquip.stop()
+    end
+    if F.games.mm2 then
+        F.games.mm2.identityEsp.stop()
+        F.games.mm2.autoPickupGun.stop()
     end
     if F.desync then F.desync.stop() end
     if F.pulseLagswitch then F.pulseLagswitch.stop() end
