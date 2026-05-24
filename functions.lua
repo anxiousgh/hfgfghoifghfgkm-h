@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.10"
+local SCRIPT_VERSION = "v1.0.11"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5631,35 +5631,57 @@ F.desync = (function()
     -- every Shoot fire, which stalled / crashed the engine when
     -- ForceHit's autoshoot fired many shots per second.
     --
-    -- Optional pre-window DELAY: wait SHOT_DELAY_MS after the click
-    -- before the sync window starts (i.e., delay how soon the void
-    -- spoof turns off). Default 0 = old behavior (immediate).
-    if not getgenv()._F_DESYNC_INPUT_HOOK then
-        getgenv()._F_DESYNC_INPUT_HOOK = true
-        UserInputService.InputBegan:Connect(function(input, gp)
-            if gp then return end
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-            local s = getgenv()._F_DESYNC_STATE
-            if not s or not s.active or s.mode ~= "voidspam" then return end
-            -- read the IIFE's current SHOT_SYNC_MS / SHOT_DELAY_MS via
-            -- getgenv shims. The IIFE writes these on init / setters.
-            local syncMs  = getgenv()._F_DESYNC_SHOT_SYNC_MS  or 100
-            local delayMs = getgenv()._F_DESYNC_SHOT_DELAY_MS or 0
-            if delayMs <= 0 then
-                getgenv()._F_DESYNC_SYNC_END = tick() + syncMs / 1000
-            else
-                -- defer the spoof-off by delayMs. Re-check mode after
-                -- the wait so a quick toggle-off doesn't accidentally
-                -- re-open the window.
-                task.delay(delayMs / 1000, function()
-                    local s2 = getgenv()._F_DESYNC_STATE
-                    if s2 and s2.active and s2.mode == "voidspam" then
-                        local syncMs2 = getgenv()._F_DESYNC_SHOT_SYNC_MS or 100
-                        getgenv()._F_DESYNC_SYNC_END = tick() + syncMs2 / 1000
-                    end
-                end)
-            end
-        end)
+    -- Trigger: knife SWING ANIMATION (not MouseButton1). Click-based
+    -- triggering doesn't account for ping — the actual server-side
+    -- hit registration lines up with the swing animation playing,
+    -- which already includes the round-trip latency. Watching the
+    -- Animator's AnimationPlayed event is the precise timing signal.
+    --
+    -- Optional DELAY ms: wait this long after the swing anim plays
+    -- before the sync window opens (the void spoof turns off). Then
+    -- SYNC_WINDOW ms later, the spoof resumes.
+    local KNIFE_SWING_ANIM_ID = "rbxassetid://15862130681"
+
+    local function _voidspamOpenSyncWindow()
+        local syncMs  = getgenv()._F_DESYNC_SHOT_SYNC_MS  or 100
+        local delayMs = getgenv()._F_DESYNC_SHOT_DELAY_MS or 0
+        if delayMs <= 0 then
+            getgenv()._F_DESYNC_SYNC_END = tick() + syncMs / 1000
+        else
+            task.delay(delayMs / 1000, function()
+                local s2 = getgenv()._F_DESYNC_STATE
+                if s2 and s2.active and s2.mode == "voidspam" then
+                    local syncMs2 = getgenv()._F_DESYNC_SHOT_SYNC_MS or 100
+                    getgenv()._F_DESYNC_SYNC_END = tick() + syncMs2 / 1000
+                end
+            end)
+        end
+    end
+
+    if not getgenv()._F_DESYNC_ANIM_HOOK then
+        getgenv()._F_DESYNC_ANIM_HOOK = true
+        local connByAnimator = setmetatable({}, { __mode = "k" })
+
+        local function hookAnimator(animator)
+            if not animator or connByAnimator[animator] then return end
+            connByAnimator[animator] = animator.AnimationPlayed:Connect(function(track)
+                local s = getgenv()._F_DESYNC_STATE
+                if not s or not s.active or s.mode ~= "voidspam" then return end
+                local a = track.Animation
+                if not a or a.AnimationId ~= KNIFE_SWING_ANIM_ID then return end
+                _voidspamOpenSyncWindow()
+            end)
+        end
+
+        local function hookChar(char)
+            if not char then return end
+            local hum = char:WaitForChild("Humanoid", 5); if not hum then return end
+            local animator = hum:WaitForChild("Animator", 5)
+            hookAnimator(animator)
+        end
+
+        if lplr.Character then hookChar(lplr.Character) end
+        lplr.CharacterAdded:Connect(hookChar)
     end
     -- mirror SHOT_SYNC_MS into getgenv so the input listener (which is
     -- pinned across reloads) sees the current value
@@ -5801,7 +5823,7 @@ F.desync = (function()
             VOID_MAX = math.max(VOID_MIN + 1, tonumber(maxV) or VOID_MAX)
         end,
         setShotSyncMs   = function(n)
-            SHOT_SYNC_MS = math.clamp(tonumber(n) or 100, 10, 1000)
+            SHOT_SYNC_MS = math.clamp(tonumber(n) or 50, 0, 100)
             getgenv()._F_DESYNC_SHOT_SYNC_MS = SHOT_SYNC_MS
         end,
         -- Delay between MouseButton1 click and when the void spoof
@@ -5809,7 +5831,7 @@ F.desync = (function()
         -- (original behavior). Higher values let the user fire
         -- while still spoofed, then drop to real position after N ms.
         setShotDelayMs  = function(n)
-            local v = math.clamp(tonumber(n) or 0, 0, 2000)
+            local v = math.clamp(tonumber(n) or 0, 0, 100)
             getgenv()._F_DESYNC_SHOT_DELAY_MS = v
         end,
         getShotDelayMs  = function()

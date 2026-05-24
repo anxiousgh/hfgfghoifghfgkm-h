@@ -1789,13 +1789,14 @@ do
     })
     HC:AddSlider("HCVoidspamShotSyncMs", {
         Text     = "Stab sync window (ms)",
-        Default  = 100, Min = 10, Max = 500, Rounding = 0,
+        Tooltip  = "How long the void spoof stays off after the swing animation triggers.",
+        Default  = 50, Min = 0, Max = 100, Rounding = 0,
         Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
     HC:AddSlider("HCVoidspamShotDelayMs", {
         Text     = "Delay (ms)",
-        Tooltip  = "Wait this long after clicking before the void spoof actually turns off. 0 = immediate.",
-        Default  = 0, Min = 0, Max = 2000, Rounding = 0,
+        Tooltip  = "Wait this long after the swing animation plays before the void spoof actually turns off. 0 = immediate.",
+        Default  = 0, Min = 0, Max = 100, Rounding = 0,
         Callback = function(v) F.desync.setShotDelayMs(v) end,
     })
     HC:AddToggle("HCKnifeAttach", { Text = "Attach to ragebot target",
