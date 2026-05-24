@@ -1,1 +1,11 @@
-
+{
+  "version": 1,
+  "users": [
+    {
+      "name": "anxiousgh",
+      "userId": 0,
+      "tier": "owner",
+      "note": "replace userId 0 with your real Roblox UserId"
+    }
+  ]
+}
