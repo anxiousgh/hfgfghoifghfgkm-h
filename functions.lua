@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.5"
+local SCRIPT_VERSION = "v1.0.6"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4601,35 +4601,30 @@ end)()
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
     -- ============================================================
-    -- HC godmode = VOID THE SPECIALPART LIMB HITBOXES.
+    -- HC godmode = VOID THE SPECIALPART LIMB HITBOXES (welds broken).
     --
-    -- Critical observation from the char dump: HC has a
-    -- 'SpecialParts/' folder containing a welded MeshPart duplicate
-    -- of every body part. Those SpecialParts are the surfaces HC's
-    -- hit-detection raycasts against. They're invisible
-    -- (Transparency=1, CanCollide=false) — pure hitbox proxies.
+    -- HC's SpecialParts each have a Weld[Part0=<real limb>,
+    -- Part1=<SpecialPart>]. Just anchoring the SpecialPart and
+    -- moving it to void doesn't work: the weld is a kinematic
+    -- constraint, and with Part1 anchored + Part0 unanchored, the
+    -- engine tries to keep them at the original offset by pulling
+    -- the UNANCHORED side (Part0 = real limb) toward the anchored
+    -- side (Part1 in the void). The real limb is in the rig
+    -- assembly so the whole character gets flung.
     --
-    -- The previous void-CFrame attempt wrote to the REAL limb
-    -- MeshParts. That moved HRP, torso, and head with the limb
-    -- because Roblox propagates a write to ANY unanchored part in
-    -- an assembly to the whole welded/jointed assembly. Result:
-    -- the user's whole character was teleporting around, not just
-    -- the limbs.
+    -- Fix: BREAK every weld inside each SpecialPart first
+    -- (Part0=nil) so the constraint can't pull anything. Then
+    -- anchor and CFrame the SpecialPart freely. On toggle off:
+    -- restore the weld's Part0 and unanchor — weld will snap the
+    -- SpecialPart back to the real limb instantly.
     --
-    -- Fix: write to the SpecialPart limbs, NOT the real limbs.
-    -- SpecialParts are separate parts welded to real limbs. We:
-    --   1. Anchor each SpecialPart limb. Anchored parts ignore
-    --      welds, so they don't get dragged back to the real limb.
-    --   2. Each Heartbeat, write a random void CFrame. Only the
-    --      SpecialPart moves — real limbs / torso / head / HRP
-    --      are completely untouched.
-    --   3. On toggle off, unanchor. The weld snaps the SpecialPart
-    --      back to its real-limb position automatically.
+    -- Real limbs / HRP / torso / head — all completely untouched.
+    -- HC raycasts hit a void-anchored hitbox → misses every shot
+    -- to a limb.
     --
-    -- Movement, animation, camera, replication of the visible
-    -- character — all 100% untouched. Only the invisible hitbox
-    -- proxies move. HC's hit detection raycasts against parts at
-    -- Y=±20000 → misses every shot to a limb.
+    -- Heartbeat re-asserts state (re-breaks welds, re-anchors,
+    -- writes new random void CFrame) in case HC's anti-cheat or
+    -- animation system restores any of it.
     -- ============================================================
     local LIMB_NAMES = {
         LeftHand = true,     RightHand = true,
@@ -4642,8 +4637,9 @@ F.games.hoodCustoms.godmode = (function()
     local VOID_MIN = 5000
     local VOID_MAX = 20000
 
-    local savedAnchor = {}  -- [SpecialPart] = bool (was anchored before)
-    local cached      = {}  -- list of SpecialPart limb refs
+    local savedParts = {}  -- [SpecialPart] = wasAnchored
+    local savedWelds = {}  -- [Weld]        = { part0, part1 }
+    local cached     = {}  -- list of SpecialPart limbs
     local hbConn, charConn
 
     local function findSpecialLimbs(char)
@@ -4666,29 +4662,46 @@ F.games.hoodCustoms.godmode = (function()
         return CFrame.new(axis(), axis(), axis())
     end
 
+    local function breakAndAnchorAll()
+        for _, p in ipairs(cached) do
+            if not p.Parent then continue end
+            -- (1) break every weld inside this SpecialPart so it
+            --     can't pull the real limb when we move the
+            --     SpecialPart into the void.
+            for _, w in ipairs(p:GetChildren()) do
+                if w:IsA("Weld") or w:IsA("WeldConstraint") then
+                    if savedWelds[w] == nil then
+                        savedWelds[w] = { part0 = w.Part0, part1 = w.Part1 }
+                    end
+                    if w.Part0 ~= nil then
+                        pcall(function() w.Part0 = nil end)
+                    end
+                end
+            end
+            -- (2) anchor so subsequent CFrame writes stick and
+            --     residual physics can't drift the SpecialPart back.
+            if savedParts[p] == nil then savedParts[p] = p.Anchored end
+            if not p.Anchored then
+                pcall(function() p.Anchored = true end)
+            end
+        end
+    end
+
     local function bind()
         if hbConn then hbConn:Disconnect() end
         findSpecialLimbs(lplr.Character)
-        -- Anchor each SpecialPart up-front so subsequent CFrame writes
-        -- don't get dragged back by the weld to the real limb.
-        for _, p in ipairs(cached) do
-            if savedAnchor[p] == nil then savedAnchor[p] = p.Anchored end
-            if not p.Anchored then pcall(function() p.Anchored = true end) end
-        end
+        breakAndAnchorAll()
         hbConn = RunService.Heartbeat:Connect(function()
             if not G.hcGmActive then return end
+            -- re-find / re-break if character was replaced
             if not cached[1] or not cached[1].Parent then
                 findSpecialLimbs(lplr.Character)
-                for _, p in ipairs(cached) do
-                    if savedAnchor[p] == nil then savedAnchor[p] = p.Anchored end
-                    if not p.Anchored then pcall(function() p.Anchored = true end) end
-                end
+                breakAndAnchorAll()
             end
+            -- random void CFrame each frame so anti-cheats that
+            -- key on static hitbox positions don't pin on us.
             for _, p in ipairs(cached) do
                 if p.Parent then
-                    -- write a fresh random void position each frame so
-                    -- anti-cheats that detect static hitboxes don't pin
-                    -- on a constant location.
                     pcall(function() p.CFrame = randVoidPos() end)
                 end
             end
@@ -4696,13 +4709,25 @@ F.games.hoodCustoms.godmode = (function()
     end
 
     local function restoreAll()
-        for p, wasAnchored in pairs(savedAnchor) do
+        -- Restore welds first so when we unanchor the SpecialPart,
+        -- the weld immediately snaps it back to the real limb's
+        -- position (instead of leaving it dangling at void).
+        for w, s in pairs(savedWelds) do
+            if w.Parent then
+                pcall(function()
+                    w.Part0 = s.part0
+                    w.Part1 = s.part1
+                end)
+            end
+        end
+        for p, wasAnchored in pairs(savedParts) do
             if p.Parent then
                 pcall(function() p.Anchored = wasAnchored end)
             end
         end
-        savedAnchor = {}
-        cached      = {}
+        savedParts = {}
+        savedWelds = {}
+        cached     = {}
     end
 
     return makeToggle(
@@ -4712,8 +4737,7 @@ F.games.hoodCustoms.godmode = (function()
             if charConn then charConn:Disconnect() end
             charConn = lplr.CharacterAdded:Connect(function()
                 if not G.hcGmActive then return end
-                savedAnchor = {}
-                cached      = {}
+                savedParts = {}; savedWelds = {}; cached = {}
                 task.wait(0.5)  -- let HC build SpecialParts after spawn
                 bind()
             end)
