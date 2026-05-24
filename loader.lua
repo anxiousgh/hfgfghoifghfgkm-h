@@ -1151,7 +1151,6 @@ do
     local Pulse = Tabs.Movement:AddRightGroupbox("Pulse lagswitch")
     Pulse:AddToggle("PulseLagswitch", { Text = "Enable",
         Default = false,
-        Tooltip = "Only desyncs character position. Chat / remotes / shots are unaffected.",
         Callback = function(v)
             if v then
                 local ok = F.pulseLagswitch.start()
@@ -1176,7 +1175,6 @@ do
     })
     Pulse:AddToggle("PulseLagswitchVisual", { Text = "Show server-position marker",
         Default = false,
-        Tooltip = "Lightweight neon marker (one Part + Highlight, no clone) shown at the position the server has stored for you during blocked phases. Visible through walls.",
         Callback = function(v) F.pulseLagswitch.setVisualEnabled(v) end,
     })
 end
@@ -1489,7 +1487,6 @@ do
     local Emotes = Tabs.Misc:AddLeftGroupbox("Sticky emotes")
     Emotes:AddToggle("StickyEmote", { Text = "Keep emotes playing through movement",
         Default = false,
-        Tooltip = "Type /e stop or /emote stop in chat to stop the current emote.",
         Callback = function(v)
             if v then F.stickyEmote.start() else F.stickyEmote.stop() end
         end,
@@ -1871,23 +1868,19 @@ do
     })
     HC:AddSlider("HCVoidspamShotDelayMs", {
         Text     = "Start at % of anim",
-        Tooltip  = "Within the swing animation, when does the void spoof go off? 40 = 40% of the way through. 0 = the instant the swing starts. 100 = at the end of the swing.",
         Default  = 40, Min = 0, Max = 100, Rounding = 0,
         Callback = function(v) F.desync.setShotDelayMs(v) end,
     })
     HC:AddSlider("HCVoidspamShotSyncMs", {
         Text     = "Post-anim duration (ms)",
-        Tooltip  = "How long the void spoof stays off AFTER the swing animation ends. Default 200 (0.2s).",
         Default  = 200, Min = 0, Max = 1000, Rounding = 0,
         Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
     HC:AddToggle("HCVoidspamSyncVisual", { Text = "Show sync window visualizer",
-        Tooltip  = "Show a red \"VULNERABLE\" banner at the top of the screen while the void spoof is currently OFF (sync window active).",
         Default  = false,
         Callback = function(v) F.desync.setSyncVisualEnabled(v) end,
     })
     HC:AddToggle("HCKnifeAttach", { Text = "Attach to ragebot target",
-        Tooltip  = "Snap HRP to the ragebot's current target each frame and auto-click on a loop. While on, ragebot autoshoot + force-hit are forcibly disabled so the knife is the only weapon firing. When you toggle this off, autoshoot/force-hit get restored to whatever state they were in before.",
         Default  = false,
         Callback = function(v)
             if v then
@@ -1924,12 +1917,10 @@ do
     })
     HC:AddSlider("HCKnifeClickInterval", {
         Text     = "Click interval (s)",
-        Tooltip  = "Seconds between auto-clicks. Default 0.6.",
         Default  = 0.6, Min = 0.05, Max = 5, Rounding = 2,
         Callback = function(v) F.games.hoodCustoms.knifeBot.attach.setClickInterval(v) end,
     })
     HC:AddToggle("HCKnifeOrbit", { Text = "Orbit target",
-        Tooltip  = "Rotate around the target while attached instead of staying behind them.",
         Default  = false,
         Callback = function(v) F.games.hoodCustoms.knifeBot.attach.setOrbit(v) end,
     })
@@ -1939,7 +1930,6 @@ do
         Callback = function(v) F.games.hoodCustoms.knifeBot.attach.setOrbitSpeed(v) end,
     })
     HC:AddToggle("HCKnifeAutoEquip", { Text = "Auto-equip [Knife]",
-        Tooltip  = "Equip the [Knife] tool from your backpack on toggle-on, on every respawn, and re-check every 0.2s.",
         Default  = false,
         Callback = function(v)
             if v then F.games.hoodCustoms.knifeBot.autoEquip.start()
@@ -1955,7 +1945,6 @@ do
 
         MM2:AddLabel("Identity ESP")
         MM2:AddToggle("MM2IdentityEsp", { Text = "Sheriff / Murderer labels",
-            Tooltip  = "Scans every other player's Backpack + Character for Gun/Knife tools and renders a label above their head. Gun -> Sheriff (blue), Knife -> Murderer (red).",
             Default  = false,
             Callback = function(v)
                 if v then F.games.mm2.identityEsp.start()
@@ -1967,27 +1956,29 @@ do
 
         MM2:AddLabel("Gun pickup")
         MM2:AddToggle("MM2DropEsp", { Text = "Dropped gun ESP",
-            Tooltip  = "Yellow Highlight + 'GUN' label above any 'GunDrop' part in the workspace. Auto-cleans when the drop disappears (picked up).",
             Default  = false,
             Callback = function(v)
                 if v then F.games.mm2.dropEsp.start()
                 else      F.games.mm2.dropEsp.stop() end
             end,
         })
+        local PICKUP_ERR = {
+            no_drop = "Can't pick up yet — Sheriff hasn't dropped the gun.",
+            no_hrp  = "Your character isn't loaded.",
+            -- "active" is silent — pickup is already in progress
+        }
+        local function tryPickupGun()
+            local ok, reason = F.games.mm2.pickupGun.fire()
+            if not ok and reason and PICKUP_ERR[reason] then
+                Library:Notify(PICKUP_ERR[reason], 3)
+            end
+        end
         MM2:AddLabel("Pickup gun key"):AddKeyPicker("MM2PickupGunKey", {
             Default = "G", Mode = "Hold", Text = "Pickup gun",
         })
-        -- Label-attached KeyPickers in this loader don't fire via the
-        -- picker's Callback — the codebase routes one-shot keybinds
-        -- through bindFireKey (see line ~46 + the InputBegan listener).
-        bindFireKey("MM2PickupGunKey", function()
-            F.games.mm2.pickupGun.fire()
-        end)
-        MM2:AddButton({ Text = "Pickup gun now", Func = function()
-            F.games.mm2.pickupGun.fire()
-        end })
+        bindFireKey("MM2PickupGunKey", tryPickupGun)
+        MM2:AddButton({ Text = "Pickup gun now", Func = tryPickupGun })
         MM2:AddToggle("MM2AutoPickupGun", { Text = "Auto pickup gun",
-            Tooltip  = "Polls every 0.5s for a 'GunDrop' part. When one exists, briefly desyncs your HRP to the drop position so the server-side proximity pickup triggers. Locally your character stays in place.",
             Default  = false,
             Callback = function(v)
                 if v then F.games.mm2.autoPickupGun.start()
@@ -1998,7 +1989,6 @@ do
         MM2:AddDivider()
         MM2:AddLabel("Invisible")
         MM2:AddToggle("MM2Invisible", { Text = "Invisible",
-            Tooltip  = "Server-only desync that TPs your character in a small jitter radius around a far-away cluster point. Cluster is far enough that you're not rendered for other players (effectively invisible) but tight enough that the per-tick motion doesn't read as 'warping' to anti-cheat. Mutually exclusive with the Movement-tab desync modes.",
             Default  = false,
             Callback = function(v)
                 if v then
@@ -2032,7 +2022,6 @@ do
         MM2:AddDivider()
         MM2:AddLabel("Murderer trigger")
         MM2:AddToggle("MM2TriggerMurderer", { Text = "Hover-fire on Murderer",
-            Tooltip  = "When your mouse hovers over the player identified as Murderer, automatically fire the nil-parented MM2 hit RemoteEvent with (theirHRP.CFrame, myHRP.CFrame). Throttled to ~2.5Hz so the remote doesn't get spammed.",
             Default  = false,
             Callback = function(v)
                 if v then F.games.mm2.triggerMurderer.start()

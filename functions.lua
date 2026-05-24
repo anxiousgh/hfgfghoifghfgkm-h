@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.2.8"
+local SCRIPT_VERSION = "v1.2.9"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5600,12 +5600,17 @@ F.games.mm2 = (function()
     local PICKUP_HOLD_MS = 100   -- ms to stay at the drop
     local pickupActive = false
 
+    -- Return values:
+    --   true                success — teleport in progress
+    --   false, "active"     a previous pickup is still mid-flight (silent)
+    --   false, "no_drop"    no GunDrop exists in the workspace (notify)
+    --   false, "no_hrp"     local character isn't loaded
     local function pickupOnce()
-        if pickupActive then return false end
-        local drop = findGunDrop(); if not drop then return false end
+        if pickupActive then return false, "active" end
+        local drop = findGunDrop(); if not drop then return false, "no_drop" end
         local char = lplr.Character
         local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp then return false end
+        if not hrp then return false, "no_hrp" end
 
         pickupActive = true
         local realCF = hrp.CFrame
