@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "2026-05-19 05:55 synth-v11 two-part V-shape"
+local SCRIPT_VERSION = "2026-05-24 plain pulse-lagswitch marker"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5833,21 +5833,21 @@ F.pulseLagswitch = (function()
         visualPart.CanQuery     = false
         visualPart.CastShadow   = false
         visualPart.Massless     = true
-        visualPart.Material     = Enum.Material.Neon
-        visualPart.Color        = Color3.fromRGB(0, 200, 255)
-        visualPart.Size         = Vector3.new(2, 5, 1)  -- rough humanoid silhouette
-        visualPart.Transparency = 1  -- starts hidden; turns on during blocked phases
+        visualPart.Material     = Enum.Material.SmoothPlastic  -- flat, no glow
+        visualPart.Color        = Color3.fromRGB(180, 180, 180) -- plain light gray
+        visualPart.Size         = Vector3.new(2, 5, 1)
+        visualPart.Transparency = 1  -- hidden until first blocked phase
         visualPart.Parent       = workspace
 
         visualHighlight = Instance.new("Highlight")
-        visualHighlight.FillColor        = Color3.fromRGB(0, 200, 255)
-        visualHighlight.OutlineColor     = Color3.fromRGB(255, 255, 255)
-        visualHighlight.FillTransparency = 0.4
-        visualHighlight.OutlineTransparency = 0
-        visualHighlight.DepthMode        = Enum.HighlightDepthMode.AlwaysOnTop
-        visualHighlight.Adornee          = visualPart
-        visualHighlight.Enabled          = false
-        visualHighlight.Parent           = visualPart
+        visualHighlight.FillColor           = Color3.fromRGB(160, 160, 160)
+        visualHighlight.OutlineColor        = Color3.fromRGB(40, 40, 40)
+        visualHighlight.FillTransparency    = 0.5
+        visualHighlight.OutlineTransparency = 0.2
+        visualHighlight.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
+        visualHighlight.Adornee             = visualPart
+        visualHighlight.Enabled             = false
+        visualHighlight.Parent              = visualPart
 
         if visualConn then visualConn:Disconnect() end
         visualConn = RunService.RenderStepped:Connect(function()
