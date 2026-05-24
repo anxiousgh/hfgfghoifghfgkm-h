@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.2"
+local SCRIPT_VERSION = "v1.0.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4601,43 +4601,35 @@ end)()
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
     -- ============================================================
-    -- HC godmode (rebuilt 2026-05-24 from character dump analysis):
+    -- HC godmode = PER-LIMB VOID CFRAME SPOOF.
     --
-    -- HC has a 'SpecialParts' Folder under the character with a
-    -- MeshPart duplicate of every body part, each welded to the real
-    -- part via Weld Part0=<real> Part1=<special>. These are HC's
-    -- HIT-DETECTION HITBOXES — raycasts target the SpecialParts,
-    -- not the visible limbs. There are also *Fake children inside
-    -- the real limbs (LeftLowerArmFake etc.) that act as extra
-    -- hitboxes for melee.
+    -- Same mechanism as F.desync's "void" mode applied per-limb
+    -- instead of to HRP. Mirrors void-desync exactly:
+    --   Heartbeat (post-physics):      save each limb's CFrame,
+    --                                  overwrite with a random void
+    --                                  position. Server's replication
+    --                                  tick captures the void.
+    --   BindToRenderStep at First (0): restore each limb's real
+    --                                  CFrame BEFORE the camera
+    --                                  samples positions. Locally
+    --                                  everything renders normally.
     --
-    -- The prior Motor6D-detach approach made the limbs wiggle
-    -- because HC also has a 'RagdollConstraints' folder with 14
-    -- BallSocketConstraints. The moment Motor6Ds break, those
-    -- constraints take over and ragdoll the limbs.
+    -- HC stores its hit-detection hitboxes in 'SpecialParts/' as
+    -- welded MeshPart duplicates (verified via char dump). We void
+    -- BOTH the real limbs AND the SpecialParts limbs so HC's
+    -- raycasts miss regardless of which set it targets.
     --
-    -- New strategy — DON'T touch Motor6Ds at all:
-    --   1. Hide the visible limb MeshParts (Transparency=1). They
-    --      "disappear" while staying attached to the rig.
-    --   2. Break each SpecialParts/<limb>/Weld (Part0=nil) and TP
-    --      that SpecialPart to Y=-50000. HC's raycasts now miss
-    --      because the hitbox is in the void.
-    --   3. Same treatment for the *Fake hitbox children of the
-    --      real limbs.
+    -- Movement / animation stay intact because no Motor6D is
+    -- touched, no joint is broken, no transparency is changed.
+    -- The local restore at RenderStep First puts every limb back
+    -- to its real CFrame before the camera renders, so visually
+    -- the rig looks completely normal.
     --
-    -- Movement stays fully intact because every Motor6D is
-    -- untouched and RagdollConstraints never activate (no broken
-    -- Motor6D to react to).
-    --
-    -- Heartbeat re-asserts state in case HC's anti-cheat restores
-    -- a weld or re-positions a SpecialPart. Snapshot-based restore
-    -- on toggle off.
-    --
-    -- SpecialParts NOT touched (so torso/head still hittable —
-    -- this is limb-only godmode by design, matching the user's
-    -- description "detaches all the limbs from my body"):
-    --   HumanoidRootPart, UpperTorso, LowerTorso, Head,
-    --   BUBBLE_CHAT_PART
+    -- The earlier limb-void attempt restored via RenderStepped:
+    -- Connect (priority Last/2000) instead of BindToRenderStep at
+    -- First (0). That ran after the camera + character render
+    -- steps, too late to stabilize the local rig. This version
+    -- uses First, same as F.desync, so the restore wins the race.
     -- ============================================================
     local LIMB_NAMES = {
         LeftHand = true,     RightHand = true,
@@ -4647,113 +4639,96 @@ F.games.hoodCustoms.godmode = (function()
         LeftLowerLeg = true, RightLowerLeg = true,
         LeftUpperLeg = true, RightUpperLeg = true,
     }
-    local VOID = CFrame.new(0, -50000, 0)
+    local RESTORE_BIND = "_F_HC_GM_RESTORE"
+    local VOID_MIN = 5000
+    local VOID_MAX = 20000
 
-    local savedParts = {}  -- [BasePart] = { transparency, anchored, cancollide }
-    local savedWelds = {}  -- [Weld]     = { part0, part1 }
+    local cached  = {}   -- list of BasePart refs (real limbs + SpecialPart limbs)
+    local realCFs = {}   -- [BasePart] = CFrame captured this Heartbeat
     local hbConn, charConn
 
-    local function savePart(p)
-        if savedParts[p] then return end
-        savedParts[p] = {
-            transparency = p.Transparency,
-            anchored     = p.Anchored,
-            cancollide   = p.CanCollide,
-        }
-    end
-    local function saveWeld(w)
-        if savedWelds[w] then return end
-        savedWelds[w] = { part0 = w.Part0, part1 = w.Part1 }
-    end
-    local function hideLimb(p)
-        savePart(p)
-        if p.Transparency ~= 1 then pcall(function() p.Transparency = 1 end) end
-        if p.CanCollide        then pcall(function() p.CanCollide   = false end) end
-    end
-    local function voidPart(p)
-        savePart(p)
-        if not p.Anchored        then pcall(function() p.Anchored = true end) end
-        if p.Position.Y > -10000 then pcall(function() p.CFrame   = VOID end) end
-    end
-    local function breakWelds(p)
-        for _, w in ipairs(p:GetChildren()) do
-            if w:IsA("Weld") or w:IsA("WeldConstraint") then
-                saveWeld(w)
-                if w.Part0 ~= nil then pcall(function() w.Part0 = nil end) end
-            end
-        end
-    end
-
-    local function processChar(char)
+    local function findLimbs(char)
+        cached = {}
         if not char then return end
-        -- (1) hide visible limb MeshParts + break/void any *Fake hitboxes
         for _, p in ipairs(char:GetChildren()) do
             if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
-                hideLimb(p)
-                for _, sub in ipairs(p:GetDescendants()) do
-                    if sub:IsA("BasePart") and sub.Name:match("Fake$") then
-                        hideLimb(sub)
-                        breakWelds(sub)
-                        voidPart(sub)
-                    end
-                end
+                table.insert(cached, p)
             end
         end
-        -- (2) break SpecialParts limb welds + void those SpecialParts
         local sp = char:FindFirstChild("SpecialParts")
         if sp then
             for _, p in ipairs(sp:GetChildren()) do
                 if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
-                    breakWelds(p)
-                    voidPart(p)
+                    table.insert(cached, p)
                 end
             end
         end
     end
 
-    local function restoreChar()
-        for w, s in pairs(savedWelds) do
-            if w.Parent then
-                pcall(function()
-                    w.Part0 = s.part0
-                    w.Part1 = s.part1
-                end)
-            end
+    local function randVoidPos()
+        local function axis()
+            local m = VOID_MIN + math.random() * (VOID_MAX - VOID_MIN)
+            return (math.random() < 0.5) and -m or m
         end
-        for p, s in pairs(savedParts) do
-            if p.Parent then
-                pcall(function()
-                    p.Transparency = s.transparency
-                    p.Anchored     = s.anchored
-                    p.CanCollide   = s.cancollide
-                end)
+        return CFrame.new(axis(), axis(), axis())
+    end
+
+    local function bind()
+        if hbConn then hbConn:Disconnect() end
+        pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
+        findLimbs(lplr.Character)
+
+        hbConn = RunService.Heartbeat:Connect(function()
+            if not G.hcGmActive then return end
+            if not cached[1] or not cached[1].Parent then
+                findLimbs(lplr.Character)
             end
-        end
-        savedParts, savedWelds = {}, {}
+            for _, p in ipairs(cached) do
+                if p.Parent then
+                    realCFs[p] = p.CFrame
+                    pcall(function() p.CFrame = randVoidPos() end)
+                end
+            end
+        end)
+
+        RunService:BindToRenderStep(
+            RESTORE_BIND, Enum.RenderPriority.First.Value,
+            function()
+                if not G.hcGmActive then return end
+                for p, cf in pairs(realCFs) do
+                    if p.Parent then
+                        pcall(function() p.CFrame = cf end)
+                    end
+                end
+            end
+        )
     end
 
     return makeToggle(
         function()
             G.hcGmActive = true
-            processChar(lplr.Character)
-            if hbConn then hbConn:Disconnect() end
-            hbConn = RunService.Heartbeat:Connect(function()
-                if not G.hcGmActive then return end
-                processChar(lplr.Character)
-            end)
+            bind()
             if charConn then charConn:Disconnect() end
-            charConn = lplr.CharacterAdded:Connect(function(c)
+            charConn = lplr.CharacterAdded:Connect(function()
                 if not G.hcGmActive then return end
-                savedParts, savedWelds = {}, {}
+                realCFs = {}
+                cached  = {}
                 task.wait(0.5)  -- let HC build SpecialParts after spawn
-                processChar(c)
+                bind()
             end)
         end,
         function()
             G.hcGmActive = false
             if hbConn   then hbConn:Disconnect();   hbConn   = nil end
             if charConn then charConn:Disconnect(); charConn = nil end
-            restoreChar()
+            pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
+            -- final restore in case toggled off between Heartbeat (write
+            -- void) and the next RenderStep First (restore real)
+            for p, cf in pairs(realCFs) do
+                if p.Parent then pcall(function() p.CFrame = cf end) end
+            end
+            realCFs = {}
+            cached  = {}
         end,
         "hcGmActive"
     )
