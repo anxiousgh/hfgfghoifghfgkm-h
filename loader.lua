@@ -1047,7 +1047,7 @@ do
 
     local DESYNC_KEYS = {
         "DesyncVoid", "DesyncSky", "DesyncSpin", "DesyncVelocity",
-        "DesyncRaknet", "DesyncInvisible", "HCVoidspam",
+        "DesyncRaknet", "HCVoidspam", "MM2Invisible",
     }
     local function selectMode(name)
         for _, k in ipairs(DESYNC_KEYS) do
@@ -1086,19 +1086,6 @@ do
             if v then selectMode("DesyncVelocity"); F.desync.startVelocity()
             else      F.desync.stop() end
         end,
-    })
-    Desync:AddToggle("DesyncInvisible", { Text = "Invisible",
-        Tooltip  = "Server-only desync that TPs the character in a small jitter radius around a far-away cluster point. Cluster is far enough that you're not rendered for other players (effectively invisible) but tight enough that the per-tick motion doesn't read as 'warping' to server anti-cheat.",
-        Default  = false,
-        Callback = function(v)
-            if v then selectMode("DesyncInvisible"); F.desync.startInvisible()
-            else      F.desync.stop() end
-        end,
-    })
-    Desync:AddSlider("DesyncInvisibleRadius", {
-        Text     = "Invisible jitter radius (studs)",
-        Default  = 25, Min = 0, Max = 500, Rounding = 0,
-        Callback = function(v) F.desync.setInvisibleRadius(v) end,
     })
 
     -- Raknet desync: requires the executor to expose `raknet`. Always
@@ -2006,6 +1993,27 @@ do
                 if v then F.games.mm2.autoPickupGun.start()
                 else      F.games.mm2.autoPickupGun.stop() end
             end,
+        })
+
+        MM2:AddDivider()
+        MM2:AddLabel("Invisible")
+        MM2:AddToggle("MM2Invisible", { Text = "Invisible",
+            Tooltip  = "Server-only desync that TPs your character in a small jitter radius around a far-away cluster point. Cluster is far enough that you're not rendered for other players (effectively invisible) but tight enough that the per-tick motion doesn't read as 'warping' to anti-cheat. Mutually exclusive with the Movement-tab desync modes.",
+            Default  = false,
+            Callback = function(v)
+                if v then
+                    local sel = getgenv()._F_DESYNC_SELECT
+                    if sel then sel("MM2Invisible") end
+                    F.desync.startInvisible()
+                else
+                    F.desync.stop()
+                end
+            end,
+        })
+        MM2:AddSlider("MM2InvisibleRadius", {
+            Text     = "Invisible jitter radius (studs)",
+            Default  = 25, Min = 0, Max = 500, Rounding = 0,
+            Callback = function(v) F.desync.setInvisibleRadius(v) end,
         })
 
         MM2:AddDivider()
