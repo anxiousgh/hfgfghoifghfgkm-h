@@ -1713,12 +1713,9 @@ do
         Default  = 0.20, Min = 0, Max = 2, Rounding = 2,
         Callback = function(v) F.games.hoodCustoms.forceHit.setCooldown(v) end,
     })
-    HC:AddDropdown("HCForceHitShotgunMode", {
-        Text     = "Shotgun mode",
-        Values   = { "click", "synth" },
-        Default  = "click",
-        Callback = function(v) F.games.hoodCustoms.forceHit.setShotgunMode(v) end,
-    })
+    -- Shotgun mode dropdown removed — forceHit always uses synth
+    -- (direct FireServer with the canonical HC Shoot payload).
+
     -- Tracer + hit sound. FireServer doesn't render bullet visuals
     -- because we never go through the gun script, so we fake them
     -- locally for visual + audio feedback on each forced hit.

@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.3"
+local SCRIPT_VERSION = "v1.0.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4601,35 +4601,35 @@ end)()
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
     -- ============================================================
-    -- HC godmode = PER-LIMB VOID CFRAME SPOOF.
+    -- HC godmode = VOID THE SPECIALPART LIMB HITBOXES.
     --
-    -- Same mechanism as F.desync's "void" mode applied per-limb
-    -- instead of to HRP. Mirrors void-desync exactly:
-    --   Heartbeat (post-physics):      save each limb's CFrame,
-    --                                  overwrite with a random void
-    --                                  position. Server's replication
-    --                                  tick captures the void.
-    --   BindToRenderStep at First (0): restore each limb's real
-    --                                  CFrame BEFORE the camera
-    --                                  samples positions. Locally
-    --                                  everything renders normally.
+    -- Critical observation from the char dump: HC has a
+    -- 'SpecialParts/' folder containing a welded MeshPart duplicate
+    -- of every body part. Those SpecialParts are the surfaces HC's
+    -- hit-detection raycasts against. They're invisible
+    -- (Transparency=1, CanCollide=false) — pure hitbox proxies.
     --
-    -- HC stores its hit-detection hitboxes in 'SpecialParts/' as
-    -- welded MeshPart duplicates (verified via char dump). We void
-    -- BOTH the real limbs AND the SpecialParts limbs so HC's
-    -- raycasts miss regardless of which set it targets.
+    -- The previous void-CFrame attempt wrote to the REAL limb
+    -- MeshParts. That moved HRP, torso, and head with the limb
+    -- because Roblox propagates a write to ANY unanchored part in
+    -- an assembly to the whole welded/jointed assembly. Result:
+    -- the user's whole character was teleporting around, not just
+    -- the limbs.
     --
-    -- Movement / animation stay intact because no Motor6D is
-    -- touched, no joint is broken, no transparency is changed.
-    -- The local restore at RenderStep First puts every limb back
-    -- to its real CFrame before the camera renders, so visually
-    -- the rig looks completely normal.
+    -- Fix: write to the SpecialPart limbs, NOT the real limbs.
+    -- SpecialParts are separate parts welded to real limbs. We:
+    --   1. Anchor each SpecialPart limb. Anchored parts ignore
+    --      welds, so they don't get dragged back to the real limb.
+    --   2. Each Heartbeat, write a random void CFrame. Only the
+    --      SpecialPart moves — real limbs / torso / head / HRP
+    --      are completely untouched.
+    --   3. On toggle off, unanchor. The weld snaps the SpecialPart
+    --      back to its real-limb position automatically.
     --
-    -- The earlier limb-void attempt restored via RenderStepped:
-    -- Connect (priority Last/2000) instead of BindToRenderStep at
-    -- First (0). That ran after the camera + character render
-    -- steps, too late to stabilize the local rig. This version
-    -- uses First, same as F.desync, so the restore wins the race.
+    -- Movement, animation, camera, replication of the visible
+    -- character — all 100% untouched. Only the invisible hitbox
+    -- proxies move. HC's hit detection raycasts against parts at
+    -- Y=±20000 → misses every shot to a limb.
     -- ============================================================
     local LIMB_NAMES = {
         LeftHand = true,     RightHand = true,
@@ -4639,28 +4639,21 @@ F.games.hoodCustoms.godmode = (function()
         LeftLowerLeg = true, RightLowerLeg = true,
         LeftUpperLeg = true, RightUpperLeg = true,
     }
-    local RESTORE_BIND = "_F_HC_GM_RESTORE"
     local VOID_MIN = 5000
     local VOID_MAX = 20000
 
-    local cached  = {}   -- list of BasePart refs (real limbs + SpecialPart limbs)
-    local realCFs = {}   -- [BasePart] = CFrame captured this Heartbeat
+    local savedAnchor = {}  -- [SpecialPart] = bool (was anchored before)
+    local cached      = {}  -- list of SpecialPart limb refs
     local hbConn, charConn
 
-    local function findLimbs(char)
+    local function findSpecialLimbs(char)
         cached = {}
         if not char then return end
-        for _, p in ipairs(char:GetChildren()) do
+        local sp = char:FindFirstChild("SpecialParts")
+        if not sp then return end
+        for _, p in ipairs(sp:GetChildren()) do
             if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
                 table.insert(cached, p)
-            end
-        end
-        local sp = char:FindFirstChild("SpecialParts")
-        if sp then
-            for _, p in ipairs(sp:GetChildren()) do
-                if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
-                    table.insert(cached, p)
-                end
             end
         end
     end
@@ -4675,33 +4668,41 @@ F.games.hoodCustoms.godmode = (function()
 
     local function bind()
         if hbConn then hbConn:Disconnect() end
-        pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
-        findLimbs(lplr.Character)
-
+        findSpecialLimbs(lplr.Character)
+        -- Anchor each SpecialPart up-front so subsequent CFrame writes
+        -- don't get dragged back by the weld to the real limb.
+        for _, p in ipairs(cached) do
+            if savedAnchor[p] == nil then savedAnchor[p] = p.Anchored end
+            if not p.Anchored then pcall(function() p.Anchored = true end) end
+        end
         hbConn = RunService.Heartbeat:Connect(function()
             if not G.hcGmActive then return end
             if not cached[1] or not cached[1].Parent then
-                findLimbs(lplr.Character)
+                findSpecialLimbs(lplr.Character)
+                for _, p in ipairs(cached) do
+                    if savedAnchor[p] == nil then savedAnchor[p] = p.Anchored end
+                    if not p.Anchored then pcall(function() p.Anchored = true end) end
+                end
             end
             for _, p in ipairs(cached) do
                 if p.Parent then
-                    realCFs[p] = p.CFrame
+                    -- write a fresh random void position each frame so
+                    -- anti-cheats that detect static hitboxes don't pin
+                    -- on a constant location.
                     pcall(function() p.CFrame = randVoidPos() end)
                 end
             end
         end)
+    end
 
-        RunService:BindToRenderStep(
-            RESTORE_BIND, Enum.RenderPriority.First.Value,
-            function()
-                if not G.hcGmActive then return end
-                for p, cf in pairs(realCFs) do
-                    if p.Parent then
-                        pcall(function() p.CFrame = cf end)
-                    end
-                end
+    local function restoreAll()
+        for p, wasAnchored in pairs(savedAnchor) do
+            if p.Parent then
+                pcall(function() p.Anchored = wasAnchored end)
             end
-        )
+        end
+        savedAnchor = {}
+        cached      = {}
     end
 
     return makeToggle(
@@ -4711,8 +4712,8 @@ F.games.hoodCustoms.godmode = (function()
             if charConn then charConn:Disconnect() end
             charConn = lplr.CharacterAdded:Connect(function()
                 if not G.hcGmActive then return end
-                realCFs = {}
-                cached  = {}
+                savedAnchor = {}
+                cached      = {}
                 task.wait(0.5)  -- let HC build SpecialParts after spawn
                 bind()
             end)
@@ -4721,14 +4722,7 @@ F.games.hoodCustoms.godmode = (function()
             G.hcGmActive = false
             if hbConn   then hbConn:Disconnect();   hbConn   = nil end
             if charConn then charConn:Disconnect(); charConn = nil end
-            pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
-            -- final restore in case toggled off between Heartbeat (write
-            -- void) and the next RenderStep First (restore real)
-            for p, cf in pairs(realCFs) do
-                if p.Parent then pcall(function() p.CFrame = cf end) end
-            end
-            realCFs = {}
-            cached  = {}
+            restoreAll()
         end,
         "hcGmActive"
     )
@@ -4786,7 +4780,10 @@ F.games.hoodCustoms.forceHit = (function()
     --   "synth"   -> synthesize a 2-section payload (WIP - tries to bypass
     --                the per-shot PRNG check). 2 stacked clusters ~3 studs
     --                apart, sub-stud anti-zero-spread jitter inside each.
-    local shotgunMode     = "click"
+    -- shotgunMode used to be "click" vs "synth"; click let the gun's own
+    -- script fire via VirtualInputManager. Removed entirely per user
+    -- request — fireShoot (the synth path) is the only path now since
+    -- the canonical HC Shoot payload it sends doesn't kick.
 
     -- visual / audio feedback (FireServer doesn't render bullet visuals
     -- because we never hit the gun script, so we fake them locally)
@@ -4916,14 +4913,6 @@ F.games.hoodCustoms.forceHit = (function()
     -- Legacy single-shot wrapper kept for non-shotgun call sites
     local function fireDirect(part)
         return fireShoot(part, 1)
-    end
-
-    -- shotgun path: VIM click fires the gun natively (silent aim handles aim)
-    local function fireClick()
-        pcall(function()
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true,  game, 0)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-        end)
     end
 
     -- Resolve the gun's actual muzzle position. HC's anti-cheat compares
@@ -5114,24 +5103,14 @@ F.games.hoodCustoms.forceHit = (function()
 
         local fired = false
         if shotgun then
-            if shotgunMode == "synth" then
-                if fireShotgunSynth(part, pellets) then fired = true end
-            else
-                fireClick()
-                fired = true
-            end
+            if fireShotgunSynth(part, pellets) then fired = true end
         else
             if fireDirect(part) then fired = true end
         end
 
         if fired then
             lastFire = tick()
-            -- skip the fake tracer for the click-fire path: the gun renders
-            -- its own native tracers and ours would just be a duplicate
-            local skipTracer = shotgun and shotgunMode == "click"
-            if origin and not skipTracer then
-                spawnTracer(origin, part.Position)
-            end
+            if origin then spawnTracer(origin, part.Position) end
             playHitSound()
         end
     end
@@ -5155,10 +5134,11 @@ F.games.hoodCustoms.forceHit = (function()
     t.setHitPart    = function(name) hitPartName = name or "Head" end
     t.getHitPart    = function() return hitPartName end
     t.setCooldown   = function(n) cooldown = math.max(0, tonumber(n) or 0.2) end
-    t.setShotgunMode = function(m)
-        if m == "synth" or m == "click" then shotgunMode = m end
-    end
-    t.getShotgunMode = function() return shotgunMode end
+    -- setShotgunMode / getShotgunMode removed — there's only one path now
+    -- (synth, the canonical-payload direct FireServer). Kept as no-op
+    -- stubs so the loader doesn't crash if it still tries to call them.
+    t.setShotgunMode = function() end
+    t.getShotgunMode = function() return "synth" end
     -- tracer + hit sound
     t.setTracerEnabled  = function(v) tracerEnabled = v == true end
     t.setTracerColor    = function(c) if typeof(c) == "Color3" then tracerColor = c end end
