@@ -1872,8 +1872,8 @@ do
         Callback = function(v) F.desync.setShotDelayMs(v) end,
     })
     HC:AddSlider("HCVoidspamShotSyncMs", {
-        Text     = "Post-anim duration (ms)",
-        Default  = 200, Min = 0, Max = 1000, Rounding = 0,
+        Text     = "End at % of anim",
+        Default  = 90, Min = 0, Max = 100, Rounding = 0,
         Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
     HC:AddToggle("HCVoidspamSyncVisual", { Text = "Show sync window visualizer",

@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.4"
+local SCRIPT_VERSION = "v1.3.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6254,34 +6254,33 @@ F.desync = (function()
     -- hit registration lines up with the swing animation playing,
     -- which already includes the round-trip latency.
     --
-    -- Sync window is computed from the track's Length:
+    -- Sync window is a sub-range of the swing animation:
     --   off-from  = anim_start + (START_FRAC * length)
-    --   off-until = anim_start + length + POST_MS / 1000
+    --   off-until = anim_start + (END_FRAC   * length)
     --
     --   START_FRAC = _F_DESYNC_SHOT_DELAY_MS / 100  (% of anim,
-    --                so the existing 0-100 slider doubles as the
-    --                start-fraction control)
-    --   POST_MS    = _F_DESYNC_SHOT_SYNC_MS  (ms after anim ends
-    --                that the spoof stays off; the existing sync
-    --                window slider, 90-200ms)
+    --                "Start at % of anim" slider, default 40)
+    --   END_FRAC   = _F_DESYNC_SHOT_SYNC_MS  / 100  (% of anim,
+    --                "End at % of anim"   slider, default 90)
     --
-    -- Example: anim length 0.5s, start frac 0.4, post 0.2s
-    --   off from t=0.2s to t=0.7s (relative to anim start)
+    -- Example: anim length 0.5s, start 40%, end 90%
+    --   off from t=0.20s to t=0.45s (relative to anim start)
     local KNIFE_SWING_ANIM_ID = "rbxassetid://15862130681"
 
     local function _voidspamArmFromAnim(track)
         local L = track.Length
         if not L or L <= 0 then
-            -- Length isn't published yet (e.g., first play). Fall back
-            -- to assuming a 0.5s anim - the post-anim ms still adds on
-            -- top so the spoof stays off long enough either way.
+            -- Length isn't published yet (e.g., first play). Fall
+            -- back to assuming a 0.5s anim.
             L = 0.5
         end
         local startFrac = (getgenv()._F_DESYNC_SHOT_DELAY_MS or 40) / 100
-        local postMs    = getgenv()._F_DESYNC_SHOT_SYNC_MS  or 200
+        local endFrac   = (getgenv()._F_DESYNC_SHOT_SYNC_MS  or 90) / 100
         startFrac = math.clamp(startFrac, 0, 1)
+        endFrac   = math.clamp(endFrac,   0, 1)
+        if endFrac < startFrac then endFrac = startFrac end  -- guard
         local startAt = startFrac * L            -- seconds from anim start
-        local endAt   = L + postMs / 1000        -- seconds from anim start
+        local endAt   = endFrac   * L            -- seconds from anim start
         local hold    = math.max(0, endAt - startAt)
 
         task.delay(startAt, function()
@@ -6533,10 +6532,10 @@ F.desync = (function()
             INVIS_RADIUS = math.clamp(tonumber(n) or 25, 0, 500)
         end,
         getInvisibleRadius = function() return INVIS_RADIUS end,
-        -- Now interpreted as "post-animation duration (ms)" - how
-        -- long the spoof stays off after the swing animation ends.
+        -- Now interpreted as "End at % of anim" - the percentage
+        -- of the swing animation where the spoof-off window closes.
         setShotSyncMs   = function(n)
-            SHOT_SYNC_MS = math.clamp(tonumber(n) or 200, 0, 1000)
+            SHOT_SYNC_MS = math.clamp(tonumber(n) or 90, 0, 100)
             getgenv()._F_DESYNC_SHOT_SYNC_MS = SHOT_SYNC_MS
         end,
         -- Delay between MouseButton1 click and when the void spoof
