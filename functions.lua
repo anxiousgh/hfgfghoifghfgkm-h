@@ -5506,7 +5506,6 @@ F.desync = (function()
     end
 
     local function stopAll()
-        local wasRaknet = (mode == "raknet")
         active = false
         SHARED.active = false
         SHARED.mode   = "off"
@@ -5514,14 +5513,13 @@ F.desync = (function()
         getgenv()._F_DESYNC_SYNC_END      = 0
         -- always remove the ghost on any stop (cheap if it doesn't exist)
         ghostRemove()
-        -- if we were in raknet mode and the executor supports it, try
-        -- removing the send hook for cleanliness
-        if wasRaknet then
-            local r = findRaknet()
-            if r and r.remove_send_hook and getgenv()._F_DESYNC_RAKNET_FN then
-                pcall(function() r.remove_send_hook(getgenv()._F_DESYNC_RAKNET_FN) end)
-            end
-        end
+        -- We intentionally DO NOT call r.remove_send_hook here. The hook
+        -- function early-returns when SHARED.active is false or mode is
+        -- not "raknet", so leaving it registered is harmless. Removing
+        -- it left _F_DESYNC_RAKNET_INSTALLED == true, so the next
+        -- ensureRaknetHook() call skipped re-install and we'd wait up
+        -- to 10s for the watchdog re-installer to put it back. That's
+        -- the "takes a while to turn on again" lag the user reported.
         if hbConn then hbConn:Disconnect(); hbConn = nil end
         pcall(function() RunService:UnbindFromRenderStep(RESTORE_BIND) end)
         local c = lplr.Character
