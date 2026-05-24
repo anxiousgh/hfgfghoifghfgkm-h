@@ -1769,12 +1769,13 @@ do
 
     HC:AddDivider()
 
-    -- Voidspam lives here (not in Movement -> Desync) because it hooks
-    -- the HC-specific MainEvent("Shoot") remote. Mutually exclusive with
-    -- the other desync modes via the shared selectMode helper exposed
-    -- on getgenv()._F_DESYNC_SELECT.
-    HC:AddLabel("Voidspam (HC-only desync)")
-    HC:AddToggle("HCVoidspam", { Text = "Voidspam (sync on shoot)",
+    -- =================== KNIFE BOT ===================
+    -- Voidspam-on-stab desync + attach-to-ragebot-target + auto-equip.
+    -- Lives here (not in Movement -> Desync) because all three pieces
+    -- are HC-specific. Voidspam is mutually exclusive with the other
+    -- desync modes via the shared selectMode helper.
+    HC:AddLabel("Knife Bot")
+    HC:AddToggle("HCVoidspam", { Text = "Use Knife Voidspam",
         Default = false,
         Callback = function(v)
             if v then
@@ -1787,15 +1788,36 @@ do
         end,
     })
     HC:AddSlider("HCVoidspamShotSyncMs", {
-        Text     = "Shot sync window (ms)",
+        Text     = "Stab sync window (ms)",
         Default  = 100, Min = 10, Max = 500, Rounding = 0,
         Callback = function(v) F.desync.setShotSyncMs(v) end,
     })
     HC:AddSlider("HCVoidspamShotDelayMs", {
-        Text     = "Delay before spoof-off (ms)",
+        Text     = "Delay (ms)",
         Tooltip  = "Wait this long after clicking before the void spoof actually turns off. 0 = immediate.",
         Default  = 0, Min = 0, Max = 2000, Rounding = 0,
         Callback = function(v) F.desync.setShotDelayMs(v) end,
+    })
+    HC:AddToggle("HCKnifeAttach", { Text = "Attach to ragebot target",
+        Tooltip  = "Snap HRP to the ragebot's current target each frame and auto-click once per second.",
+        Default  = false,
+        Callback = function(v)
+            if v then F.games.hoodCustoms.knifeBot.attach.start()
+            else      F.games.hoodCustoms.knifeBot.attach.stop() end
+        end,
+    })
+    HC:AddSlider("HCKnifeAttachDistance", {
+        Text     = "Attach distance (studs)",
+        Default  = 3, Min = 0, Max = 50, Rounding = 1,
+        Callback = function(v) F.games.hoodCustoms.knifeBot.attach.setDistance(v) end,
+    })
+    HC:AddToggle("HCKnifeAutoEquip", { Text = "Auto-equip [Knife]",
+        Tooltip  = "Equip the [Knife] tool from your backpack on toggle-on and on every respawn.",
+        Default  = false,
+        Callback = function(v)
+            if v then F.games.hoodCustoms.knifeBot.autoEquip.start()
+            else      F.games.hoodCustoms.knifeBot.autoEquip.stop() end
+        end,
     })
 
     end -- close: if not inHoodCustoms() then ... else ...

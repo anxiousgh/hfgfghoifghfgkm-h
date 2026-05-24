@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.7"
+local SCRIPT_VERSION = "v1.0.8"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5231,6 +5231,151 @@ F.games.hoodCustoms.forceHit = (function()
 end)()
 
 -- ============================================================
+--  HOOD CUSTOMS: KNIFE BOT (attach + 1Hz stab + auto-equip)
+-- ============================================================
+--  Two independent toggles bundled under F.games.hoodCustoms.knifeBot:
+--
+--    attach.start() / .stop() / .setDistance(n)
+--      Each Heartbeat, snap HRP to a position `distance` studs
+--      behind the ragebot's current target. Once per second, fire
+--      a synthetic MouseButton1 click via VirtualInputManager so the
+--      equipped knife swings at the target.
+--
+--    autoEquip.start() / .stop()
+--      Each CharacterAdded + once on start, equip the "[Knife]" tool
+--      from the player's Backpack. Re-equips on respawn.
+--
+--  Built as an IIFE so all the local helpers stay scoped here and
+--  don't eat top-level register slots (chunk is at Luau's 200-local
+--  limit).
+-- ============================================================
+F.games.hoodCustoms.knifeBot = (function()
+    local KNIFE_NAME = "[Knife]"
+    local CLICK_INTERVAL = 1.0  -- seconds between auto-clicks
+
+    -- -------- attach --------
+    local attachDistance = 3   -- studs behind target
+    local attachHbConn, attachClickThread
+    local attachActive = false
+
+    local function getTargetHRP()
+        if not rbGetTarget then return nil end
+        local plr = rbGetTarget()
+        if not plr or plr == lplr then return nil end
+        local char = plr.Character
+        return char and char:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function attachStart()
+        if attachActive then return end
+        attachActive = true
+        G.hcKnifeAttachActive = true
+
+        if attachHbConn then attachHbConn:Disconnect() end
+        attachHbConn = RunService.Heartbeat:Connect(function()
+            if not attachActive then return end
+            local c = lplr.Character
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
+            local tHrp = getTargetHRP()
+            if not tHrp then return end
+            -- snap to `distance` studs in front of the target
+            -- (so the equipped knife's swing arc lands on them)
+            local forward = tHrp.CFrame.LookVector
+            local pos = tHrp.Position - forward * attachDistance + Vector3.new(0, 0, 0)
+            pcall(function()
+                hrp.CFrame = CFrame.new(pos, tHrp.Position)
+            end)
+        end)
+
+        if attachClickThread then pcall(task.cancel, attachClickThread) end
+        attachClickThread = task.spawn(function()
+            while attachActive do
+                local tHrp = getTargetHRP()
+                if tHrp then
+                    pcall(function()
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true,  game, 0)
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                    end)
+                end
+                task.wait(CLICK_INTERVAL)
+            end
+        end)
+    end
+
+    local function attachStop()
+        attachActive = false
+        G.hcKnifeAttachActive = false
+        if attachHbConn then attachHbConn:Disconnect(); attachHbConn = nil end
+        if attachClickThread then pcall(task.cancel, attachClickThread); attachClickThread = nil end
+    end
+
+    -- -------- auto-equip --------
+    local autoEquipActive = false
+    local autoEquipCharConn, autoEquipHbConn
+
+    local function tryEquipKnife()
+        local char = lplr.Character; if not char then return false end
+        local hum  = char:FindFirstChildOfClass("Humanoid"); if not hum then return false end
+        -- already equipped?
+        if char:FindFirstChild(KNIFE_NAME) then return true end
+        local bp = lplr:FindFirstChild("Backpack")
+        if not bp then return false end
+        local tool = bp:FindFirstChild(KNIFE_NAME)
+        if not tool or not tool:IsA("Tool") then return false end
+        pcall(function() hum:EquipTool(tool) end)
+        return true
+    end
+
+    local function autoEquipStart()
+        if autoEquipActive then return end
+        autoEquipActive = true
+        G.hcKnifeAutoEquipActive = true
+        tryEquipKnife()
+
+        -- re-equip on respawn
+        if autoEquipCharConn then autoEquipCharConn:Disconnect() end
+        autoEquipCharConn = lplr.CharacterAdded:Connect(function()
+            if not autoEquipActive then return end
+            local bp = lplr:WaitForChild("Backpack", 10)
+            if bp then bp:WaitForChild(KNIFE_NAME, 10) end
+            if autoEquipActive then tryEquipKnife() end
+        end)
+
+        -- also re-check every 2s in case knife gets unequipped
+        if autoEquipHbConn then pcall(task.cancel, autoEquipHbConn) end
+        autoEquipHbConn = task.spawn(function()
+            while autoEquipActive do
+                task.wait(2)
+                if autoEquipActive then tryEquipKnife() end
+            end
+        end)
+    end
+
+    local function autoEquipStop()
+        autoEquipActive = false
+        G.hcKnifeAutoEquipActive = false
+        if autoEquipCharConn then autoEquipCharConn:Disconnect(); autoEquipCharConn = nil end
+        if autoEquipHbConn then pcall(task.cancel, autoEquipHbConn); autoEquipHbConn = nil end
+    end
+
+    return {
+        attach = {
+            start         = attachStart,
+            stop          = attachStop,
+            isActive      = function() return attachActive end,
+            setDistance   = function(n) attachDistance = math.clamp(tonumber(n) or 3, 0, 50) end,
+            getDistance   = function() return attachDistance end,
+        },
+        autoEquip = {
+            start    = autoEquipStart,
+            stop     = autoEquipStop,
+            isActive = function() return autoEquipActive end,
+        },
+    }
+end)()
+
+-- ============================================================
 --  MOVEMENT: DESYNC  (multiple spoof methods)
 --
 --  Shared frame pattern:
@@ -5856,6 +6001,10 @@ F.disableAll = function()
     F.games.hoodCustoms.autoReload.stop(); F.games.hoodCustoms.godmode.stop()
     F.games.hoodCustoms.forceHit.stop()
     F.games.hoodCustoms.knifeReach.stop()
+    if F.games.hoodCustoms.knifeBot then
+        F.games.hoodCustoms.knifeBot.attach.stop()
+        F.games.hoodCustoms.knifeBot.autoEquip.stop()
+    end
     if F.desync then F.desync.stop() end
     if F.pulseLagswitch then F.pulseLagswitch.stop() end
     if F.antiFling then F.antiFling.stop() end
