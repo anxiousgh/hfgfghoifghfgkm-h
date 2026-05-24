@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.0.6"
+local SCRIPT_VERSION = "v1.0.7"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4601,30 +4601,44 @@ end)()
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
     -- ============================================================
-    -- HC godmode = VOID THE SPECIALPART LIMB HITBOXES (welds broken).
+    -- HC godmode = DETACH-AND-VOID THE LIMBS.
     --
-    -- HC's SpecialParts each have a Weld[Part0=<real limb>,
-    -- Part1=<SpecialPart>]. Just anchoring the SpecialPart and
-    -- moving it to void doesn't work: the weld is a kinematic
-    -- constraint, and with Part1 anchored + Part0 unanchored, the
-    -- engine tries to keep them at the original offset by pulling
-    -- the UNANCHORED side (Part0 = real limb) toward the anchored
-    -- side (Part1 in the void). The real limb is in the rig
-    -- assembly so the whole character gets flung.
+    -- v1.0.6 was insufficient — voiding only the SpecialParts had
+    -- no effect, which means HC's hit detection actually targets
+    -- the REAL limb MeshParts, not the SpecialPart hitboxes.
     --
-    -- Fix: BREAK every weld inside each SpecialPart first
-    -- (Part0=nil) so the constraint can't pull anything. Then
-    -- anchor and CFrame the SpecialPart freely. On toggle off:
-    -- restore the weld's Part0 and unanchor — weld will snap the
-    -- SpecialPart back to the real limb instantly.
+    -- To void the real limbs without dragging the rig, we have to
+    -- detach them from the rig assembly first. Detaching them
+    -- normally triggers HC's 14 BallSocketConstraints in the
+    -- 'RagdollConstraints' folder, which produced the wiggle on
+    -- earlier attempts. So:
     --
-    -- Real limbs / HRP / torso / head — all completely untouched.
-    -- HC raycasts hit a void-anchored hitbox → misses every shot
-    -- to a limb.
+    --   1. Disable every Constraint in RagdollConstraints/ (set
+    --      Enabled=false). Constraints can't take over when the
+    --      Motor6Ds break.
+    --   2. Break every limb Motor6D (Part0 + Part1 = nil). Real
+    --      limbs become free parts, disconnected from the rig.
+    --      HRP / torso / head are still all connected to each other
+    --      via Root, Waist, and Neck Motor6Ds, so walking works.
+    --   3. Break each SpecialPart limb weld (Part0 = nil) so it
+    --      doesn't pull the now-free real limb when we move things.
+    --   4. Anchor every limb (real + SpecialPart) so they don't
+    --      drift under gravity now that they're free parts.
+    --   5. Each Heartbeat, write a fresh random void CFrame to
+    --      every limb (real + SpecialPart). Server sees them in
+    --      the void wherever HC raycasts.
     --
-    -- Heartbeat re-asserts state (re-breaks welds, re-anchors,
-    -- writes new random void CFrame) in case HC's anti-cheat or
-    -- animation system restores any of it.
+    -- Local visual: limbs are way out in the void (invisible at
+    -- that distance). Character renders as torso + head moving
+    -- around without limbs. Movement (walking, running, jumping)
+    -- works fine because the HRP -> torso -> head chain is fully
+    -- intact and the Humanoid drives the rest.
+    --
+    -- Toggle off restore order matters:
+    --   restore Motor6Ds  -> rig is wired back up
+    --   restore welds     -> SpecialParts pinned to real limbs
+    --   unanchor          -> Motor6Ds + welds drive positions
+    --   re-enable constraints -> ragdoll system ready again
     -- ============================================================
     local LIMB_NAMES = {
         LeftHand = true,     RightHand = true,
@@ -4634,22 +4648,81 @@ F.games.hoodCustoms.godmode = (function()
         LeftLowerLeg = true, RightLowerLeg = true,
         LeftUpperLeg = true, RightUpperLeg = true,
     }
+    local LIMB_MOTORS = {
+        LeftShoulder = true, LeftElbow  = true, LeftWrist  = true,
+        RightShoulder= true, RightElbow = true, RightWrist = true,
+        LeftHip  = true, LeftKnee  = true, LeftAnkle  = true,
+        RightHip = true, RightKnee = true, RightAnkle = true,
+    }
     local VOID_MIN = 5000
     local VOID_MAX = 20000
 
-    local savedParts = {}  -- [SpecialPart] = wasAnchored
-    local savedWelds = {}  -- [Weld]        = { part0, part1 }
-    local cached     = {}  -- list of SpecialPart limbs
+    local savedMotors      = {}  -- [Motor6D]    = { part0, part1 }
+    local savedWelds       = {}  -- [Weld]       = { part0, part1 }
+    local savedConstraints = {}  -- [Constraint] = wasEnabled
+    local savedAnchors     = {}  -- [BasePart]   = wasAnchored
+    local cached           = {}  -- list of limb BaseParts (real + SpecialPart)
     local hbConn, charConn
 
-    local function findSpecialLimbs(char)
-        cached = {}
+    local function setup(char)
         if not char then return end
-        local sp = char:FindFirstChild("SpecialParts")
-        if not sp then return end
-        for _, p in ipairs(sp:GetChildren()) do
+        cached = {}
+
+        -- (1) disable RagdollConstraints
+        local rc = char:FindFirstChild("RagdollConstraints")
+        if rc then
+            for _, c in ipairs(rc:GetChildren()) do
+                if c:IsA("Constraint") then
+                    if savedConstraints[c] == nil then
+                        savedConstraints[c] = c.Enabled
+                    end
+                    if c.Enabled then
+                        pcall(function() c.Enabled = false end)
+                    end
+                end
+            end
+        end
+
+        -- (2) break limb Motor6Ds (both ends nil = fully dead joint)
+        for _, d in ipairs(char:GetDescendants()) do
+            if d:IsA("Motor6D") and LIMB_MOTORS[d.Name] then
+                if savedMotors[d] == nil then
+                    savedMotors[d] = { part0 = d.Part0, part1 = d.Part1 }
+                end
+                if d.Part0 ~= nil or d.Part1 ~= nil then
+                    pcall(function() d.Part0 = nil; d.Part1 = nil end)
+                end
+            end
+        end
+
+        -- (3) collect real limb MeshParts + anchor them
+        for _, p in ipairs(char:GetChildren()) do
             if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
+                if savedAnchors[p] == nil then savedAnchors[p] = p.Anchored end
+                if not p.Anchored then pcall(function() p.Anchored = true end) end
                 table.insert(cached, p)
+            end
+        end
+
+        -- (4) collect SpecialPart limbs + break their welds + anchor
+        local sp = char:FindFirstChild("SpecialParts")
+        if sp then
+            for _, p in ipairs(sp:GetChildren()) do
+                if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
+                    for _, w in ipairs(p:GetChildren()) do
+                        if w:IsA("Weld") or w:IsA("WeldConstraint") then
+                            if savedWelds[w] == nil then
+                                savedWelds[w] = { part0 = w.Part0, part1 = w.Part1 }
+                            end
+                            if w.Part0 ~= nil then
+                                pcall(function() w.Part0 = nil end)
+                            end
+                        end
+                    end
+                    if savedAnchors[p] == nil then savedAnchors[p] = p.Anchored end
+                    if not p.Anchored then pcall(function() p.Anchored = true end) end
+                    table.insert(cached, p)
+                end
             end
         end
     end
@@ -4662,44 +4735,14 @@ F.games.hoodCustoms.godmode = (function()
         return CFrame.new(axis(), axis(), axis())
     end
 
-    local function breakAndAnchorAll()
-        for _, p in ipairs(cached) do
-            if not p.Parent then continue end
-            -- (1) break every weld inside this SpecialPart so it
-            --     can't pull the real limb when we move the
-            --     SpecialPart into the void.
-            for _, w in ipairs(p:GetChildren()) do
-                if w:IsA("Weld") or w:IsA("WeldConstraint") then
-                    if savedWelds[w] == nil then
-                        savedWelds[w] = { part0 = w.Part0, part1 = w.Part1 }
-                    end
-                    if w.Part0 ~= nil then
-                        pcall(function() w.Part0 = nil end)
-                    end
-                end
-            end
-            -- (2) anchor so subsequent CFrame writes stick and
-            --     residual physics can't drift the SpecialPart back.
-            if savedParts[p] == nil then savedParts[p] = p.Anchored end
-            if not p.Anchored then
-                pcall(function() p.Anchored = true end)
-            end
-        end
-    end
-
     local function bind()
         if hbConn then hbConn:Disconnect() end
-        findSpecialLimbs(lplr.Character)
-        breakAndAnchorAll()
+        setup(lplr.Character)
         hbConn = RunService.Heartbeat:Connect(function()
             if not G.hcGmActive then return end
-            -- re-find / re-break if character was replaced
             if not cached[1] or not cached[1].Parent then
-                findSpecialLimbs(lplr.Character)
-                breakAndAnchorAll()
+                setup(lplr.Character)
             end
-            -- random void CFrame each frame so anti-cheats that
-            -- key on static hitbox positions don't pin on us.
             for _, p in ipairs(cached) do
                 if p.Parent then
                     pcall(function() p.CFrame = randVoidPos() end)
@@ -4709,25 +4752,36 @@ F.games.hoodCustoms.godmode = (function()
     end
 
     local function restoreAll()
-        -- Restore welds first so when we unanchor the SpecialPart,
-        -- the weld immediately snaps it back to the real limb's
-        -- position (instead of leaving it dangling at void).
-        for w, s in pairs(savedWelds) do
-            if w.Parent then
-                pcall(function()
-                    w.Part0 = s.part0
-                    w.Part1 = s.part1
-                end)
+        -- order matters:
+        --   motors first  -> rig reconnects
+        --   welds second  -> SpecialParts pinned to real limbs
+        --   anchors third -> joints / welds can drive positions
+        --   constraints last
+        for m, s in pairs(savedMotors) do
+            if m.Parent then
+                pcall(function() m.Part0 = s.part0; m.Part1 = s.part1 end)
             end
         end
-        for p, wasAnchored in pairs(savedParts) do
+        for w, s in pairs(savedWelds) do
+            if w.Parent then
+                pcall(function() w.Part0 = s.part0; w.Part1 = s.part1 end)
+            end
+        end
+        for p, wasAnchored in pairs(savedAnchors) do
             if p.Parent then
                 pcall(function() p.Anchored = wasAnchored end)
             end
         end
-        savedParts = {}
-        savedWelds = {}
-        cached     = {}
+        for c, wasEnabled in pairs(savedConstraints) do
+            if c.Parent then
+                pcall(function() c.Enabled = wasEnabled end)
+            end
+        end
+        savedMotors      = {}
+        savedWelds       = {}
+        savedConstraints = {}
+        savedAnchors     = {}
+        cached           = {}
     end
 
     return makeToggle(
@@ -4737,7 +4791,8 @@ F.games.hoodCustoms.godmode = (function()
             if charConn then charConn:Disconnect() end
             charConn = lplr.CharacterAdded:Connect(function()
                 if not G.hcGmActive then return end
-                savedParts = {}; savedWelds = {}; cached = {}
+                savedMotors, savedWelds = {}, {}
+                savedConstraints, savedAnchors, cached = {}, {}, {}
                 task.wait(0.5)  -- let HC build SpecialParts after spawn
                 bind()
             end)
