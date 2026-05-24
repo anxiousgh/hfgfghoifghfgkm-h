@@ -5765,6 +5765,9 @@ F.pulseLagswitch = (function()
     -- module re-creation doesn't strand the hook reading a stale
     -- upvalue.
     getgenv()._F_PLS_BLOCKING = getgenv()._F_PLS_BLOCKING or false
+    -- Snapshot of HRP.Position taken at the moment a blocked phase
+    -- begins. Approximates the position the server has stored.
+    getgenv()._F_PLS_LAST_SERVER_POS = getgenv()._F_PLS_LAST_SERVER_POS or nil
 
     local function findRaknet()
         local r = rawget(getgenv(), "raknet")
@@ -5793,13 +5796,92 @@ F.pulseLagswitch = (function()
         return true
     end
 
+    -- ---------------- VISUALIZER ----------------
+    -- Lightweight server-position marker. Just ONE Part + ONE Highlight,
+    -- no character clone, no Animator, no particles, no per-frame
+    -- animations.
+    --
+    -- The existing raknet-desync ghost was a full character clone with
+    -- a humanoid, attachments, particle emitters, animated rings, and
+    -- a per-frame render loop. On low-end devices and in games that
+    -- scan for new Models (anti-cheat), spawning that clone could
+    -- freeze the client for hundreds of ms — which is what the user
+    -- was hitting. This version sidesteps all of that.
+    --
+    -- Behavior: only visible during BLOCKED phases (when server's
+    -- position has actually diverged from yours). Pulses with the
+    -- lagswitch rhythm. Visible through walls via Highlight at
+    -- AlwaysOnTop depth mode.
+    local visualEnabled = false
+    local visualPart, visualHighlight, visualConn
+
+    local function visualRemove()
+        if visualConn      then visualConn:Disconnect();   visualConn      = nil end
+        if visualHighlight then visualHighlight:Destroy(); visualHighlight = nil end
+        if visualPart      then visualPart:Destroy();      visualPart      = nil end
+    end
+
+    local function visualCreate()
+        if visualPart and visualPart.Parent then return end
+        visualRemove()  -- clear any stale refs
+
+        visualPart = Instance.new("Part")
+        visualPart.Name         = "_PulseLagswitchVisual"
+        visualPart.Anchored     = true
+        visualPart.CanCollide   = false
+        visualPart.CanTouch     = false
+        visualPart.CanQuery     = false
+        visualPart.CastShadow   = false
+        visualPart.Massless     = true
+        visualPart.Material     = Enum.Material.Neon
+        visualPart.Color        = Color3.fromRGB(0, 200, 255)
+        visualPart.Size         = Vector3.new(2, 5, 1)  -- rough humanoid silhouette
+        visualPart.Transparency = 1  -- starts hidden; turns on during blocked phases
+        visualPart.Parent       = workspace
+
+        visualHighlight = Instance.new("Highlight")
+        visualHighlight.FillColor        = Color3.fromRGB(0, 200, 255)
+        visualHighlight.OutlineColor     = Color3.fromRGB(255, 255, 255)
+        visualHighlight.FillTransparency = 0.4
+        visualHighlight.OutlineTransparency = 0
+        visualHighlight.DepthMode        = Enum.HighlightDepthMode.AlwaysOnTop
+        visualHighlight.Adornee          = visualPart
+        visualHighlight.Enabled          = false
+        visualHighlight.Parent           = visualPart
+
+        if visualConn then visualConn:Disconnect() end
+        visualConn = RunService.RenderStepped:Connect(function()
+            if not visualPart or not visualPart.Parent then return end
+            local blocking = getgenv()._F_PLS_BLOCKING
+            local pos      = getgenv()._F_PLS_LAST_SERVER_POS
+            if blocking and pos then
+                -- show ghost at server's stored position
+                visualPart.CFrame        = CFrame.new(pos)
+                visualPart.Transparency  = 0.4
+                if visualHighlight then visualHighlight.Enabled = true end
+            else
+                -- released: server == real position, no info to show
+                visualPart.Transparency  = 1
+                if visualHighlight then visualHighlight.Enabled = false end
+            end
+        end)
+    end
+
     local function start()
         if active then return true end
         if not ensureHook() then return false end
         active = true
+        if visualEnabled then visualCreate() end
         if pulseTask then pcall(task.cancel, pulseTask); pulseTask = nil end
         pulseTask = task.spawn(function()
             while active do
+                -- Snapshot HRP just before entering the blocked phase —
+                -- this is approximately the position the server has
+                -- stored from our last successful 0x1B packet.
+                local c   = lplr.Character
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if hrp then getgenv()._F_PLS_LAST_SERVER_POS = hrp.Position end
+
                 getgenv()._F_PLS_BLOCKING = true
                 task.wait(onMs / 1000)
                 if not active then break end
@@ -5815,6 +5897,7 @@ F.pulseLagswitch = (function()
         active = false
         getgenv()._F_PLS_BLOCKING = false
         if pulseTask then pcall(task.cancel, pulseTask); pulseTask = nil end
+        visualRemove()
     end
 
     return {
@@ -5827,6 +5910,15 @@ F.pulseLagswitch = (function()
         getOnMs  = function() return onMs  end,
         getOffMs = function() return offMs end,
         isRaknetAvailable = function() return findRaknet() ~= nil end,
+        -- visualizer: independent toggle. Cheap (one Part + one Highlight)
+        -- so it shouldn't freeze on the games where the raknet ghost did.
+        setVisualEnabled = function(v)
+            visualEnabled = v == true
+            if active then
+                if visualEnabled then visualCreate() else visualRemove() end
+            end
+        end,
+        getVisualEnabled = function() return visualEnabled end,
     }
 end)()
 

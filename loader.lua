@@ -1174,6 +1174,11 @@ do
         Default  = 100, Min = 10, Max = 60000, Rounding = 0,
         Callback = function(v) F.pulseLagswitch.setOffMs(v) end,
     })
+    Pulse:AddToggle("PulseLagswitchVisual", { Text = "Show server-position marker",
+        Default = false,
+        Tooltip = "Lightweight neon marker (one Part + Highlight, no clone) shown at the position the server has stored for you during blocked phases. Visible through walls.",
+        Callback = function(v) F.pulseLagswitch.setVisualEnabled(v) end,
+    })
 end
 
 -- ============================================================
