@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.1.4"
+local SCRIPT_VERSION = "v1.1.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5739,29 +5739,41 @@ F.games.mm2 = (function()
     local triggerLastFire = 0
     local TRIGGER_COOLDOWN = 0.4
 
-    -- Cached lookup of the nil-parented RemoteEvent named "shoot"
-    -- (MM2's canonical hit/shoot remote). Re-resolves if the cached
-    -- ref goes invalid (e.g. server destroys + recreates it).
-    local HIT_REMOTE_NAME = "shoot"
+    -- Cached lookup of the nil-parented "shoot" RemoteEvent.
+    -- Case-insensitive: "shoot", "Shoot", "SHOOT", etc all match.
+    -- Falls back to any nil RemoteEvent if no name match.
+    -- Re-resolves if the cached ref goes invalid.
+    local HIT_REMOTE_NAME_LOWER = "shoot"
     local cachedHitRemote
+
+    local function _validateCached()
+        if not cachedHitRemote then return false end
+        -- guard against ref pointing at a destroyed/parented instance
+        local ok, isRE = pcall(function()
+            return typeof(cachedHitRemote) == "Instance" and cachedHitRemote:IsA("RemoteEvent")
+        end)
+        if not ok or not isRE then cachedHitRemote = nil; return false end
+        return true
+    end
+
     local function findHitRemote()
-        if cachedHitRemote then
-            local ok, name = pcall(function() return cachedHitRemote.Name end)
-            if ok and name == HIT_REMOTE_NAME then return cachedHitRemote end
-            cachedHitRemote = nil
-        end
+        if _validateCached() then return cachedHitRemote end
         if not getnilinstances then return nil end
         local ok, all = pcall(getnilinstances)
         if not ok or not all then return nil end
+        local nameMatch, anyRE
         for _, v in ipairs(all) do
-            if typeof(v) == "Instance"
-                and v:IsA("RemoteEvent")
-                and v.Name == HIT_REMOTE_NAME then
-                cachedHitRemote = v
-                return v
+            if typeof(v) == "Instance" and v:IsA("RemoteEvent") then
+                anyRE = anyRE or v
+                local n = (v.Name or ""):lower()
+                if n == HIT_REMOTE_NAME_LOWER then
+                    nameMatch = v
+                    break
+                end
             end
         end
-        return nil
+        cachedHitRemote = nameMatch or anyRE
+        return cachedHitRemote
     end
 
     local mouseRef
