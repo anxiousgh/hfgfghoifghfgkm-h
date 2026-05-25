@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.5.1"
+local SCRIPT_VERSION = "v1.5.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -2365,7 +2365,7 @@ local _rbLastShot = 0
 -- Cleared on PlayerRemoving. Read by the KnockedGraceDelay guard.
 local _rbLastKnockedAt = {}
 local _rbLastAutoEquipAt = 0  -- throttle: don't try to equip every frame
-Players.PlayerRemoving:Connect(function(p) _rbLastKnockedAt[p] = nil end)
+plrs.PlayerRemoving:Connect(function(p) _rbLastKnockedAt[p] = nil end)
 RunService.Heartbeat:Connect(function()
     if not RageSettings.AutoShoot then return end
     local now = tick()
