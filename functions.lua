@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.4.0"
+local SCRIPT_VERSION = "v1.4.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5807,21 +5807,29 @@ F.games.mm2 = (function()
         return Players:GetPlayerFromCharacter(model)
     end
 
-    -- Hit-position resolver. ALWAYS reads HumanoidRootPart by name
-    -- and uses its raw CFrame. We don't use char:GetPivot() because
-    -- MM2 might re-point PrimaryPart elsewhere - the pivot would
-    -- then return a spoofed CFrame, not the actual rig root.
-    --
-    -- If HRP itself is somehow nil, fall back to a part chain.
+    -- Hit-position resolver. Prefers HumanoidRootPart by name (raw
+    -- instance, no GetPivot - MM2 might re-point PrimaryPart so the
+    -- pivot would be spoofed). Falls through a wide chain so we
+    -- ALWAYS return a CFrame as long as the character has any
+    -- BasePart, even if MM2 is messing with the standard names.
     local function targetHitCF(char)
         if not char then return nil end
         local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then return hrp.CFrame end
+        if hrp and hrp:IsA("BasePart") then return hrp.CFrame end
         local p = char:FindFirstChild("LowerTorso")
               or char:FindFirstChild("Torso")
               or char:FindFirstChild("UpperTorso")
               or char:FindFirstChild("Head")
-        return p and p.CFrame or nil
+        if p and p:IsA("BasePart") then return p.CFrame end
+        -- GetPivot fallback (may return spoofed pivot but at least
+        -- it's a CFrame so the shot fires)
+        if char.GetPivot then
+            local ok, cf = pcall(function() return char:GetPivot() end)
+            if ok and cf then return cf end
+        end
+        -- Final fallback: any BasePart anywhere in the character
+        local any = char:FindFirstChildWhichIsA("BasePart")
+        return any and any.CFrame or nil
     end
     -- Second arg is "my position" with identity rotation - matches the
     -- canonical payload exactly (CFrame.new(x, y, z) without basis
@@ -5931,11 +5939,13 @@ F.games.mm2 = (function()
         end
 
         -- Canonical payload from MM2 captures:
-        --   arg1 = target's pivot CFrame (= HRP.CFrame) - fixed per
-        --          target, not per-click-spot
+        --   arg1 = target's HumanoidRootPart CFrame
         --   arg2 = shooter HRP position with IDENTITY rotation
         --          (CFrame.new(x, y, z) with default basis)
-        pcall(function() remote:FireServer(theirCF, myPos) end)
+        local ok, err = pcall(function() remote:FireServer(theirCF, myPos) end)
+        if not ok then
+            print("[cclosure.vip] Shoot FireServer error:", err)
+        end
 
         -- restart desync after a brief grace period so the shot has
         -- time to register server-side before we vanish again
