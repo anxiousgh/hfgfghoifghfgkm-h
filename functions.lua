@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.4.2"
+local SCRIPT_VERSION = "v1.4.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -1473,6 +1473,7 @@ local function aimFindClosest()
     local mousePos = UserInputService:GetMouseLocation()
     for _, plr in ipairs(_cachedPlayers or plrs:GetPlayers()) do
         if plr == lplr then continue end
+        if F.whitelist and F.whitelist.contains(plr) then continue end
         if AimbotSettings.TeamCheck and plr.Team == lplr.Team then continue end
         local char = plr.Character; if not char then continue end
         local hum = char:FindFirstChildOfClass("Humanoid")
@@ -1807,6 +1808,7 @@ RunService.Heartbeat:Connect(function()
     local hitPlr, hitPart, bestD = nil, nil, math.huge
     for _, plr in ipairs(_cachedPlayers or plrs:GetPlayers()) do
         if plr == lplr then continue end
+        if F.whitelist and F.whitelist.contains(plr) then continue end
         if TrigSettings.TeamCheck and plr.Team == lplr.Team then continue end
         local char = plr.Character; if not char then continue end
         local hum = char:FindFirstChildOfClass("Humanoid")
@@ -5203,8 +5205,36 @@ F.games.hoodCustoms.forceHit = (function()
 
         if fired then
             lastFire = tick()
-            if origin then spawnTracer(origin, part.Position) end
             playHitSound()
+            -- Gate the fake bullet tracer on the ACTUAL ammo decrementing.
+            -- HC stores ammo at Character.<Tool>.Script.Ammo (IntValue).
+            -- We snapshot the value here, wait 150ms for server roundtrip,
+            -- then only draw the tracer if the value went down (i.e., the
+            -- server accepted the shot). If we can't find an Ammo value
+            -- (gun isn't equipped / non-ammo weapon), fall back to the
+            -- old behavior and always draw.
+            local function snapshotAmmo()
+                local c = lplr.Character; if not c then return nil end
+                local tool = c:FindFirstChildOfClass("Tool"); if not tool then return nil end
+                local scr = tool:FindFirstChild("Script"); if not scr then return nil end
+                local av = scr:FindFirstChild("Ammo")
+                if av and (av:IsA("IntValue") or av:IsA("NumberValue")) then return av.Value end
+                return nil
+            end
+            local startAmmo = snapshotAmmo()
+            if origin then
+                if startAmmo == nil then
+                    spawnTracer(origin, part.Position)
+                else
+                    local tracerOrigin, tracerHit = origin, part.Position
+                    task.delay(0.15, function()
+                        local endAmmo = snapshotAmmo()
+                        if endAmmo and endAmmo < startAmmo then
+                            spawnTracer(tracerOrigin, tracerHit)
+                        end
+                    end)
+                end
+            end
         end
     end
 
