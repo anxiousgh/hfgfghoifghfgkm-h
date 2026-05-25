@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.4.7"
+local SCRIPT_VERSION = "v1.4.8"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4933,15 +4933,22 @@ F.games.hoodCustoms.forceHit = (function()
         return c and c:FindFirstChild("Head")
     end
 
-    -- Animated fake bullet tracer:
-    --   1. Travel: a neon beam stretches from origin toward hitPos
-    --      over ~40ms, growing from 0 to full length (looks like
-    --      bullet flight)
-    --   2. Impact: at the hit point, a neon ball expands outward
-    --      and fades (muzzle / impact flash)
-    --   3. Fade: the beam itself fades over tracerLifetime
-    -- All local-only (parented to workspace but only this client
-    -- ever sees them since the server isn't told).
+    -- Pretty fake bullet tracer using two layered Beam constraints:
+    --   * OUTER beam = wide, semi-transparent halo glow (the user's
+    --     chosen tracerColor)
+    --   * INNER beam = narrower bright core with a white midpoint
+    --     gradient (gives the laser a hot-center feel)
+    --   * Width tapers from origin -> hit so it looks like a real
+    --     bullet streak (fat at the muzzle, thin at the target)
+    --
+    -- Stages:
+    --   1. Travel: the END attachment animates from origin toward
+    --      hitPos over ~40ms so the beam "extends" along the bullet
+    --      path
+    --   2. Impact: neon ball + PointLight at hit, expands and fades
+    --   3. Fade: both beams fade transparency to 1 over tracerLifetime
+    --
+    -- All local-only.
     local function spawnTracer(origin, hitPos)
         if not tracerEnabled then return end
         local dist = (hitPos - origin).Magnitude
@@ -4949,84 +4956,128 @@ F.games.hoodCustoms.forceHit = (function()
 
         local dir = (hitPos - origin).Unit
 
-        -- the beam
-        local part = Instance.new("Part")
-        part.Anchored      = true
-        part.CanCollide    = false
-        part.CanTouch      = false
-        part.CanQuery      = false
-        part.CastShadow    = false
-        part.Material      = Enum.Material.Neon
-        part.Color         = tracerColor
-        part.Transparency  = 0.10
-        part.Size          = Vector3.new(tracerThickness, tracerThickness, 0.1)
-        part.CFrame        = CFrame.new(origin + dir * 0.05, hitPos)
-        part.Name          = "_fh_tracer"
-        part.Parent        = workspace
+        local function invisAnchor(pos)
+            local p = Instance.new("Part")
+            p.Anchored     = true
+            p.CanCollide   = false
+            p.CanTouch     = false
+            p.CanQuery     = false
+            p.CastShadow   = false
+            p.Size         = Vector3.new(0.05, 0.05, 0.05)
+            p.Transparency = 1
+            p.CFrame       = CFrame.new(pos)
+            p.Parent       = workspace
+            return p
+        end
+
+        local startPart = invisAnchor(origin)
+        startPart.Name  = "_fh_tracer_start"
+        local endPart   = invisAnchor(origin)  -- starts at origin, animates to hit
+        endPart.Name    = "_fh_tracer_end"
+
+        local att0 = Instance.new("Attachment"); att0.Parent = startPart
+        local att1 = Instance.new("Attachment"); att1.Parent = endPart
+
+        -- OUTER halo: wide, soft, color = user's tracerColor
+        local outer = Instance.new("Beam")
+        outer.Attachment0    = att0
+        outer.Attachment1    = att1
+        outer.Width0         = tracerThickness * 8
+        outer.Width1         = tracerThickness * 6
+        outer.LightEmission  = 1
+        outer.LightInfluence = 0
+        outer.FaceCamera     = true
+        outer.Segments       = 1
+        outer.Color          = ColorSequence.new(tracerColor)
+        outer.Transparency   = NumberSequence.new({
+            NumberSequenceKeypoint.new(0,    0.55),
+            NumberSequenceKeypoint.new(0.5,  0.35),
+            NumberSequenceKeypoint.new(1,    0.55),
+        })
+        outer.Parent = startPart
+
+        -- INNER core: narrower, brighter, white-hot midpoint
+        local inner = Instance.new("Beam")
+        inner.Attachment0    = att0
+        inner.Attachment1    = att1
+        inner.Width0         = tracerThickness * 3
+        inner.Width1         = tracerThickness * 2
+        inner.LightEmission  = 1
+        inner.LightInfluence = 0
+        inner.FaceCamera     = true
+        inner.Segments       = 1
+        inner.Color          = ColorSequence.new({
+            ColorSequenceKeypoint.new(0,   tracerColor),
+            ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)),
+            ColorSequenceKeypoint.new(1,   tracerColor),
+        })
+        inner.Transparency = NumberSequence.new(0.05)
+        -- subtle scrolling texture for energy feel (Roblox bundled
+        -- particle texture, falls back to plain beam if not available)
+        pcall(function()
+            inner.Texture       = "rbxassetid://446111271"
+            inner.TextureMode   = Enum.TextureMode.Wrap
+            inner.TextureLength = 6
+            inner.TextureSpeed  = 8
+        end)
+        inner.Parent = startPart
 
         task.spawn(function()
-            -- (1) travel: stretch from origin -> hitPos
-            local TRAVEL_STEPS = 6
+            -- (1) travel: extend end attachment from origin -> hit
+            local TRAVEL_STEPS    = 6
             local TRAVEL_DURATION = 0.04
             for i = 1, TRAVEL_STEPS do
                 task.wait(TRAVEL_DURATION / TRAVEL_STEPS)
-                if not part.Parent then return end
-                local progress = i / TRAVEL_STEPS
-                local currentDist = dist * progress
-                part.Size = Vector3.new(tracerThickness, tracerThickness, currentDist)
-                part.CFrame = CFrame.new(origin + dir * (currentDist * 0.5), hitPos)
+                if not startPart.Parent then return end
+                endPart.CFrame = CFrame.new(origin + dir * (dist * (i / TRAVEL_STEPS)))
             end
-            if not part.Parent then return end
-            -- final exact-length frame
-            part.Size = Vector3.new(tracerThickness, tracerThickness, dist)
-            part.CFrame = CFrame.new(origin + dir * (dist * 0.5), hitPos)
+            if not startPart.Parent then return end
+            endPart.CFrame = CFrame.new(hitPos)
 
-            -- (2) impact flash at hitPos
-            local flash = Instance.new("Part")
-            flash.Anchored     = true
-            flash.CanCollide   = false
-            flash.CanTouch     = false
-            flash.CanQuery     = false
-            flash.CastShadow   = false
+            -- (2) impact flash + PointLight at hitPos
+            local flash = invisAnchor(hitPos)
+            flash.Transparency = 0
             flash.Material     = Enum.Material.Neon
             flash.Color        = tracerColor
             flash.Shape        = Enum.PartType.Ball
-            flash.Size         = Vector3.new(0.4, 0.4, 0.4)
-            flash.Transparency = 0
-            flash.CFrame       = CFrame.new(hitPos)
+            flash.Size         = Vector3.new(0.5, 0.5, 0.5)
             flash.Name         = "_fh_tracer_flash"
-            flash.Parent       = workspace
-
-            -- a PointLight on the flash for extra pop
             local light = Instance.new("PointLight")
             light.Color      = tracerColor
-            light.Brightness = 3
-            light.Range      = 6
+            light.Brightness = 4
+            light.Range      = 8
             light.Parent     = flash
 
             task.spawn(function()
-                local FLASH_STEPS = 8
+                local FLASH_STEPS    = 8
                 local FLASH_DURATION = 0.18
                 for i = 1, FLASH_STEPS do
                     task.wait(FLASH_DURATION / FLASH_STEPS)
                     if not flash.Parent then return end
                     local p = i / FLASH_STEPS
-                    local s = 0.4 + p * 2.0
+                    local s = 0.5 + p * 2.0
                     flash.Size         = Vector3.new(s, s, s)
                     flash.Transparency = p
-                    light.Brightness   = 3 * (1 - p)
+                    light.Brightness   = 4 * (1 - p)
                 end
                 if flash.Parent then flash:Destroy() end
             end)
 
-            -- (3) fade the beam over tracerLifetime
+            -- (3) fade both beams over tracerLifetime
             local FADE_STEPS = 8
             for i = 1, FADE_STEPS do
                 task.wait(tracerLifetime / FADE_STEPS)
-                if not part.Parent then return end
-                part.Transparency = 0.10 + (1 - 0.10) * (i / FADE_STEPS)
+                if not startPart.Parent then return end
+                local p = i / FADE_STEPS
+                outer.Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0,   0.55 + (1 - 0.55) * p),
+                    NumberSequenceKeypoint.new(0.5, 0.35 + (1 - 0.35) * p),
+                    NumberSequenceKeypoint.new(1,   0.55 + (1 - 0.55) * p),
+                })
+                inner.Transparency = NumberSequence.new(0.05 + (1 - 0.05) * p)
             end
-            if part.Parent then part:Destroy() end
+            if startPart.Parent then startPart:Destroy() end
+            if endPart.Parent   then endPart:Destroy()   end
         end)
     end
 
