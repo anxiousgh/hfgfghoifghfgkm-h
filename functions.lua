@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.4.3"
+local SCRIPT_VERSION = "v1.4.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4426,6 +4426,92 @@ F.games.hoodCustoms.autoReload = (function()
 end)()
 
 -- ============================================================
+--  GAMES: HOOD CUSTOMS - AMMO CLIENT SYNC (passive)
+--  HC stores ammo at Tool.Script.Ammo (IntValue, server-managed).
+--  The local UI reads Ammo.CLIENT (a child) for display. When
+--  forceHit fires via the remote, Ammo.Value decrements server-side
+--  and replicates back, but Ammo.CLIENT stays at the OLD value
+--  because no one wrote to it. UI shows wrong (stale) counter.
+--
+--  This module attaches GetPropertyChangedSignal("Value") to every
+--  Tool's Ammo (Character + Backpack, present + future) and mirrors
+--  the new value into Ammo.CLIENT.Value on each change.
+-- ============================================================
+if not getgenv()._F_HC_AMMO_CLIENT_SYNC then
+    getgenv()._F_HC_AMMO_CLIENT_SYNC = true
+    local _wiredTools = setmetatable({}, { __mode = "k" })
+
+    local function syncOnce(ammo, client)
+        if not ammo or not client then return end
+        pcall(function() client.Value = ammo.Value end)
+    end
+
+    local function wireAmmo(ammo)
+        local client = ammo:FindFirstChild("CLIENT")
+        if client then
+            syncOnce(ammo, client)
+            ammo:GetPropertyChangedSignal("Value"):Connect(function()
+                syncOnce(ammo, client)
+            end)
+        else
+            -- CLIENT child may appear later; listen for it
+            local conn
+            conn = ammo.ChildAdded:Connect(function(c)
+                if c.Name == "CLIENT" then
+                    if conn then conn:Disconnect() end
+                    wireAmmo(ammo)
+                end
+            end)
+        end
+    end
+
+    local function wireScript(scr)
+        local ammo = scr:FindFirstChild("Ammo")
+        if ammo and (ammo:IsA("IntValue") or ammo:IsA("NumberValue")) then
+            wireAmmo(ammo)
+        else
+            local conn
+            conn = scr.ChildAdded:Connect(function(c)
+                if c.Name == "Ammo" and (c:IsA("IntValue") or c:IsA("NumberValue")) then
+                    if conn then conn:Disconnect() end
+                    wireAmmo(c)
+                end
+            end)
+        end
+    end
+
+    local function wireTool(tool)
+        if not tool or not tool:IsA("Tool") or _wiredTools[tool] then return end
+        _wiredTools[tool] = true
+        local scr = tool:FindFirstChild("Script")
+        if scr then
+            wireScript(scr)
+        else
+            local conn
+            conn = tool.ChildAdded:Connect(function(c)
+                if c.Name == "Script" then
+                    if conn then conn:Disconnect() end
+                    wireScript(c)
+                end
+            end)
+        end
+    end
+
+    local function wireParent(parent)
+        if not parent then return end
+        for _, c in ipairs(parent:GetChildren()) do wireTool(c) end
+        parent.ChildAdded:Connect(wireTool)
+    end
+
+    wireParent(lplr:FindFirstChild("Backpack"))
+    wireParent(lplr.Character)
+    lplr.CharacterAdded:Connect(wireParent)
+    lplr.ChildAdded:Connect(function(c)
+        if c.Name == "Backpack" then wireParent(c) end
+    end)
+end
+
+-- ============================================================
 --  GAMES: HOOD CUSTOMS - KNIFE REACH
 --  Resizes lplr.Character.Knife.Handle.HITBOX_PART up to MAX (13,13,13).
 --  Anything above that triggers HC's anti-cheat. Survives respawn via a
@@ -5205,14 +5291,9 @@ F.games.hoodCustoms.forceHit = (function()
 
         if fired then
             lastFire = tick()
-            playHitSound()
-            -- Gate the fake bullet tracer on the ACTUAL ammo decrementing.
-            -- HC stores ammo at Character.<Tool>.Script.Ammo (IntValue).
-            -- We snapshot the value here, wait 150ms for server roundtrip,
-            -- then only draw the tracer if the value went down (i.e., the
-            -- server accepted the shot). If we can't find an Ammo value
-            -- (gun isn't equipped / non-ammo weapon), fall back to the
-            -- old behavior and always draw.
+            -- Tracer: gate on ACTUAL ammo decrementing. HC stores ammo
+            -- at Character.<Tool>.Script.Ammo (IntValue). Snapshot
+            -- pre-fire, re-check 150ms later, draw only on decrease.
             local function snapshotAmmo()
                 local c = lplr.Character; if not c then return nil end
                 local tool = c:FindFirstChildOfClass("Tool"); if not tool then return nil end
@@ -5234,6 +5315,27 @@ F.games.hoodCustoms.forceHit = (function()
                         end
                     end)
                 end
+            end
+
+            -- Hit sound: gate on the TARGET'S HEALTH dropping. Snapshot
+            -- the target's Humanoid.Health, re-check 200ms later, play
+            -- only if it went down. Fallback to immediate play if we
+            -- can't resolve the target's humanoid (so feedback isn't
+            -- completely silent in weird states).
+            local targetPlr = currentTarget()
+            local targetHum
+            if targetPlr and targetPlr.Character then
+                targetHum = targetPlr.Character:FindFirstChildOfClass("Humanoid")
+            end
+            local startHP = targetHum and targetHum.Health or nil
+            if startHP == nil then
+                playHitSound()
+            else
+                task.delay(0.20, function()
+                    if targetHum and targetHum.Parent and targetHum.Health < startHP then
+                        playHitSound()
+                    end
+                end)
             end
         end
     end
