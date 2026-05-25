@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.5.2"
+local SCRIPT_VERSION = "v1.5.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -2404,22 +2404,29 @@ RunService.Heartbeat:Connect(function()
     -- Auto-equip on shoot range: if the chosen tool isn't currently held,
     -- pull it from the backpack via Humanoid:EquipTool. Throttled to 0.2s
     -- so a missing tool doesn't spam EquipTool every frame.
+    --
+    -- IMPORTANT: only `return` early when we actually need to wait for an
+    -- equip. If the chosen tool is already held, fall through to the
+    -- shoot logic below — otherwise auto-equip mode would silently
+    -- block every shot.
     if RageSettings.AutoShootEquip and RageSettings.AutoShootEquipTool ~= "" then
         local heldTool = lchar:FindFirstChildOfClass("Tool")
-        if (not heldTool or heldTool.Name ~= RageSettings.AutoShootEquipTool)
-            and (now - _rbLastAutoEquipAt) > 0.2 then
-            _rbLastAutoEquipAt = now
-            local bp = lplr:FindFirstChild("Backpack")
-            local tool = bp and bp:FindFirstChild(RageSettings.AutoShootEquipTool)
-            local hum = lchar:FindFirstChildOfClass("Humanoid")
-            if tool and hum then
-                pcall(function() hum:EquipTool(tool) end)
+        if not heldTool or heldTool.Name ~= RageSettings.AutoShootEquipTool then
+            -- Wrong / no tool held: try to equip, then wait a frame
+            -- (watchToolEquip will stamp _rbEquipTime so the EquipDelay
+            -- gate above keeps this loop quiet until the gun is ready).
+            if (now - _rbLastAutoEquipAt) > 0.2 then
+                _rbLastAutoEquipAt = now
+                local bp = lplr:FindFirstChild("Backpack")
+                local tool = bp and bp:FindFirstChild(RageSettings.AutoShootEquipTool)
+                local hum = lchar:FindFirstChildOfClass("Humanoid")
+                if tool and hum then
+                    pcall(function() hum:EquipTool(tool) end)
+                end
             end
+            return
         end
-        -- Wait one frame after issuing the equip so EquipDelay can re-arm
-        -- (watchToolEquip stamps _rbEquipTime, so the next frame the
-        -- EquipDelay branch above gates this loop until the gun is ready).
-        return
+        -- Correct tool already held: do nothing, fall through to shoot.
     end
     if RageSettings.AutoShootRequireTool then
         local lc = lplr.Character
