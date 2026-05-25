@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.3.9"
+local SCRIPT_VERSION = "v1.4.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5807,20 +5807,17 @@ F.games.mm2 = (function()
         return Players:GetPlayerFromCharacter(model)
     end
 
-    -- Hit-position resolver. User's MM2 captures show arg1 is a
-    -- fixed point per target regardless of where on the body they
-    -- clicked, so the canonical value is the character's PIVOT
-    -- CFrame (= HumanoidRootPart.CFrame for standard rigs).
-    -- We fall back to a part lookup if GetPivot isn't available
-    -- (very old Roblox API).
+    -- Hit-position resolver. ALWAYS reads HumanoidRootPart by name
+    -- and uses its raw CFrame. We don't use char:GetPivot() because
+    -- MM2 might re-point PrimaryPart elsewhere - the pivot would
+    -- then return a spoofed CFrame, not the actual rig root.
+    --
+    -- If HRP itself is somehow nil, fall back to a part chain.
     local function targetHitCF(char)
         if not char then return nil end
-        if char.GetPivot then
-            local ok, cf = pcall(function() return char:GetPivot() end)
-            if ok and cf then return cf end
-        end
-        local p = char:FindFirstChild("HumanoidRootPart")
-              or char:FindFirstChild("LowerTorso")
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then return hrp.CFrame end
+        local p = char:FindFirstChild("LowerTorso")
               or char:FindFirstChild("Torso")
               or char:FindFirstChild("UpperTorso")
               or char:FindFirstChild("Head")
