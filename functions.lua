@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.5.0"
+local SCRIPT_VERSION = "v1.5.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -89,6 +89,14 @@ local RageSettings = {
     Orbit=false, OrbitDistance=15, OrbitSpeed=60, OrbitHeight=5,
     AutoShoot=false, AutoShootDist=50, AutoShootVis=true, AutoShootRequireTool=false,
     AutoShootCooldown=100, EquipDelay=0.5, FFCheck=true,
+    -- when on, equip AutoShootEquipTool (from backpack) the moment
+    -- a target enters AutoShootDist range, before firing.
+    AutoShootEquip=false, AutoShootEquipTool="",
+    -- post-knocked grace window (ms). If the target was seen knocked
+    -- within the last N ms, hold fire even if they currently read as
+    -- alive - covers the brief respawn window where the old corpse
+    -- is still selectable but the new character isn't there yet.
+    KnockedGraceDelay=0,
     SilentForce=false, SilentMethod="All",
     SpeedPanic=false, SpeedPanicVal=0,
     TpBehind=false, TpBehindDist=0,
@@ -2353,17 +2361,38 @@ lplr.CharacterAdded:Connect(watchToolEquip)
 if lplr.Character then watchToolEquip(lplr.Character) end
 
 local _rbLastShot = 0
+-- [Player] = tick() last time we saw them in a knocked state.
+-- Cleared on PlayerRemoving. Read by the KnockedGraceDelay guard.
+local _rbLastKnockedAt = {}
+local _rbLastAutoEquipAt = 0  -- throttle: don't try to equip every frame
+Players.PlayerRemoving:Connect(function(p) _rbLastKnockedAt[p] = nil end)
 RunService.Heartbeat:Connect(function()
     if not RageSettings.AutoShoot then return end
     local now = tick()
     if (now - _rbEquipTime) < RageSettings.EquipDelay then return end
     if (now - _rbLastShot) < (RageSettings.AutoShootCooldown / 1000) then return end
     local plr = rbGetTarget(); if not plr then return end
-    -- skip knocked targets if the toggle is on (HC: BodyEffects K.O) - only auto-shoot,
-    -- silent aim still tracks them so you can keep targeting them visually
-    if RageSettings.SkipKnocked
-        and F.games and F.games.hoodCustoms and F.games.hoodCustoms.isKnocked
-        and F.games.hoodCustoms.isKnocked(plr) then return end
+    -- HC knocked status: stamp _rbLastKnockedAt every frame the target is
+    -- knocked, and short-circuit if SkipKnocked is on.
+    local _hcMod = F.games and F.games.hoodCustoms
+    local _isKnockedNow = false
+    if _hcMod and _hcMod.isKnocked then
+        local okK, knocked = pcall(_hcMod.isKnocked, plr)
+        _isKnockedNow = okK and knocked or false
+    end
+    if _isKnockedNow then
+        _rbLastKnockedAt[plr] = now
+        if RageSettings.SkipKnocked then return end
+    end
+    -- Post-knocked grace: even when the target now reads alive, if they
+    -- were knocked within the last KnockedGraceDelay ms hold fire. This
+    -- catches the respawn race where the old K.O body is still the
+    -- selected target but the new character isn't replicated yet, so
+    -- shooting wastes ammo.
+    if RageSettings.KnockedGraceDelay > 0 then
+        local lastK = _rbLastKnockedAt[plr]
+        if lastK and (now - lastK) * 1000 < RageSettings.KnockedGraceDelay then return end
+    end
     local char = plr.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
     local lchar = lplr.Character
@@ -2372,6 +2401,26 @@ RunService.Heartbeat:Connect(function()
     if dist > RageSettings.AutoShootDist then return end
     if RageSettings.AutoShootVis and not rbIsVisible(plr) then return end
     if RageSettings.FFCheck and char:FindFirstChildOfClass("ForceField") then return end
+    -- Auto-equip on shoot range: if the chosen tool isn't currently held,
+    -- pull it from the backpack via Humanoid:EquipTool. Throttled to 0.2s
+    -- so a missing tool doesn't spam EquipTool every frame.
+    if RageSettings.AutoShootEquip and RageSettings.AutoShootEquipTool ~= "" then
+        local heldTool = lchar:FindFirstChildOfClass("Tool")
+        if (not heldTool or heldTool.Name ~= RageSettings.AutoShootEquipTool)
+            and (now - _rbLastAutoEquipAt) > 0.2 then
+            _rbLastAutoEquipAt = now
+            local bp = lplr:FindFirstChild("Backpack")
+            local tool = bp and bp:FindFirstChild(RageSettings.AutoShootEquipTool)
+            local hum = lchar:FindFirstChildOfClass("Humanoid")
+            if tool and hum then
+                pcall(function() hum:EquipTool(tool) end)
+            end
+        end
+        -- Wait one frame after issuing the equip so EquipDelay can re-arm
+        -- (watchToolEquip stamps _rbEquipTime, so the next frame the
+        -- EquipDelay branch above gates this loop until the gun is ready).
+        return
+    end
     if RageSettings.AutoShootRequireTool then
         local lc = lplr.Character
         if not lc or not lc:FindFirstChildOfClass("Tool") then return end
@@ -3092,6 +3141,13 @@ F.ragebot = {
     setAutoShootDist     = function(n) RageSettings.AutoShootDist = math.clamp(tonumber(n) or 50, 1, 500) end,
     setAutoShootCooldown = function(n) RageSettings.AutoShootCooldown = math.clamp(tonumber(n) or 100, 0, 10000) end,
     setAutoShootRequireTool = function(b) RageSettings.AutoShootRequireTool = b == true end,
+    -- auto-equip-on-shoot
+    setAutoShootEquip     = function(b) RageSettings.AutoShootEquip = b == true end,
+    setAutoShootEquipTool = function(s) RageSettings.AutoShootEquipTool = tostring(s or "") end,
+    getAutoShootEquipTool = function() return RageSettings.AutoShootEquipTool end,
+    -- knocked grace
+    setKnockedGraceDelay = function(n) RageSettings.KnockedGraceDelay = math.clamp(tonumber(n) or 0, 0, 20) end,
+    getKnockedGraceDelay = function() return RageSettings.KnockedGraceDelay end,
     setAutoShootVis  = function(b) RageSettings.AutoShootVis = b == true end,
     setFFCheck       = function(b) RageSettings.FFCheck = b == true end,
     setEquipDelay    = function(n) RageSettings.EquipDelay = math.clamp(tonumber(n) or 0.5, 0, 5) end,
