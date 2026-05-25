@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.4.6"
+local SCRIPT_VERSION = "v1.4.7"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4425,91 +4425,11 @@ F.games.hoodCustoms.autoReload = (function()
     return t
 end)()
 
--- ============================================================
---  GAMES: HOOD CUSTOMS - AMMO CLIENT SYNC (passive)
---  HC stores ammo at Tool.Script.Ammo (IntValue, server-managed).
---  The local UI reads Ammo.CLIENT (a child) for display. When
---  forceHit fires via the remote, Ammo.Value decrements server-side
---  and replicates back, but Ammo.CLIENT stays at the OLD value
---  because no one wrote to it. UI shows wrong (stale) counter.
---
---  This module attaches GetPropertyChangedSignal("Value") to every
---  Tool's Ammo (Character + Backpack, present + future) and mirrors
---  the new value into Ammo.CLIENT.Value on each change.
--- ============================================================
-if not getgenv()._F_HC_AMMO_CLIENT_SYNC then
-    getgenv()._F_HC_AMMO_CLIENT_SYNC = true
-    local _wiredTools = setmetatable({}, { __mode = "k" })
-
-    local function syncOnce(ammo, client)
-        if not ammo or not client then return end
-        pcall(function() client.Value = ammo.Value end)
-    end
-
-    local function wireAmmo(ammo)
-        local client = ammo:FindFirstChild("CLIENT")
-        if client then
-            syncOnce(ammo, client)
-            ammo:GetPropertyChangedSignal("Value"):Connect(function()
-                syncOnce(ammo, client)
-            end)
-        else
-            -- CLIENT child may appear later; listen for it
-            local conn
-            conn = ammo.ChildAdded:Connect(function(c)
-                if c.Name == "CLIENT" then
-                    if conn then conn:Disconnect() end
-                    wireAmmo(ammo)
-                end
-            end)
-        end
-    end
-
-    local function wireScript(scr)
-        local ammo = scr:FindFirstChild("Ammo")
-        if ammo and (ammo:IsA("IntValue") or ammo:IsA("NumberValue")) then
-            wireAmmo(ammo)
-        else
-            local conn
-            conn = scr.ChildAdded:Connect(function(c)
-                if c.Name == "Ammo" and (c:IsA("IntValue") or c:IsA("NumberValue")) then
-                    if conn then conn:Disconnect() end
-                    wireAmmo(c)
-                end
-            end)
-        end
-    end
-
-    local function wireTool(tool)
-        if not tool or not tool:IsA("Tool") or _wiredTools[tool] then return end
-        _wiredTools[tool] = true
-        local scr = tool:FindFirstChild("Script")
-        if scr then
-            wireScript(scr)
-        else
-            local conn
-            conn = tool.ChildAdded:Connect(function(c)
-                if c.Name == "Script" then
-                    if conn then conn:Disconnect() end
-                    wireScript(c)
-                end
-            end)
-        end
-    end
-
-    local function wireParent(parent)
-        if not parent then return end
-        for _, c in ipairs(parent:GetChildren()) do wireTool(c) end
-        parent.ChildAdded:Connect(wireTool)
-    end
-
-    wireParent(lplr:FindFirstChild("Backpack"))
-    wireParent(lplr.Character)
-    lplr.CharacterAdded:Connect(wireParent)
-    lplr.ChildAdded:Connect(function(c)
-        if c.Name == "Backpack" then wireParent(c) end
-    end)
-end
+-- (HC Ammo.CLIENT auto-sync removed in v1.4.7 - it caused reload
+-- slowdown because the game's reload state machine watches CLIENT,
+-- and mirroring fresh Value writes into CLIENT interrupted the
+-- reload animation. Old listeners from prior script runs will GC
+-- once the character respawns and their Ammo instances destruct.)
 
 -- ============================================================
 --  GAMES: HOOD CUSTOMS - KNIFE REACH
@@ -5454,12 +5374,128 @@ F.games.hoodCustoms.forceHit = (function()
         end
     end
 
+    -- ============================================================
+    --  Fake ammo HUD
+    -- ============================================================
+    --  A small rounded panel in the bottom-right (above the real
+    --  ammo counter) showing "Ammo / MaxAmmo" read straight off
+    --  Tool.Script.Ammo + Tool.Script.MaxAmmo. Sub-label says
+    --  "(forcehit ammo)" so it's obvious it's the cheat's view of
+    --  the true ammo, not the game's CLIENT counter (which would
+    --  otherwise stay stale after every forceHit shot).
+    --
+    --  Only shown while G.hcForceHitActive. Created on start(),
+    --  destroyed on stop().
+    -- ============================================================
+    local hudGui, hudConn
+
+    local function findAmmoPair()
+        local function pull(parent)
+            if not parent then return nil, nil end
+            for _, tool in ipairs(parent:GetChildren()) do
+                if tool:IsA("Tool") then
+                    local scr = tool:FindFirstChild("Script")
+                    if scr then
+                        local av = scr:FindFirstChild("Ammo")
+                        if av and (av:IsA("IntValue") or av:IsA("NumberValue")) then
+                            local mv = scr:FindFirstChild("MaxAmmo")
+                            local maxV = mv and (mv:IsA("IntValue") or mv:IsA("NumberValue")) and mv.Value or nil
+                            return av.Value, maxV
+                        end
+                    end
+                end
+            end
+            return nil, nil
+        end
+        local a, m = pull(lplr.Character)
+        if a then return a, m end
+        return pull(lplr:FindFirstChild("Backpack"))
+    end
+
+    local function hudDestroy()
+        if hudConn then hudConn:Disconnect(); hudConn = nil end
+        if hudGui  then pcall(function() hudGui:Destroy() end); hudGui = nil end
+    end
+
+    local function hudCreate()
+        if hudGui then return end
+        hudGui = Instance.new("ScreenGui")
+        hudGui.Name             = "_fh_ammo_hud"
+        hudGui.ResetOnSpawn     = false
+        hudGui.IgnoreGuiInset   = true
+        hudGui.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
+        -- prefer CoreGui (CoreGui survives respawn AND can't be wiped
+        -- by the game), fall back to PlayerGui
+        local parented = pcall(function() hudGui.Parent = game:GetService("CoreGui") end)
+        if not parented or not hudGui.Parent then
+            hudGui.Parent = lplr:WaitForChild("PlayerGui")
+        end
+
+        local frame = Instance.new("Frame")
+        frame.Name                  = "Bg"
+        frame.Size                  = UDim2.fromOffset(140, 60)
+        -- anchor to bottom-right, slightly above the game's ammo counter
+        frame.AnchorPoint           = Vector2.new(1, 1)
+        frame.Position              = UDim2.new(1, -20, 1, -100)
+        frame.BackgroundColor3      = Color3.fromRGB(15, 15, 15)
+        frame.BackgroundTransparency = 0.35
+        frame.BorderSizePixel       = 0
+        frame.Parent                = hudGui
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 10)
+        corner.Parent       = frame
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Color        = Color3.fromRGB(80, 80, 80)
+        stroke.Thickness    = 1
+        stroke.Transparency = 0.4
+        stroke.Parent       = frame
+
+        local mainLbl = Instance.new("TextLabel")
+        mainLbl.Name                   = "Ammo"
+        mainLbl.Size                   = UDim2.new(1, -8, 0, 32)
+        mainLbl.Position               = UDim2.new(0, 4, 0, 4)
+        mainLbl.BackgroundTransparency = 1
+        mainLbl.Text                   = "0 / 0"
+        mainLbl.TextColor3             = Color3.fromRGB(255, 255, 255)
+        mainLbl.TextStrokeTransparency = 0.5
+        mainLbl.TextSize               = 24
+        mainLbl.Font                   = Enum.Font.GothamBold
+        mainLbl.Parent                 = frame
+
+        local subLbl = Instance.new("TextLabel")
+        subLbl.Name                   = "Sub"
+        subLbl.Size                   = UDim2.new(1, -8, 0, 16)
+        subLbl.Position               = UDim2.new(0, 4, 0, 38)
+        subLbl.BackgroundTransparency = 1
+        subLbl.Text                   = "(forcehit ammo)"
+        subLbl.TextColor3             = Color3.fromRGB(180, 180, 180)
+        subLbl.TextSize               = 12
+        subLbl.Font                   = Enum.Font.Gotham
+        subLbl.Parent                 = frame
+
+        if hudConn then hudConn:Disconnect() end
+        hudConn = RunService.Heartbeat:Connect(function()
+            if not G.hcForceHitActive or not hudGui then return end
+            local a, m = findAmmoPair()
+            if a then
+                mainLbl.Text  = tostring(a) .. " / " .. tostring(m or "?")
+                frame.Visible = true
+            else
+                frame.Visible = false
+            end
+        end)
+    end
+
     local function start()
         G.hcForceHitActive = true
+        hudCreate()
     end
 
     local function stop()
         G.hcForceHitActive = false
+        hudDestroy()
     end
 
     local t = makeToggle(start, stop, "hcForceHitActive")
