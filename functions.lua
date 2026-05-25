@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.4.1"
+local SCRIPT_VERSION = "v1.4.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5592,13 +5592,42 @@ F.games.mm2 = (function()
         clearAllDraws()
     end
 
-    -- ---------- Pickup gun ----------
-    local function findGunDrop()
-        -- search workspace + descendants for any BasePart named "GunDrop"
+    -- ---------- GunDrop tracking ----------
+    -- A live cache of every BasePart named "GunDrop" currently in
+    -- workspace, maintained via DescendantAdded/Removing listeners.
+    -- The previous workspace:GetDescendants() scan was the dominant
+    -- perf cost when MM2 maps have thousands of descendants - this
+    -- replaces it with O(1) lookups.
+    --
+    -- Cache + listener installation are gated on getgenv so script
+    -- reloads don't double-stack listeners. The cache table itself
+    -- is shared via getgenv too, so listeners installed by a prior
+    -- script run still write to the same table this run reads.
+    getgenv()._F_MM2_GUNDROP_CACHE = getgenv()._F_MM2_GUNDROP_CACHE or {}
+    local _gunDropCache = getgenv()._F_MM2_GUNDROP_CACHE
+    if not getgenv()._F_MM2_GUNDROP_HOOKED then
+        getgenv()._F_MM2_GUNDROP_HOOKED = true
         for _, d in ipairs(workspace:GetDescendants()) do
             if d:IsA("BasePart") and d.Name == "GunDrop" then
-                return d
+                _gunDropCache[d] = true
             end
+        end
+        workspace.DescendantAdded:Connect(function(d)
+            if d:IsA("BasePart") and d.Name == "GunDrop" then
+                _gunDropCache[d] = true
+            end
+        end)
+        workspace.DescendantRemoving:Connect(function(d)
+            if _gunDropCache[d] then
+                _gunDropCache[d] = nil
+            end
+        end)
+    end
+
+    local function findGunDrop()
+        for d, _ in pairs(_gunDropCache) do
+            if d.Parent then return d end
+            _gunDropCache[d] = nil  -- prune stale
         end
         return nil
     end
@@ -5714,14 +5743,18 @@ F.games.mm2 = (function()
     end
 
     local function dropEspScanTick()
+        -- iterate the live cache (O(N) where N = active drop count,
+        -- usually 0 or 1) instead of workspace:GetDescendants()
         local seen = {}
-        for _, d in ipairs(workspace:GetDescendants()) do
-            if d:IsA("BasePart") and d.Name == "GunDrop" then
+        for d, _ in pairs(_gunDropCache) do
+            if d.Parent then
                 seen[d] = true
                 if not dropEspAdorned[d] then
                     local hl, draw = attachDropMarker(d)
                     dropEspAdorned[d] = { hl = hl, draw = draw }
                 end
+            else
+                _gunDropCache[d] = nil  -- prune stale
             end
         end
         for drop, m in pairs(dropEspAdorned) do
