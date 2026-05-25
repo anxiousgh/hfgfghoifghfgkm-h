@@ -1821,10 +1821,10 @@ do
             { label = "crit",          id = 135698842254153 },
             { label = "m4a1",          id = 18521643711 },
             { label = "pack a punch",  id = 7408420244 },
-            { label = "sound 1",       id = 133749572213659 },
+            { label = "random sound",  id = 133749572213659 },
             { label = "weird idk what its called", id = 129157734600366 },
-            { label = "sound 3",       id = 133002449941130 },
-            { label = "sound 4",       id = 103094294870161 },
+            { label = "csgo headshot", id = 133002449941130 },
+            { label = "rust headshot", id = 103094294870161 },
         }
         local labels = {}
         local byLabel = {}
