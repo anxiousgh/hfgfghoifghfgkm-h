@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.4.5"
+local SCRIPT_VERSION = "v1.4.6"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5013,36 +5013,98 @@ F.games.hoodCustoms.forceHit = (function()
         return c and c:FindFirstChild("Head")
     end
 
-    -- spawn a fake bullet tracer: a thin neon part along origin -> hitPos,
-    -- fading out and self-destructing after `tracerLifetime`. Local-only
-    -- (Parent = workspace, but the part is invisible to anyone but us
-    -- since the server never hears about it).
+    -- Animated fake bullet tracer:
+    --   1. Travel: a neon beam stretches from origin toward hitPos
+    --      over ~40ms, growing from 0 to full length (looks like
+    --      bullet flight)
+    --   2. Impact: at the hit point, a neon ball expands outward
+    --      and fades (muzzle / impact flash)
+    --   3. Fade: the beam itself fades over tracerLifetime
+    -- All local-only (parented to workspace but only this client
+    -- ever sees them since the server isn't told).
     local function spawnTracer(origin, hitPos)
         if not tracerEnabled then return end
         local dist = (hitPos - origin).Magnitude
         if dist < 0.5 then return end
 
+        local dir = (hitPos - origin).Unit
+
+        -- the beam
         local part = Instance.new("Part")
         part.Anchored      = true
         part.CanCollide    = false
         part.CanTouch      = false
         part.CanQuery      = false
+        part.CastShadow    = false
         part.Material      = Enum.Material.Neon
         part.Color         = tracerColor
-        part.Transparency  = 0.30
-        part.Size          = Vector3.new(tracerThickness, tracerThickness, dist)
-        part.CFrame        = CFrame.new((origin + hitPos) * 0.5, hitPos)
+        part.Transparency  = 0.10
+        part.Size          = Vector3.new(tracerThickness, tracerThickness, 0.1)
+        part.CFrame        = CFrame.new(origin + dir * 0.05, hitPos)
         part.Name          = "_fh_tracer"
         part.Parent        = workspace
 
         task.spawn(function()
-            local steps = 8
-            local startT = 0.30
-            local endT   = 1.0
-            for i = 1, steps do
-                task.wait(tracerLifetime / steps)
+            -- (1) travel: stretch from origin -> hitPos
+            local TRAVEL_STEPS = 6
+            local TRAVEL_DURATION = 0.04
+            for i = 1, TRAVEL_STEPS do
+                task.wait(TRAVEL_DURATION / TRAVEL_STEPS)
                 if not part.Parent then return end
-                part.Transparency = startT + (endT - startT) * (i / steps)
+                local progress = i / TRAVEL_STEPS
+                local currentDist = dist * progress
+                part.Size = Vector3.new(tracerThickness, tracerThickness, currentDist)
+                part.CFrame = CFrame.new(origin + dir * (currentDist * 0.5), hitPos)
+            end
+            if not part.Parent then return end
+            -- final exact-length frame
+            part.Size = Vector3.new(tracerThickness, tracerThickness, dist)
+            part.CFrame = CFrame.new(origin + dir * (dist * 0.5), hitPos)
+
+            -- (2) impact flash at hitPos
+            local flash = Instance.new("Part")
+            flash.Anchored     = true
+            flash.CanCollide   = false
+            flash.CanTouch     = false
+            flash.CanQuery     = false
+            flash.CastShadow   = false
+            flash.Material     = Enum.Material.Neon
+            flash.Color        = tracerColor
+            flash.Shape        = Enum.PartType.Ball
+            flash.Size         = Vector3.new(0.4, 0.4, 0.4)
+            flash.Transparency = 0
+            flash.CFrame       = CFrame.new(hitPos)
+            flash.Name         = "_fh_tracer_flash"
+            flash.Parent       = workspace
+
+            -- a PointLight on the flash for extra pop
+            local light = Instance.new("PointLight")
+            light.Color      = tracerColor
+            light.Brightness = 3
+            light.Range      = 6
+            light.Parent     = flash
+
+            task.spawn(function()
+                local FLASH_STEPS = 8
+                local FLASH_DURATION = 0.18
+                for i = 1, FLASH_STEPS do
+                    task.wait(FLASH_DURATION / FLASH_STEPS)
+                    if not flash.Parent then return end
+                    local p = i / FLASH_STEPS
+                    local s = 0.4 + p * 2.0
+                    flash.Size         = Vector3.new(s, s, s)
+                    flash.Transparency = p
+                    light.Brightness   = 3 * (1 - p)
+                end
+                if flash.Parent then flash:Destroy() end
+            end)
+
+            -- (3) fade the beam over tracerLifetime
+            local FADE_STEPS = 8
+            for i = 1, FADE_STEPS do
+                task.wait(tracerLifetime / FADE_STEPS)
+                if not part.Parent then return end
+                part.Transparency = 0.10 + (1 - 0.10) * (i / FADE_STEPS)
             end
             if part.Parent then part:Destroy() end
         end)
@@ -5241,6 +5303,93 @@ F.games.hoodCustoms.forceHit = (function()
         return false
     end
 
+    -- ============================================================
+    --  Event-driven FX watchers
+    -- ============================================================
+    --  The old "snapshot value, wait 150ms, compare" approach was
+    --  racy: if multiple shots are in flight, the second shot's
+    --  snapshot captures the post-first-shot value, so when its
+    --  delayed check fires the value LOOKS unchanged and we silently
+    --  miss the second tracer / sound.
+    --
+    --  Event-driven: maintain a watcher on the relevant signal
+    --  (Ammo.Value or Humanoid.HealthChanged). Every individual
+    --  decrement event fires the FX exactly once, gated by "we
+    --  fired within the last 0.5s" so unrelated damage (other
+    --  players shooting the same target) doesn't trigger.
+    -- ============================================================
+
+    -- last-fire bookkeeping (read by the watchers when they fire)
+    local _lastFireOrigin, _lastFireHit
+    local _lastFireForFx = 0
+    local FX_FIRE_WINDOW = 0.5  -- seconds after fire that a damage / ammo event can claim
+
+    -- find first Tool in Character or Backpack that has a Script.Ammo IntValue
+    local function findCurrentAmmo()
+        local function pull(parent)
+            if not parent then return nil end
+            for _, tool in ipairs(parent:GetChildren()) do
+                if tool:IsA("Tool") then
+                    local scr = tool:FindFirstChild("Script")
+                    if scr then
+                        local av = scr:FindFirstChild("Ammo")
+                        if av and (av:IsA("IntValue") or av:IsA("NumberValue")) then
+                            return av
+                        end
+                    end
+                end
+            end
+            return nil
+        end
+        return pull(lplr.Character) or pull(lplr:FindFirstChild("Backpack"))
+    end
+
+    -- ammo watcher: each Value-decrease event spawns ONE tracer using
+    -- the stashed origin/hit from the most recent fire (if within the
+    -- fire window). Consumes the stash so multiple decrements without
+    -- another fire don't all draw the same tracer.
+    local _watchedAmmo, _watchedAmmoConn, _watchedAmmoLast
+    local function ensureAmmoWatch()
+        local av = findCurrentAmmo()
+        if av == _watchedAmmo then return end
+        if _watchedAmmoConn then _watchedAmmoConn:Disconnect(); _watchedAmmoConn = nil end
+        _watchedAmmo = av
+        if not av then return end
+        _watchedAmmoLast = av.Value
+        _watchedAmmoConn = av:GetPropertyChangedSignal("Value"):Connect(function()
+            local newV = av.Value
+            local old  = _watchedAmmoLast
+            _watchedAmmoLast = newV
+            if old and newV < old
+                and _lastFireOrigin
+                and (tick() - _lastFireForFx < FX_FIRE_WINDOW) then
+                spawnTracer(_lastFireOrigin, _lastFireHit)
+                _lastFireOrigin, _lastFireHit = nil, nil  -- consume
+            end
+        end)
+    end
+
+    -- target-humanoid watcher: each HealthChanged with health < lastHealth
+    -- plays ONE hit sound (gated by recent fire). Re-attaches when the
+    -- target changes.
+    local _watchedHum, _watchedHumConn, _watchedHumLast
+    local function ensureHumWatch()
+        local plr = currentTarget()
+        local hum = plr and plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+        if hum == _watchedHum then return end
+        if _watchedHumConn then _watchedHumConn:Disconnect(); _watchedHumConn = nil end
+        _watchedHum = hum
+        if not hum then return end
+        _watchedHumLast = hum.Health
+        _watchedHumConn = hum.HealthChanged:Connect(function(newHP)
+            local old = _watchedHumLast
+            _watchedHumLast = newHP
+            if old and newHP < old and (tick() - _lastFireForFx < FX_FIRE_WINDOW) then
+                playHitSound()
+            end
+        end)
+    end
+
     local function fireOnce()
         if tick() - lastFire < cooldown then return end
         if selfIsKnocked() then return end
@@ -5291,52 +5440,17 @@ F.games.hoodCustoms.forceHit = (function()
 
         if fired then
             lastFire = tick()
-            -- Tracer: gate on ACTUAL ammo decrementing. HC stores ammo
-            -- at Character.<Tool>.Script.Ammo (IntValue). Snapshot
-            -- pre-fire, re-check 150ms later, draw only on decrease.
-            local function snapshotAmmo()
-                local c = lplr.Character; if not c then return nil end
-                local tool = c:FindFirstChildOfClass("Tool"); if not tool then return nil end
-                local scr = tool:FindFirstChild("Script"); if not scr then return nil end
-                local av = scr:FindFirstChild("Ammo")
-                if av and (av:IsA("IntValue") or av:IsA("NumberValue")) then return av.Value end
-                return nil
-            end
-            local startAmmo = snapshotAmmo()
-            if origin then
-                if startAmmo == nil then
-                    spawnTracer(origin, part.Position)
-                else
-                    local tracerOrigin, tracerHit = origin, part.Position
-                    task.delay(0.15, function()
-                        local endAmmo = snapshotAmmo()
-                        if endAmmo and endAmmo < startAmmo then
-                            spawnTracer(tracerOrigin, tracerHit)
-                        end
-                    end)
-                end
-            end
-
-            -- Hit sound: gate on the TARGET'S HEALTH dropping. Snapshot
-            -- the target's Humanoid.Health, re-check 200ms later, play
-            -- only if it went down. Fallback to immediate play if we
-            -- can't resolve the target's humanoid (so feedback isn't
-            -- completely silent in weird states).
-            local targetPlr = currentTarget()
-            local targetHum
-            if targetPlr and targetPlr.Character then
-                targetHum = targetPlr.Character:FindFirstChildOfClass("Humanoid")
-            end
-            local startHP = targetHum and targetHum.Health or nil
-            if startHP == nil then
-                playHitSound()
-            else
-                task.delay(0.20, function()
-                    if targetHum and targetHum.Parent and targetHum.Health < startHP then
-                        playHitSound()
-                    end
-                end)
-            end
+            -- Stash this fire's origin/hit so the ammo watcher can
+            -- consume them on the next decrement event, and bump the
+            -- fire-window timestamp so both watchers consider this a
+            -- recent fire for FX-gating purposes.
+            _lastFireOrigin = origin
+            _lastFireHit    = part.Position
+            _lastFireForFx  = tick()
+            -- Make sure watchers are attached to the current ammo /
+            -- target. Cheap when nothing changed (refs match).
+            ensureAmmoWatch()
+            ensureHumWatch()
         end
     end
 
