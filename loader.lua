@@ -3,14 +3,43 @@
 --  executor: Potassium
 -- ============================================================
 
-local _functionsSrc = game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/functions.lua?_=" .. tick())
+-- ============================================================
+--  Cache-busting loader
+-- ============================================================
+-- raw.githubusercontent.com sends Cache-Control: max-age=300 and
+-- intentionally IGNORES query strings for cache keying — so the old
+-- "?_=" .. tick() trick does nothing and you'd load a 5-min-stale
+-- file after every push.
+--
+-- Fix: hit the GitHub API for the latest commit SHA on main, then
+-- fetch every script via the SHA-pinned raw URL. Different SHA =
+-- different path = different cache key = always-fresh source.
+--
+-- If the API call fails for any reason (rate limit, network), fall
+-- back to plain main-branch URLs so the loader still boots.
+-- ============================================================
+local _ghOwner, _ghRepo, _ghBranch = "anxiousgh", "hfgfghoifghfgkm-h", "main"
+local _sha
+do
+    local apiUrl = "https://api.github.com/repos/" .. _ghOwner .. "/" .. _ghRepo .. "/commits/" .. _ghBranch
+    local ok, body = pcall(game.HttpGet, game, apiUrl)
+    if ok and type(body) == "string" then
+        _sha = body:match('"sha"%s*:%s*"([0-9a-f]+)"')
+    end
+end
+local repo
+if _sha then
+    repo = "https://raw.githubusercontent.com/" .. _ghOwner .. "/" .. _ghRepo .. "/" .. _sha .. "/"
+else
+    repo = "https://raw.githubusercontent.com/" .. _ghOwner .. "/" .. _ghRepo .. "/" .. _ghBranch .. "/"
+end
+
+local _functionsSrc = game:HttpGet(repo .. "functions.lua")
 local _fnFn, _fnErr = loadstring(_functionsSrc)
 if not _fnFn then
     error("[cclosure.vip] functions.lua failed to compile: " .. tostring(_fnErr), 0)
 end
 local F = _fnFn()
-
-local repo = "https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/"
 local Library      = loadstring(game:HttpGet(repo .. "lib.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "libaddons/tman.lua"))()
 local SaveManager  = loadstring(game:HttpGet(repo .. "libaddons/sman.lua"))()
