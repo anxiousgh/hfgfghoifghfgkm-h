@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.4.8"
+local SCRIPT_VERSION = "v1.4.9"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5441,26 +5441,28 @@ F.games.hoodCustoms.forceHit = (function()
     local hudGui, hudConn
 
     local function findAmmoPair()
-        local function pull(parent)
-            if not parent then return nil, nil end
-            for _, tool in ipairs(parent:GetChildren()) do
-                if tool:IsA("Tool") then
-                    local scr = tool:FindFirstChild("Script")
-                    if scr then
-                        local av = scr:FindFirstChild("Ammo")
-                        if av and (av:IsA("IntValue") or av:IsA("NumberValue")) then
-                            local mv = scr:FindFirstChild("MaxAmmo")
-                            local maxV = mv and (mv:IsA("IntValue") or mv:IsA("NumberValue")) and mv.Value or nil
-                            return av.Value, maxV
-                        end
+        -- Only check Character — i.e. the tool the player currently has
+        -- equipped. If nothing's equipped (no Tool under Character), we
+        -- return nil so the HUD hides itself. Backpack tools are
+        -- intentionally ignored so the panel disappears the moment the
+        -- gun is unequipped instead of lingering with stale Backpack
+        -- numbers.
+        local char = lplr.Character
+        if not char then return nil, nil end
+        for _, tool in ipairs(char:GetChildren()) do
+            if tool:IsA("Tool") then
+                local scr = tool:FindFirstChild("Script")
+                if scr then
+                    local av = scr:FindFirstChild("Ammo")
+                    if av and (av:IsA("IntValue") or av:IsA("NumberValue")) then
+                        local mv = scr:FindFirstChild("MaxAmmo")
+                        local maxV = mv and (mv:IsA("IntValue") or mv:IsA("NumberValue")) and mv.Value or nil
+                        return av.Value, maxV
                     end
                 end
             end
-            return nil, nil
         end
-        local a, m = pull(lplr.Character)
-        if a then return a, m end
-        return pull(lplr:FindFirstChild("Backpack"))
+        return nil, nil
     end
 
     local function hudDestroy()
