@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.4.9"
+local SCRIPT_VERSION = "v1.5.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4982,8 +4982,8 @@ F.games.hoodCustoms.forceHit = (function()
         local outer = Instance.new("Beam")
         outer.Attachment0    = att0
         outer.Attachment1    = att1
-        outer.Width0         = tracerThickness * 8
-        outer.Width1         = tracerThickness * 6
+        outer.Width0         = tracerThickness * 5
+        outer.Width1         = tracerThickness * 4
         outer.LightEmission  = 1
         outer.LightInfluence = 0
         outer.FaceCamera     = true
@@ -5000,8 +5000,8 @@ F.games.hoodCustoms.forceHit = (function()
         local inner = Instance.new("Beam")
         inner.Attachment0    = att0
         inner.Attachment1    = att1
-        inner.Width0         = tracerThickness * 3
-        inner.Width1         = tracerThickness * 2
+        inner.Width0         = tracerThickness * 1.8
+        inner.Width1         = tracerThickness * 1.2
         inner.LightEmission  = 1
         inner.LightInfluence = 0
         inner.FaceCamera     = true
