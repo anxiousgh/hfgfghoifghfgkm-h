@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.5.3"
+local SCRIPT_VERSION = "v1.5.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -1208,6 +1208,11 @@ local _PathfindingService = game:GetService("PathfindingService")
 local _follow = {
     target = nil, conn = nil, path = nil, waypoints = {}, idx = 1,
     lastCompute = 0, viz = true, vizFolder = nil,
+    -- Steering state read every Heartbeat by the steerConn loop.
+    -- Updated (but never interrupted) by the path worker.
+    steerDir  = Vector3.zero,
+    steerJump = false,
+    steerConn = nil,
 }
 
 -- ---- pathfinding visualization ----
@@ -1272,6 +1277,9 @@ local function followStop()
     _follow.target = nil  -- the worker task exits on its next yield
     _follow.waypoints = {}
     _follow.idx = 1
+    _follow.steerDir  = Vector3.zero
+    _follow.steerJump = false
+    if _follow.steerConn then _follow.steerConn:Disconnect(); _follow.steerConn = nil end
     vizClear()
     local c = lplr.Character
     local hum = c and c:FindFirstChildOfClass("Humanoid")
@@ -1332,34 +1340,67 @@ local function followPlayer(plr)
         AgentMaxSlope   = 45,
     })
 
-    -- Worker task: ONE tight loop that recomputes the path every tick
-    -- and steers via Humanoid:Move(direction). Move() applies a
-    -- continuous direction vector that DOESN'T stop on its own (unlike
-    -- MoveTo, which halts the instant a waypoint is reached - that
-    -- was causing the "walk, stop, walk, stop" stutter between ticks).
-    -- The character keeps moving in the last-set direction between
-    -- loop iterations, so the motion is smooth.
+    -- Two-loop architecture:
+    --   (A) steerConn  - RunService.Heartbeat. Every frame, applies the
+    --                    cached _follow.steerDir via Humanoid:Move().
+    --                    Move() only persists for ~1 physics step before
+    --                    the default character controller takes over, so
+    --                    it MUST be re-applied every frame or the
+    --                    character stalls. This loop never yields and
+    --                    never stops calling Move while a target is set,
+    --                    so walking is uninterrupted.
+    --   (B) worker     - task.spawn. Slower (~3-4 Hz). Recomputes the
+    --                    path and only UPDATES _follow.steerDir to point
+    --                    at the next waypoint. Never touches Move()
+    --                    directly, so a slow ComputeAsync can't stutter
+    --                    movement.
+    --
+    -- Together: path updates happen in the background, the walk itself
+    -- is driven by a tight per-frame steering loop that the path worker
+    -- can't interrupt.
+
+    _follow.steerDir  = Vector3.zero
+    _follow.steerJump = false
+
+    if _follow.steerConn then _follow.steerConn:Disconnect() end
+    _follow.steerConn = RunService.Heartbeat:Connect(function()
+        if not _follow.target then return end
+        local hum = _followGetLocal()
+        if not hum or not hum.Parent then return end
+        -- always call Move - if steerDir is zero, this is the same as
+        -- doing nothing (no fight with default controller).
+        if _follow.steerDir.Magnitude > 0 then
+            pcall(function() hum:Move(_follow.steerDir, false) end)
+        end
+        if _follow.steerJump then
+            pcall(function() hum.Jump = true end)
+            _follow.steerJump = false
+        end
+    end)
+
     task.spawn(function()
         local target = plr
         while _follow.target == target do
             local hum, hrp = _followGetLocal()
             local thrp     = _followGetTargetHRP()
             if not (hum and hrp and thrp) then
-                if hum then pcall(function() hum:Move(Vector3.zero, false) end) end
-                task.wait(0.1)
+                _follow.steerDir = Vector3.zero
+                task.wait(0.15)
                 continue
             end
 
+            -- Set steerDir to point at `pos`. Doesn't call Move directly -
+            -- the steerConn does that every Heartbeat.
             local function steerTo(pos, doJump)
                 local dx = pos.X - hrp.Position.X
                 local dz = pos.Z - hrp.Position.Z
                 local flat = Vector3.new(dx, 0, dz)
                 if flat.Magnitude > 0.1 then
-                    pcall(function() hum:Move(flat.Unit, false) end)
+                    _follow.steerDir = flat.Unit
                 else
-                    pcall(function() hum:Move(Vector3.zero, false) end)
+                    _follow.steerDir = Vector3.zero
                 end
-                if doJump then pcall(function() hum.Jump = true end) end
+                if doJump then _follow.steerJump = true end
             end
 
             local dToTarget = (hrp.Position - thrp.Position).Magnitude
@@ -1367,12 +1408,14 @@ local function followPlayer(plr)
             -- Close enough: skip pathfinding, steer straight to target.
             if dToTarget < 6 then
                 steerTo(thrp.Position, false)
-                task.wait(0.08)
+                task.wait(0.15)
                 continue
             end
 
-            -- Recompute path every iteration (cheap on small maps,
-            -- ~10-30ms on Hood Customs).
+            -- Recompute path. ComputeAsync yields (~10-30ms on small
+            -- maps, longer on big ones), but that's fine - the steerConn
+            -- keeps walking in the previously-set direction the whole
+            -- time, so the walk doesn't stutter.
             local ok = pcall(function()
                 _follow.path:ComputeAsync(hrp.Position, thrp.Position)
             end)
@@ -1407,11 +1450,12 @@ local function followPlayer(plr)
                 steerTo(thrp.Position, false)
             end
 
-            task.wait(0.1)  -- loop tick - recompute ~10x per second
+            task.wait(0.25)  -- path recompute ~4x per second
         end
-        -- on exit, halt movement
-        local hum = _followGetLocal()
-        if hum then pcall(function() hum:Move(Vector3.zero, false) end) end
+        -- On worker exit: clear steering. steerConn is disconnected by
+        -- followStop() (which is what flips _follow.target to nil).
+        _follow.steerDir  = Vector3.zero
+        _follow.steerJump = false
         vizClear()
     end)
 end
