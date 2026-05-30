@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.6.4"
+local SCRIPT_VERSION = "v1.6.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -1561,17 +1561,33 @@ local function aimFindClosest()
     return closest, closestHit
 end
 
--- aimbot per-frame: update cached target + draw
+-- aimbot per-frame: update cached target + draw.
+--
+-- Fast early-out: if nothing in aimbot wants per-frame work
+-- (Enabled, ShowFOV, ShowTarget all off), bail immediately. Avoids
+-- a full Players scan / WorldToViewportPoint / GetMouseLocation per
+-- frame while the feature is off - cumulative cost shows up as
+-- "freezes" when combined with the other always-on loops.
 RunService.RenderStepped:Connect(function()
+    if not AimbotSettings.Enabled
+        and not AimbotSettings.ShowFOV
+        and not AimbotSettings.ShowTarget then
+        -- Cheap idle path: hide any drawings still left visible from
+        -- when the feature was last on, clear cached target, return.
+        if cachedTarget then cachedTarget = nil; cachedHitPoint = nil end
+        if A_fovCircle and A_fovCircle.Visible  then A_fovCircle.Visible  = false end
+        if A_targetBox and A_targetBox.Visible  then A_targetBox.Visible  = false end
+        return
+    end
     if AimbotSettings.Enabled then
         cachedTarget, cachedHitPoint = aimFindClosest()
     else
         cachedTarget = nil; cachedHitPoint = nil
     end
     if A_fovCircle then
-        local mousePos = UserInputService:GetMouseLocation()
         A_fovCircle.Visible = AimbotSettings.ShowFOV
         if AimbotSettings.ShowFOV then
+            local mousePos = UserInputService:GetMouseLocation()
             A_fovCircle.Radius = AimbotSettings.FOVRadius
             A_fovCircle.Position = mousePos
         end
@@ -1777,6 +1793,15 @@ local function clFindTarget()
 end
 
 RunService.RenderStepped:Connect(function(dt)
+    -- Fast early-out: skip the entire camlock per-frame when nothing
+    -- in the module wants work (both Enabled and ShowFOV are off).
+    -- Avoids repeated property writes to the FOV circle while the
+    -- feature is idle.
+    if not CamLockSettings.Enabled and not CamLockSettings.ShowFOV then
+        if clStickyTarget then clStickyTarget = nil end
+        if CL_fovCircle and CL_fovCircle.Visible then CL_fovCircle.Visible = false end
+        return
+    end
     if CL_fovCircle then
         CL_fovCircle.Visible = CamLockSettings.ShowFOV
         if CamLockSettings.ShowFOV then
@@ -1845,6 +1870,14 @@ end
 local _trigLastShot = 0
 local _trigCurrentPart = nil  -- currently-best target part this frame, for ShowTarget
 RunService.Heartbeat:Connect(function()
+    -- Fast early-out: skip GetMouseLocation + camera lookup + everything
+    -- when triggerbot is fully idle. The old path still hit UIS +
+    -- workspace.CurrentCamera each frame even when nothing was on.
+    if not TrigSettings.Enabled and not TrigSettings.ShowFOV and not TrigSettings.ShowTarget then
+        if TB_fovCircle and TB_fovCircle.Visible then TB_fovCircle.Visible = false end
+        if TB_targetBox and TB_targetBox.Visible then TB_targetBox.Visible = false end
+        return
+    end
     local cam = workspace.CurrentCamera
     local mousePos = UserInputService:GetMouseLocation()
 
@@ -1857,9 +1890,7 @@ RunService.Heartbeat:Connect(function()
     end
 
     -- early-out: if nothing is asking for a target this frame, skip the
-    -- per-player + per-part scan entirely. Without this gate the trigger-
-    -- bot did a full server scan every Heartbeat even when disabled -
-    -- the #1 freeze cause per the audit.
+    -- per-player + per-part scan entirely.
     if not TrigSettings.Enabled and not TrigSettings.ShowTarget then
         if TB_targetBox then TB_targetBox.Visible = false end
         return
@@ -2711,12 +2742,22 @@ end
 
 local function startEspRender()
     if espRenderConn or not Drawing then return end
-    espRenderConn=RunService.RenderStepped:Connect(function()
+    -- Throttle the ESP render to ~60 Hz max. On 144/240 Hz monitors the
+    -- naive per-frame loop did 2-4x as much work as needed - tracers /
+    -- boxes don't visibly improve past ~60 Hz to the human eye but the
+    -- cost (WorldToViewportPoint per part per player) scales linearly.
+    -- Saves ~50-70% ESP CPU on high-refresh setups.
+    local MIN_DT = 1 / 60
+    local accum = 0
+    espRenderConn = RunService.RenderStepped:Connect(function(dt)
         if not EspSettings.Enabled then
             for _,d in pairs(EspDrawings) do hideEsp(d) end
             for _,h in pairs(EspHighlights) do h.Enabled=false end
             return
         end
+        accum = accum + dt
+        if accum < MIN_DT then return end
+        accum = 0
         for _,plr in ipairs(_cachedPlayers or plrs:GetPlayers()) do
             if plr~=lplr then
                 if not EspDrawings[plr] then createEspForPlayer(plr) end
