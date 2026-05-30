@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.6.1"
+local SCRIPT_VERSION = "v1.6.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4758,7 +4758,8 @@ F.games.hoodCustoms.godmode = (function()
     local FREEZE_T   = 0.1265
 
     local track, hbConn, animConn, charConn
-    local lastArmAt = 0  -- re-arm throttle (HC fires AnimationPlayed many times/sec)
+    local lastArmAt = 0       -- re-arm throttle (HC fires AnimationPlayed many times/sec)
+    local lastListenAt = 0    -- listener throttle (don't even schedule redundant task.delays)
 
     local function getHumanoid()
         local c = lplr.Character
@@ -4805,25 +4806,41 @@ F.games.hoodCustoms.godmode = (function()
         -- Every Heartbeat: hold the animation at the godmode frame.
         -- AdjustSpeed(0) freezes the play head; setting TimePosition
         -- back to FREEZE_T defends against any external nudge.
+        --
+        -- Cheap-path: once the track is paused at FREEZE_T, the
+        -- per-frame cost is just one TimePosition read + a compare.
+        -- We only write when the position has actually drifted -
+        -- writing TimePosition forces a full rig re-pose, which is
+        -- what was tanking FPS when stacked on the rest of the
+        -- executor's load. Same logic for Speed.
         hbConn = RunService.Heartbeat:Connect(function()
             if not G.hcGmActive then killTrack(); return end
-            if track then
-                pcall(function()
-                    track.TimePosition = FREEZE_T
-                    track:AdjustSpeed(0)
-                end)
+            if not track then return end
+            local ok, tp = pcall(function() return track.TimePosition end)
+            if ok and math.abs(tp - FREEZE_T) > 0.001 then
+                pcall(function() track.TimePosition = FREEZE_T end)
+            end
+            local ok2, sp = pcall(function() return track.Speed end)
+            if ok2 and sp ~= 0 then
+                pcall(function() track:AdjustSpeed(0) end)
             end
         end)
 
         -- HC plays its own animations (equip, move, shoot, etc.).
         -- Whenever a NEW animation starts, our track loses priority
-        -- and the godmode breaks - so re-arm shortly after. Throttle
-        -- above caps the re-arm rate.
+        -- and the godmode breaks - so re-arm shortly after.
+        --
+        -- Throttle the LISTENER itself, not just arm(): without this
+        -- we still queue a task.delay() for every fire (30+/sec from
+        -- HC), and each scheduled task allocates a closure even if
+        -- the eventual arm() call hits the throttle and returns.
         animConn = hum.AnimationPlayed:Connect(function(newAnim)
             if not G.hcGmActive then return end
-            if track and newAnim ~= track then
-                task.delay(0.02 + math.random() * 0.03, arm)
-            end
+            if not track or newAnim == track then return end
+            local now = tick()
+            if now - lastListenAt < 0.1 then return end
+            lastListenAt = now
+            task.delay(0.02 + math.random() * 0.03, arm)
         end)
     end
 
