@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.7.1"
+local SCRIPT_VERSION = "v1.7.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5054,34 +5054,6 @@ F.games.hoodCustoms.forceHit = (function()
             inner.TextureSpeed  = 8
         end)
         inner.Parent = startPart
-
-        -- (0) muzzle flash at origin: a quick neon ball + light that
-        --     expands+fades over ~80ms. Pure cosmetic.
-        do
-            local muz = invisAnchor(origin)
-            muz.Transparency = 0
-            muz.Material     = Enum.Material.Neon
-            muz.Color        = tracerColor
-            muz.Shape        = Enum.PartType.Ball
-            muz.Size         = Vector3.new(0.4, 0.4, 0.4)
-            muz.Name         = "_fh_tracer_muzzle"
-            local mlight = Instance.new("PointLight")
-            mlight.Color = tracerColor; mlight.Brightness = 3; mlight.Range = 5
-            mlight.Parent = muz
-            task.spawn(function()
-                local STEPS, DUR = 6, 0.08
-                for i = 1, STEPS do
-                    task.wait(DUR / STEPS)
-                    if not muz.Parent then return end
-                    local p = i / STEPS
-                    local s = 0.4 + p * 1.2
-                    muz.Size = Vector3.new(s, s, s)
-                    muz.Transparency = p
-                    mlight.Brightness = 3 * (1 - p)
-                end
-                if muz.Parent then muz:Destroy() end
-            end)
-        end
 
         task.spawn(function()
             -- (1) travel: extend end attachment from origin -> hit.
