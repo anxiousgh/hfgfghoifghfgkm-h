@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.5.8"
+local SCRIPT_VERSION = "v1.5.9"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4757,25 +4757,6 @@ F.games.hoodCustoms.godmode = (function()
     local EMOTE_ID   = "rbxassetid://70883871260184"
     local FREEZE_T   = 0.1265
 
-    -- Cosmetic limb-void layer (the emote freeze does the actual
-    -- damage block; this just hides the limbs out in the void so
-    -- the character visual looks "torso only"). Distance bumped from
-    -- the old 5k-20k to 50k-80k so the limbs are well outside any
-    -- camera frustum / map clip volume.
-    local LIMB_NAMES = {
-        LeftHand = true,     RightHand = true,
-        LeftLowerArm = true, RightLowerArm = true,
-        LeftUpperArm = true, RightUpperArm = true,
-        LeftFoot = true,     RightFoot = true,
-        LeftLowerLeg = true, RightLowerLeg = true,
-        LeftUpperLeg = true, RightUpperLeg = true,
-    }
-    local VOID_MIN, VOID_MAX = 50000, 80000
-
-    local savedWelds   = {}  -- [Weld]     = { part0, part1 }
-    local savedAnchors = {}  -- [BasePart] = wasAnchored
-    local cachedLimbs  = {}  -- list of anchored limb BaseParts
-
     local track, hbConn, animConn, charConn
     local lastArmAt = 0  -- re-arm throttle (HC fires AnimationPlayed many times/sec)
 
@@ -4785,77 +4766,9 @@ F.games.hoodCustoms.godmode = (function()
         return c:FindFirstChildOfClass("Humanoid")
     end
 
-    local function randVoidCF()
-        local function axis()
-            local m = VOID_MIN + math.random() * (VOID_MAX - VOID_MIN)
-            return (math.random() < 0.5) and -m or m
-        end
-        return CFrame.new(axis(), axis(), axis())
-    end
-
-    local function setupLimbs(char)
-        cachedLimbs = {}
-        if not char then return end
-        -- Real limbs - anchor them. Their Motor6Ds are NOT touched
-        -- (no fling), so they're still attached visually to the
-        -- animation pose. But since we anchor + CFrame ONCE on setup,
-        -- the anchor wins and they sit in the void permanently
-        -- without any per-frame physics replication cost.
-        for _, p in ipairs(char:GetChildren()) do
-            if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
-                if savedAnchors[p] == nil then savedAnchors[p] = p.Anchored end
-                if not p.Anchored then pcall(function() p.Anchored = true end) end
-                pcall(function() p.CFrame = randVoidCF() end)
-                table.insert(cachedLimbs, p)
-            end
-        end
-        -- SpecialParts (HC's hit-detection hitboxes). Break each weld
-        -- (Part0 = nil) first so the weld can't drag the real limb
-        -- when we move the SpecialPart far away. Then anchor + CFrame
-        -- once.
-        local sp = char:FindFirstChild("SpecialParts")
-        if sp then
-            for _, p in ipairs(sp:GetChildren()) do
-                if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
-                    for _, w in ipairs(p:GetChildren()) do
-                        if w:IsA("Weld") or w:IsA("WeldConstraint") then
-                            if savedWelds[w] == nil then
-                                savedWelds[w] = { part0 = w.Part0, part1 = w.Part1 }
-                            end
-                            if w.Part0 ~= nil then
-                                pcall(function() w.Part0 = nil end)
-                            end
-                        end
-                    end
-                    if savedAnchors[p] == nil then savedAnchors[p] = p.Anchored end
-                    if not p.Anchored then pcall(function() p.Anchored = true end) end
-                    pcall(function() p.CFrame = randVoidCF() end)
-                    table.insert(cachedLimbs, p)
-                end
-            end
-        end
-    end
-
-    local function restoreLimbs()
-        for w, s in pairs(savedWelds) do
-            if w.Parent then
-                pcall(function() w.Part0 = s.part0; w.Part1 = s.part1 end)
-            end
-        end
-        for p, wasAnchored in pairs(savedAnchors) do
-            if p.Parent then
-                pcall(function() p.Anchored = wasAnchored end)
-            end
-        end
-        savedWelds   = {}
-        savedAnchors = {}
-        cachedLimbs  = {}
-    end
-
     local function killTrack()
         if hbConn   then hbConn:Disconnect();   hbConn   = nil end
         if animConn then animConn:Disconnect(); animConn = nil end
-        restoreLimbs()
         if track then
             pcall(function() track:Stop() end)
             pcall(function() track:Destroy() end)
@@ -4879,8 +4792,6 @@ F.games.hoodCustoms.godmode = (function()
 
         local hum = getHumanoid()
         if not hum then return end
-        local char = lplr.Character
-        if not char then return end
 
         killTrack()
 
@@ -4890,11 +4801,6 @@ F.games.hoodCustoms.godmode = (function()
         if not ok or not newTrack then return end
         track = newTrack
         pcall(function() track:Play(0, 1, 1) end)
-
-        -- Cosmetic: anchor every limb + break the SpecialPart welds,
-        -- CFrame each ONCE to a void position. They stay there until
-        -- restoreLimbs() runs - no per-frame physics replication cost.
-        setupLimbs(char)
 
         -- Every Heartbeat: hold the animation at the godmode frame.
         -- AdjustSpeed(0) freezes the play head; setting TimePosition
