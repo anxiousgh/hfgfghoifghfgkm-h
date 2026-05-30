@@ -1886,6 +1886,46 @@ do
         Default  = 0.20, Min = 0.05, Max = 1.0, Rounding = 2,
         Callback = function(v) F.games.hoodCustoms.forceHit.setTracerLifetime(v) end,
     })
+    -- Beam style selector. Each option uses a different builder in
+    -- spawnTracer (see functions.lua) and changes how the bullet
+    -- visual draws on screen.
+    HC:AddDropdown("HCForceHitTracerStyle", {
+        Values = { "Standard", "Laser", "Lightning", "Plasma", "Thin" },
+        Default = "Standard",
+        Text = "Tracer style",
+        Callback = function(v) F.games.hoodCustoms.forceHit.setTracerStyle(v) end,
+    })
+    HC:AddDivider()
+    -- Bullet whoosh sound (separate from hit sound, plays on every shot).
+    HC:AddToggle("HCForceHitWhoosh", { Text = "Bullet whoosh sound",
+        Default = false,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setWhooshEnabled(v) end,
+    })
+    HC:AddDropdown("HCForceHitWhooshId", {
+        Values = {
+            "9119713949 (short whoosh)",
+            "131961136  (windy whoosh)",
+            "5081173541 (laser whoosh)",
+            "6403566022 (sci-fi shot)",
+        },
+        Default = "9119713949 (short whoosh)",
+        Text = "Whoosh sound",
+        Callback = function(v)
+            local id = tonumber(v:match("^(%d+)")) or 9119713949
+            F.games.hoodCustoms.forceHit.setWhooshId(id)
+        end,
+    })
+    HC:AddSlider("HCForceHitWhooshVol", {
+        Text = "Whoosh volume",
+        Default = 0.5, Min = 0, Max = 2, Rounding = 2,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setWhooshVolume(v) end,
+    })
+    -- Trail particles along beam path (sparkles that linger after shot).
+    HC:AddToggle("HCForceHitTrail", { Text = "Trail particles along beam",
+        Default = false,
+        Callback = function(v) F.games.hoodCustoms.forceHit.setTrailEnabled(v) end,
+    })
+    HC:AddDivider()
     HC:AddToggle("HCForceHitHitSound", { Text = "Play hit sound",
         Default = true,
         Callback = function(v) F.games.hoodCustoms.forceHit.setHitSoundEnabled(v) end,

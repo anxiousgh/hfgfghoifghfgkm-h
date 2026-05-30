@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.7.2"
+local SCRIPT_VERSION = "v1.8.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4922,10 +4922,22 @@ F.games.hoodCustoms.forceHit = (function()
     -- visual / audio feedback (FireServer doesn't render bullet visuals
     -- because we never hit the gun script, so we fake them locally)
     local tracerEnabled   = true
-    local tracerColor     = Color3.fromRGB(0, 255, 80)  -- bright green, like the
-                                                         -- screenshot you showed
-    local tracerLifetime  = 0.20  -- seconds; fades 0.3 -> 1 transparency
-    local tracerThickness = 0.12  -- stud, neon part width
+    local tracerColor     = Color3.fromRGB(0, 255, 80)
+    local tracerLifetime  = 0.20
+    local tracerThickness = 0.12
+    -- Beam visual style. Each name maps to a builder in spawnTracer.
+    --   "Standard"  - two-beam halo + white-hot inner with scrolling texture
+    --   "Laser"     - single sharp solid beam, no halo, no texture
+    --   "Lightning" - segmented jagged beam with electric texture
+    --   "Plasma"    - thick pulsing glowing beam
+    --   "Thin"      - single thin beam in solid color, no halo
+    local tracerStyle     = "Standard"
+    -- Bullet whoosh sound on each shot (subtle, plays from PlayerGui).
+    local whooshEnabled   = false
+    local whooshId        = 9119713949  -- short whoosh, switchable
+    local whooshVolume    = 0.5
+    -- Trail particles along the beam path (sparkles linger after the shot).
+    local trailEnabled    = false
     local hitSoundEnabled = true
     local hitSoundId      = 135698842254153  -- "crit" by default
     local hitSoundVolume  = 1.0
@@ -5011,49 +5023,140 @@ F.games.hoodCustoms.forceHit = (function()
         local att0 = Instance.new("Attachment"); att0.Parent = startPart
         local att1 = Instance.new("Attachment"); att1.Parent = endPart
 
-        -- OUTER halo: wide, soft, color = user's tracerColor
-        local outer = Instance.new("Beam")
-        outer.Attachment0    = att0
-        outer.Attachment1    = att1
-        outer.Width0         = tracerThickness * 5
-        outer.Width1         = tracerThickness * 4
-        outer.LightEmission  = 1
-        outer.LightInfluence = 0
-        outer.FaceCamera     = true
-        outer.Segments       = 1
-        outer.Color          = ColorSequence.new(tracerColor)
-        outer.Transparency   = NumberSequence.new({
-            NumberSequenceKeypoint.new(0,    0.55),
-            NumberSequenceKeypoint.new(0.5,  0.35),
-            NumberSequenceKeypoint.new(1,    0.55),
-        })
-        outer.Parent = startPart
+        -- Build the beam(s) according to tracerStyle. Each builder
+        -- returns a list of Beam instances so the fade phase can
+        -- animate all of them uniformly.
+        local beams = {}
+        local function mkBeam()
+            local b = Instance.new("Beam")
+            b.Attachment0 = att0; b.Attachment1 = att1
+            b.LightEmission = 1; b.LightInfluence = 0
+            b.FaceCamera = true; b.Segments = 1
+            b.Parent = startPart
+            table.insert(beams, b)
+            return b
+        end
 
-        -- INNER core: narrower, brighter, white-hot midpoint
-        local inner = Instance.new("Beam")
-        inner.Attachment0    = att0
-        inner.Attachment1    = att1
-        inner.Width0         = tracerThickness * 1.8
-        inner.Width1         = tracerThickness * 1.2
-        inner.LightEmission  = 1
-        inner.LightInfluence = 0
-        inner.FaceCamera     = true
-        inner.Segments       = 1
-        inner.Color          = ColorSequence.new({
-            ColorSequenceKeypoint.new(0,   tracerColor),
-            ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)),
-            ColorSequenceKeypoint.new(1,   tracerColor),
-        })
-        inner.Transparency = NumberSequence.new(0.05)
-        -- subtle scrolling texture for energy feel (Roblox bundled
-        -- particle texture, falls back to plain beam if not available)
-        pcall(function()
-            inner.Texture       = "rbxassetid://446111271"
-            inner.TextureMode   = Enum.TextureMode.Wrap
-            inner.TextureLength = 6
-            inner.TextureSpeed  = 8
-        end)
-        inner.Parent = startPart
+        if tracerStyle == "Laser" then
+            -- single sharp thin beam, full opacity, no texture, no halo
+            local b = mkBeam()
+            b.Width0 = tracerThickness * 1.2
+            b.Width1 = tracerThickness * 1.2
+            b.Color  = ColorSequence.new(tracerColor)
+            b.Transparency = NumberSequence.new(0)
+
+        elseif tracerStyle == "Thin" then
+            -- single thin beam in tracerColor, no halo, no texture
+            local b = mkBeam()
+            b.Width0 = tracerThickness * 0.6
+            b.Width1 = tracerThickness * 0.6
+            b.Color  = ColorSequence.new(tracerColor)
+            b.Transparency = NumberSequence.new(0.1)
+
+        elseif tracerStyle == "Lightning" then
+            -- jagged electric beam with multiple segments + scrolling texture
+            local b = mkBeam()
+            b.Width0 = tracerThickness * 2.5
+            b.Width1 = tracerThickness * 2.5
+            b.Segments = math.max(8, math.floor(dist / 4))
+            b.CurveSize0 = 1.5; b.CurveSize1 = -1.5
+            b.Color = ColorSequence.new(tracerColor)
+            b.Transparency = NumberSequence.new(0.1)
+            pcall(function()
+                b.Texture = "rbxassetid://446111271"
+                b.TextureMode = Enum.TextureMode.Wrap
+                b.TextureLength = 1
+                b.TextureSpeed = 15
+            end)
+
+        elseif tracerStyle == "Plasma" then
+            -- thick pulsing glow, no inner core
+            local b = mkBeam()
+            b.Width0 = tracerThickness * 7
+            b.Width1 = tracerThickness * 5
+            b.Color = ColorSequence.new(tracerColor)
+            b.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0,   0.4),
+                NumberSequenceKeypoint.new(0.5, 0.15),
+                NumberSequenceKeypoint.new(1,   0.4),
+            })
+            pcall(function()
+                b.Texture = "rbxassetid://1837228550"  -- soft glow
+                b.TextureMode = Enum.TextureMode.Stretch
+            end)
+
+        else
+            -- "Standard" - outer halo + inner white-hot core w/ scrolling texture
+            local outer = mkBeam()
+            outer.Width0 = tracerThickness * 5
+            outer.Width1 = tracerThickness * 4
+            outer.Color  = ColorSequence.new(tracerColor)
+            outer.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0,   0.55),
+                NumberSequenceKeypoint.new(0.5, 0.35),
+                NumberSequenceKeypoint.new(1,   0.55),
+            })
+            local inner = mkBeam()
+            inner.Width0 = tracerThickness * 1.8
+            inner.Width1 = tracerThickness * 1.2
+            inner.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,   tracerColor),
+                ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)),
+                ColorSequenceKeypoint.new(1,   tracerColor),
+            })
+            inner.Transparency = NumberSequence.new(0.05)
+            pcall(function()
+                inner.Texture = "rbxassetid://446111271"
+                inner.TextureMode = Enum.TextureMode.Wrap
+                inner.TextureLength = 6
+                inner.TextureSpeed = 8
+            end)
+        end
+
+        -- WHOOSH SOUND: short subtle bullet whoosh on shot. Parented to
+        -- PlayerGui so distance attenuation doesn't fade it.
+        if whooshEnabled and whooshId and whooshId ~= 0 then
+            local pg = lplr:FindFirstChildOfClass("PlayerGui")
+            local s = Instance.new("Sound")
+            s.SoundId = "rbxassetid://" .. tostring(whooshId)
+            s.Volume  = math.clamp(whooshVolume, 0, 5)
+            s.Parent  = pg or workspace
+            s:Play()
+            task.delay(3, function() if s and s.Parent then s:Destroy() end end)
+        end
+
+        -- TRAIL PARTICLES: sparkles along the bullet path that linger
+        -- ~500ms. Anchored midpoint parts each emit once.
+        if trailEnabled then
+            local TRAIL_PARTS = math.clamp(math.floor(dist / 6), 3, 12)
+            task.spawn(function()
+                for i = 1, TRAIL_PARTS do
+                    local pos = origin + dir * (dist * (i / TRAIL_PARTS))
+                    local anchor = invisAnchor(pos)
+                    anchor.Name = "_fh_tracer_trail"
+                    local att = Instance.new("Attachment", anchor)
+                    local pe = Instance.new("ParticleEmitter")
+                    pe.Texture = "rbxassetid://241876428"
+                    pe.LightEmission = 1
+                    pe.Color = ColorSequence.new(tracerColor)
+                    pe.Size = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0.25),
+                        NumberSequenceKeypoint.new(1, 0),
+                    })
+                    pe.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0.2),
+                        NumberSequenceKeypoint.new(1, 1),
+                    })
+                    pe.Lifetime = NumberRange.new(0.3, 0.5)
+                    pe.Rate = 0
+                    pe.Speed = NumberRange.new(0.5, 1.5)
+                    pe.SpreadAngle = Vector2.new(180, 180)
+                    pe.Parent = att
+                    pe:Emit(3)
+                    task.delay(0.6, function() if anchor.Parent then anchor:Destroy() end end)
+                end
+            end)
+        end
 
         task.spawn(function()
             -- (1) travel: extend end attachment from origin -> hit.
@@ -5140,18 +5243,17 @@ F.games.hoodCustoms.forceHit = (function()
                 if ring.Parent  then ring:Destroy()  end
             end)
 
-            -- (3) fade both beams over tracerLifetime
+            -- (3) fade all beams uniformly over tracerLifetime
             local FADE_STEPS = 8
             for i = 1, FADE_STEPS do
                 task.wait(tracerLifetime / FADE_STEPS)
                 if not startPart.Parent then return end
                 local p = i / FADE_STEPS
-                outer.Transparency = NumberSequence.new({
-                    NumberSequenceKeypoint.new(0,   0.55 + (1 - 0.55) * p),
-                    NumberSequenceKeypoint.new(0.5, 0.35 + (1 - 0.35) * p),
-                    NumberSequenceKeypoint.new(1,   0.55 + (1 - 0.55) * p),
-                })
-                inner.Transparency = NumberSequence.new(0.05 + (1 - 0.05) * p)
+                for _, b in ipairs(beams) do
+                    if b.Parent then
+                        b.Transparency = NumberSequence.new(p)
+                    end
+                end
             end
             if startPart.Parent then startPart:Destroy() end
             if endPart.Parent   then endPart:Destroy()   end
@@ -5649,6 +5751,12 @@ F.games.hoodCustoms.forceHit = (function()
     t.setTracerColor    = function(c) if typeof(c) == "Color3" then tracerColor = c end end
     t.setTracerLifetime = function(n) tracerLifetime = math.clamp(tonumber(n) or 0.2, 0.05, 2) end
     t.setTracerThickness = function(n) tracerThickness = math.clamp(tonumber(n) or 0.12, 0.02, 1) end
+    t.setTracerStyle    = function(s) tracerStyle = tostring(s or "Standard") end
+    t.getTracerStyle    = function() return tracerStyle end
+    t.setWhooshEnabled  = function(v) whooshEnabled = v == true end
+    t.setWhooshId       = function(id) whooshId = tonumber(id) or 0 end
+    t.setWhooshVolume   = function(n) whooshVolume = math.clamp(tonumber(n) or 0.5, 0, 5) end
+    t.setTrailEnabled   = function(v) trailEnabled = v == true end
     t.setHitSoundEnabled = function(v) hitSoundEnabled = v == true end
     t.setHitSoundId      = function(id) hitSoundId = tonumber(id) or 0 end
     t.setHitSoundVolume  = function(n) hitSoundVolume = math.clamp(tonumber(n) or 1, 0, 5) end
