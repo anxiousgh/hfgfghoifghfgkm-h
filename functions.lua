@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.6.5"
+local SCRIPT_VERSION = "v1.7.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -1287,9 +1287,6 @@ local function followStop()
     _follow.target = nil  -- the worker task exits on its next yield
     _follow.waypoints = {}
     _follow.idx = 1
-    _follow.steerDir  = Vector3.zero
-    _follow.steerJump = false
-    if _follow.steerConn then _follow.steerConn:Disconnect(); _follow.steerConn = nil end
     vizClear()
     local c = lplr.Character
     local hum = c and c:FindFirstChildOfClass("Humanoid")
@@ -1350,122 +1347,78 @@ local function followPlayer(plr)
         AgentMaxSlope   = 45,
     })
 
-    -- Two-loop architecture:
-    --   (A) steerConn  - RunService.Heartbeat. Every frame, applies the
-    --                    cached _follow.steerDir via Humanoid:Move().
-    --                    Move() only persists for ~1 physics step before
-    --                    the default character controller takes over, so
-    --                    it MUST be re-applied every frame or the
-    --                    character stalls. This loop never yields and
-    --                    never stops calling Move while a target is set,
-    --                    so walking is uninterrupted.
-    --   (B) worker     - task.spawn. Slower (~3-4 Hz). Recomputes the
-    --                    path and only UPDATES _follow.steerDir to point
-    --                    at the next waypoint. Never touches Move()
-    --                    directly, so a slow ComputeAsync can't stutter
-    --                    movement.
+    -- Classic Humanoid:MoveTo() + MoveToFinished:Wait() pattern.
+    -- The two-loop steerDir / steerConn approach was flaky in practice
+    -- because Humanoid:Move(dir, false) only persists for one physics
+    -- step before the default character controller overrides it, and
+    -- on games that write to the Humanoid every frame (HC) our calls
+    -- got silently clobbered - net result was no movement at all.
     --
-    -- Together: path updates happen in the background, the walk itself
-    -- is driven by a tight per-frame steering loop that the path worker
-    -- can't interrupt.
-
-    _follow.steerDir  = Vector3.zero
-    _follow.steerJump = false
-
-    if _follow.steerConn then _follow.steerConn:Disconnect() end
-    _follow.steerConn = RunService.Heartbeat:Connect(function()
-        if not _follow.target then return end
-        local hum = _followGetLocal()
-        if not hum or not hum.Parent then return end
-        -- always call Move - if steerDir is zero, this is the same as
-        -- doing nothing (no fight with default controller).
-        if _follow.steerDir.Magnitude > 0 then
-            pcall(function() hum:Move(_follow.steerDir, false) end)
-        end
-        if _follow.steerJump then
-            pcall(function() hum.Jump = true end)
-            _follow.steerJump = false
-        end
-    end)
-
+    -- MoveTo issues a single walk command the humanoid honors until
+    -- it reaches the goal, hits the 8s timeout, or we issue a new
+    -- MoveTo. We re-issue every waypoint and bail out of the path
+    -- early if we get close to the actual target.
     task.spawn(function()
         local target = plr
         while _follow.target == target do
             local hum, hrp = _followGetLocal()
             local thrp     = _followGetTargetHRP()
             if not (hum and hrp and thrp) then
-                _follow.steerDir = Vector3.zero
-                task.wait(0.15)
-                continue
-            end
-
-            -- Set steerDir to point at `pos`. Doesn't call Move directly -
-            -- the steerConn does that every Heartbeat.
-            local function steerTo(pos, doJump)
-                local dx = pos.X - hrp.Position.X
-                local dz = pos.Z - hrp.Position.Z
-                local flat = Vector3.new(dx, 0, dz)
-                if flat.Magnitude > 0.1 then
-                    _follow.steerDir = flat.Unit
-                else
-                    _follow.steerDir = Vector3.zero
-                end
-                if doJump then _follow.steerJump = true end
+                task.wait(0.2); continue
             end
 
             local dToTarget = (hrp.Position - thrp.Position).Magnitude
 
-            -- Close enough: skip pathfinding, steer straight to target.
-            if dToTarget < 6 then
-                steerTo(thrp.Position, false)
+            -- Close enough: direct walk, no pathfinding.
+            if dToTarget < 8 then
+                pcall(function() hum:MoveTo(thrp.Position) end)
                 task.wait(0.15)
                 continue
             end
 
-            -- Recompute path. ComputeAsync yields (~10-30ms on small
-            -- maps, longer on big ones), but that's fine - the steerConn
-            -- keeps walking in the previously-set direction the whole
-            -- time, so the walk doesn't stutter.
+            -- Pathfind, then walk through up to 6 waypoints before
+            -- recomputing (target may have moved a lot).
             local ok = pcall(function()
                 _follow.path:ComputeAsync(hrp.Position, thrp.Position)
             end)
-
             if ok and _follow.path.Status == Enum.PathStatus.Success then
                 _follow.waypoints = _follow.path:GetWaypoints()
-                _follow.idx = 2
                 vizRebuild()
-
-                -- Steer toward the first waypoint that's >2 studs away
-                -- (skip waypoints we're already standing in, which would
-                -- otherwise produce a near-zero direction vector and a
-                -- visible stutter).
-                local chosen, chosenIdx
-                for i = 2, #_follow.waypoints do
+                for i = 2, math.min(#_follow.waypoints, 7) do
+                    if _follow.target ~= target then break end
+                    local hum2, hrp2 = _followGetLocal()
+                    if not hum2 or not hrp2 then break end
                     local wp = _follow.waypoints[i]
-                    local dx = wp.Position.X - hrp.Position.X
-                    local dz = wp.Position.Z - hrp.Position.Z
-                    if (dx * dx + dz * dz) > 4 then  -- 2 studs squared
-                        chosen, chosenIdx = wp, i
-                        break
+                    _follow.idx = i; vizRebuild()
+                    if wp.Action == Enum.PathWaypointAction.Jump then
+                        pcall(function() hum2.Jump = true end)
                     end
-                end
-                if chosen then
-                    _follow.idx = chosenIdx
-                    steerTo(chosen.Position, chosen.Action == Enum.PathWaypointAction.Jump)
+                    pcall(function() hum2:MoveTo(wp.Position) end)
+                    -- Wait for arrival or 1.5s timeout (per waypoint).
+                    -- MoveToFinished can fire false if the humanoid gives
+                    -- up; either way we move to the next waypoint.
+                    local finished = false
+                    task.spawn(function()
+                        hum2.MoveToFinished:Wait()
+                        finished = true
+                    end)
+                    local waited = 0
+                    while not finished and waited < 1.5 and _follow.target == target do
+                        RunService.Heartbeat:Wait()
+                        waited = waited + (1/60)
+                    end
+                    -- Early-exit: if we're already near the actual target,
+                    -- stop walking the rest of the (now stale) path.
+                    local _, hrp3 = _followGetLocal()
+                    if hrp3 and (hrp3.Position - thrp.Position).Magnitude < 8 then break end
                 end
             else
-                -- NoPath / failure: still steer toward target so we don't freeze.
-                _follow.waypoints = {}
-                vizClear()
-                steerTo(thrp.Position, false)
+                -- NoPath: try direct walk; if still stuck, the next
+                -- iteration recomputes.
+                pcall(function() hum:MoveTo(thrp.Position) end)
+                task.wait(0.5)
             end
-
-            task.wait(0.25)  -- path recompute ~4x per second
         end
-        -- On worker exit: clear steering. steerConn is disconnected by
-        -- followStop() (which is what flips _follow.target to nil).
-        _follow.steerDir  = Vector3.zero
-        _follow.steerJump = false
         vizClear()
     end)
 end
@@ -2633,7 +2586,31 @@ local function updateEspForPlayer(plr)
     local dist=(hrp.Position-Camera.CFrame.Position).Magnitude
     if dist>1000 then hideEsp(d); return end
     local col=espColor(plr)
-    local size=char:GetExtentsSize(); local cf=hrp.CFrame
+    -- Compute size from KNOWN body parts only (not GetExtentsSize, which
+    -- includes anything welded to the character - games like HC attach
+    -- map parts / building pieces to player characters, which made the
+    -- ESP box grow huge. Falls back to a sane default if no body parts
+    -- are found yet.
+    local _BODY_PARTS_FOR_BOX = {
+        "Head","HumanoidRootPart","Torso","UpperTorso","LowerTorso",
+        "LeftFoot","RightFoot","LeftHand","RightHand",
+    }
+    local minP, maxP
+    for _, _bname in ipairs(_BODY_PARTS_FOR_BOX) do
+        local _bp = char:FindFirstChild(_bname)
+        if _bp and _bp:IsA("BasePart") then
+            local _ppos, _psz = _bp.Position, _bp.Size
+            local _lo = _ppos - _psz/2
+            local _hi = _ppos + _psz/2
+            if not minP then minP, maxP = _lo, _hi
+            else
+                minP = Vector3.new(math.min(minP.X,_lo.X), math.min(minP.Y,_lo.Y), math.min(minP.Z,_lo.Z))
+                maxP = Vector3.new(math.max(maxP.X,_hi.X), math.max(maxP.Y,_hi.Y), math.max(maxP.Z,_hi.Z))
+            end
+        end
+    end
+    local size = (minP and maxP) and (maxP - minP) or Vector3.new(4, 5.5, 2)
+    local cf=hrp.CFrame
     local topV,_topOn=Camera:WorldToViewportPoint((cf*CFrame.new(0,size.Y/2,0)).Position)
     local botV,_botOn=Camera:WorldToViewportPoint((cf*CFrame.new(0,-size.Y/2,0)).Position)
     -- Same fix as above: only hide when the body's top or bottom is
@@ -3095,6 +3072,97 @@ F.blink   = {
     getDistance = function() return BLINK_DIST end,
 }
 F.fov = { set = setFov, get = function() return CUSTOM_FOV end }
+
+-- ============================================================
+--  TOOL GLOW
+-- ============================================================
+--  Highlights the currently equipped Tool with a configurable
+--  fill + outline color so it pops visually. Watches both the
+--  character (re-wires on respawn) and tool equip / unequip
+--  so the highlight follows whatever you're holding.
+-- ============================================================
+F.toolGlow = (function()
+    local active = false
+    local fillColor    = Color3.fromRGB(255,  60,  60)
+    local outlineColor = Color3.fromRGB(255, 255, 255)
+    local fillTransp   = 0.35
+    local outlineTransp= 0.0
+    local hl
+    local equipConn, unequipConn, charConn
+
+    local function ensureHl()
+        if hl and hl.Parent then return hl end
+        hl = Instance.new("Highlight")
+        hl.Name             = "_decay_tool_glow"
+        hl.DepthMode        = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.FillColor        = fillColor
+        hl.OutlineColor     = outlineColor
+        hl.FillTransparency = fillTransp
+        hl.OutlineTransparency = outlineTransp
+        hl.Enabled          = true
+        return hl
+    end
+
+    local function attachToCurrent()
+        if not active then return end
+        local c = lplr.Character; if not c then return end
+        local tool = c:FindFirstChildOfClass("Tool")
+        if tool then
+            local h = ensureHl()
+            h.FillColor = fillColor; h.OutlineColor = outlineColor
+            h.FillTransparency = fillTransp; h.OutlineTransparency = outlineTransp
+            h.Adornee = tool
+            h.Parent  = tool
+            h.Enabled = true
+        else
+            if hl then hl.Enabled = false end
+        end
+    end
+
+    local function wireChar(c)
+        if equipConn   then equipConn:Disconnect();   equipConn   = nil end
+        if unequipConn then unequipConn:Disconnect(); unequipConn = nil end
+        if not c then return end
+        equipConn = c.ChildAdded:Connect(function(ch)
+            if ch:IsA("Tool") then task.defer(attachToCurrent) end
+        end)
+        unequipConn = c.ChildRemoved:Connect(function(ch)
+            if ch:IsA("Tool") then task.defer(attachToCurrent) end
+        end)
+        attachToCurrent()
+    end
+
+    local function start()
+        if active then return end
+        active = true
+        if charConn then charConn:Disconnect() end
+        charConn = lplr.CharacterAdded:Connect(function(c)
+            if active then task.wait(0.3); wireChar(c) end
+        end)
+        wireChar(lplr.Character)
+    end
+
+    local function stop()
+        active = false
+        if hl then pcall(function() hl:Destroy() end); hl = nil end
+        if equipConn   then equipConn:Disconnect();   equipConn   = nil end
+        if unequipConn then unequipConn:Disconnect(); unequipConn = nil end
+        if charConn    then charConn:Disconnect();    charConn    = nil end
+    end
+
+    return {
+        start    = start,
+        stop     = stop,
+        toggle   = function() if active then stop() else start() end end,
+        isActive = function() return active end,
+        setFillColor          = function(c) if typeof(c) == "Color3" then fillColor    = c; if hl then hl.FillColor    = c end end end,
+        setOutlineColor       = function(c) if typeof(c) == "Color3" then outlineColor = c; if hl then hl.OutlineColor = c end end end,
+        setFillTransparency   = function(n) fillTransp    = math.clamp(tonumber(n) or 0.35, 0, 1); if hl then hl.FillTransparency    = fillTransp    end end,
+        setOutlineTransparency= function(n) outlineTransp = math.clamp(tonumber(n) or 0,    0, 1); if hl then hl.OutlineTransparency = outlineTransp end end,
+        getFillColor    = function() return fillColor    end,
+        getOutlineColor = function() return outlineColor end,
+    }
+end)()
 
 -- ============================================================
 --  ROCKET JUMP
@@ -4988,10 +5056,40 @@ F.games.hoodCustoms.forceHit = (function()
         end)
         inner.Parent = startPart
 
+        -- (0) muzzle flash at origin: a quick neon ball + light that
+        --     expands+fades over ~80ms. Pure cosmetic.
+        do
+            local muz = invisAnchor(origin)
+            muz.Transparency = 0
+            muz.Material     = Enum.Material.Neon
+            muz.Color        = tracerColor
+            muz.Shape        = Enum.PartType.Ball
+            muz.Size         = Vector3.new(0.4, 0.4, 0.4)
+            muz.Name         = "_fh_tracer_muzzle"
+            local mlight = Instance.new("PointLight")
+            mlight.Color = tracerColor; mlight.Brightness = 3; mlight.Range = 5
+            mlight.Parent = muz
+            task.spawn(function()
+                local STEPS, DUR = 6, 0.08
+                for i = 1, STEPS do
+                    task.wait(DUR / STEPS)
+                    if not muz.Parent then return end
+                    local p = i / STEPS
+                    local s = 0.4 + p * 1.2
+                    muz.Size = Vector3.new(s, s, s)
+                    muz.Transparency = p
+                    mlight.Brightness = 3 * (1 - p)
+                end
+                if muz.Parent then muz:Destroy() end
+            end)
+        end
+
         task.spawn(function()
-            -- (1) travel: extend end attachment from origin -> hit
-            local TRAVEL_STEPS    = 6
-            local TRAVEL_DURATION = 0.04
+            -- (1) travel: extend end attachment from origin -> hit.
+            -- A bit longer than before (60ms) so the eye can actually
+            -- track the beam shoot out rather than seeing it pop in.
+            local TRAVEL_STEPS    = 8
+            local TRAVEL_DURATION = 0.06
             for i = 1, TRAVEL_STEPS do
                 task.wait(TRAVEL_DURATION / TRAVEL_STEPS)
                 if not startPart.Parent then return end
@@ -5000,33 +5098,75 @@ F.games.hoodCustoms.forceHit = (function()
             if not startPart.Parent then return end
             endPart.CFrame = CFrame.new(hitPos)
 
-            -- (2) impact flash + PointLight at hitPos
+            -- (2) impact: bright neon ball, expanding shockwave ring,
+            --     and a sparkle particle burst.
             local flash = invisAnchor(hitPos)
             flash.Transparency = 0
             flash.Material     = Enum.Material.Neon
             flash.Color        = tracerColor
             flash.Shape        = Enum.PartType.Ball
-            flash.Size         = Vector3.new(0.5, 0.5, 0.5)
+            flash.Size         = Vector3.new(0.6, 0.6, 0.6)
             flash.Name         = "_fh_tracer_flash"
             local light = Instance.new("PointLight")
             light.Color      = tracerColor
-            light.Brightness = 4
-            light.Range      = 8
+            light.Brightness = 5
+            light.Range      = 10
             light.Parent     = flash
 
+            -- shockwave ring (a thin disc that expands outward)
+            local ring = Instance.new("Part")
+            ring.Anchored=true; ring.CanCollide=false; ring.CanTouch=false; ring.CanQuery=false; ring.CastShadow=false
+            ring.Material = Enum.Material.Neon
+            ring.Shape    = Enum.PartType.Cylinder
+            ring.Color    = tracerColor
+            ring.Size     = Vector3.new(0.05, 0.5, 0.5)
+            ring.Transparency = 0.3
+            -- orient ring perpendicular to the bullet path
+            ring.CFrame   = CFrame.lookAt(hitPos, hitPos + dir) * CFrame.Angles(0, math.rad(90), 0)
+            ring.Parent   = workspace
+            ring.Name     = "_fh_tracer_ring"
+
+            -- sparkle particle burst via an Attachment+ParticleEmitter
+            local sparkAtt = Instance.new("Attachment", flash)
+            local sparks = Instance.new("ParticleEmitter")
+            sparks.Texture          = "rbxassetid://241876428"  -- soft glow
+            sparks.LightEmission    = 1
+            sparks.Color            = ColorSequence.new(tracerColor)
+            sparks.Size             = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.4),
+                NumberSequenceKeypoint.new(1, 0)
+            })
+            sparks.Transparency     = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0),
+                NumberSequenceKeypoint.new(1, 1)
+            })
+            sparks.Lifetime         = NumberRange.new(0.15, 0.35)
+            sparks.Rate             = 0
+            sparks.Speed            = NumberRange.new(8, 14)
+            sparks.SpreadAngle      = Vector2.new(180, 180)
+            sparks.Parent           = sparkAtt
+            sparks:Emit(18)
+
             task.spawn(function()
-                local FLASH_STEPS    = 8
-                local FLASH_DURATION = 0.18
+                local FLASH_STEPS    = 10
+                local FLASH_DURATION = 0.22
                 for i = 1, FLASH_STEPS do
                     task.wait(FLASH_DURATION / FLASH_STEPS)
                     if not flash.Parent then return end
                     local p = i / FLASH_STEPS
-                    local s = 0.5 + p * 2.0
+                    local s = 0.6 + p * 2.6
                     flash.Size         = Vector3.new(s, s, s)
                     flash.Transparency = p
-                    light.Brightness   = 4 * (1 - p)
+                    light.Brightness   = 5 * (1 - p)
+                    -- shockwave ring expands faster than the ball
+                    if ring.Parent then
+                        local r = 0.5 + p * 4.5
+                        ring.Size = Vector3.new(0.05, r, r)
+                        ring.Transparency = 0.3 + (1 - 0.3) * p
+                    end
                 end
                 if flash.Parent then flash:Destroy() end
+                if ring.Parent  then ring:Destroy()  end
             end)
 
             -- (3) fade both beams over tracerLifetime
@@ -6148,12 +6288,17 @@ F.games.mm2 = (function()
     -- BasePart, even if MM2 is messing with the standard names.
     local function targetHitCF(char)
         if not char then return nil end
+        -- Head first - MM2 server validates the hit part client-claims,
+        -- and the shoot remote accepts head shots all the same. Aiming
+        -- at the head also makes the visual match what you'd see if
+        -- you actually shot the player normally.
+        local head = char:FindFirstChild("Head")
+        if head and head:IsA("BasePart") then return head.CFrame end
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if hrp and hrp:IsA("BasePart") then return hrp.CFrame end
         local p = char:FindFirstChild("LowerTorso")
               or char:FindFirstChild("Torso")
               or char:FindFirstChild("UpperTorso")
-              or char:FindFirstChild("Head")
         if p and p:IsA("BasePart") then return p.CFrame end
         -- GetPivot fallback (may return spoofed pivot but at least
         -- it's a CFrame so the shot fires)
