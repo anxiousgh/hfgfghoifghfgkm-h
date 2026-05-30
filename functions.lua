@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.5.7"
+local SCRIPT_VERSION = "v1.5.8"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4776,7 +4776,8 @@ F.games.hoodCustoms.godmode = (function()
     local savedAnchors = {}  -- [BasePart] = wasAnchored
     local cachedLimbs  = {}  -- list of anchored limb BaseParts
 
-    local track, hbConn, animConn, charConn, limbConn
+    local track, hbConn, animConn, charConn
+    local lastArmAt = 0  -- re-arm throttle (HC fires AnimationPlayed many times/sec)
 
     local function getHumanoid()
         local c = lplr.Character
@@ -4797,19 +4798,21 @@ F.games.hoodCustoms.godmode = (function()
         if not char then return end
         -- Real limbs - anchor them. Their Motor6Ds are NOT touched
         -- (no fling), so they're still attached visually to the
-        -- animation pose. But since we anchor + CFrame each frame,
-        -- the anchor wins and they sit in the void.
+        -- animation pose. But since we anchor + CFrame ONCE on setup,
+        -- the anchor wins and they sit in the void permanently
+        -- without any per-frame physics replication cost.
         for _, p in ipairs(char:GetChildren()) do
             if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
                 if savedAnchors[p] == nil then savedAnchors[p] = p.Anchored end
                 if not p.Anchored then pcall(function() p.Anchored = true end) end
+                pcall(function() p.CFrame = randVoidCF() end)
                 table.insert(cachedLimbs, p)
             end
         end
         -- SpecialParts (HC's hit-detection hitboxes). Break each weld
         -- (Part0 = nil) first so the weld can't drag the real limb
-        -- when we move the SpecialPart far away. Then anchor + queue
-        -- for CFrame writes.
+        -- when we move the SpecialPart far away. Then anchor + CFrame
+        -- once.
         local sp = char:FindFirstChild("SpecialParts")
         if sp then
             for _, p in ipairs(sp:GetChildren()) do
@@ -4826,6 +4829,7 @@ F.games.hoodCustoms.godmode = (function()
                     end
                     if savedAnchors[p] == nil then savedAnchors[p] = p.Anchored end
                     if not p.Anchored then pcall(function() p.Anchored = true end) end
+                    pcall(function() p.CFrame = randVoidCF() end)
                     table.insert(cachedLimbs, p)
                 end
             end
@@ -4851,7 +4855,6 @@ F.games.hoodCustoms.godmode = (function()
     local function killTrack()
         if hbConn   then hbConn:Disconnect();   hbConn   = nil end
         if animConn then animConn:Disconnect(); animConn = nil end
-        if limbConn then limbConn:Disconnect(); limbConn = nil end
         restoreLimbs()
         if track then
             pcall(function() track:Stop() end)
@@ -4864,6 +4867,16 @@ F.games.hoodCustoms.godmode = (function()
     local arm
     arm = function()
         if not G.hcGmActive then return end
+        -- Re-arm throttle. HC fires AnimationPlayed many times per
+        -- second (walk, idle, sway, equip ...) and each fire would
+        -- otherwise rebuild the track + both connections + the
+        -- limb-void setup. Cap to once per 150ms - plenty fast to
+        -- re-grab godmode after HC interrupts the emote, cheap
+        -- enough that the game doesn't melt.
+        local now = tick()
+        if now - lastArmAt < 0.15 then return end
+        lastArmAt = now
+
         local hum = getHumanoid()
         if not hum then return end
         local char = lplr.Character
@@ -4878,13 +4891,15 @@ F.games.hoodCustoms.godmode = (function()
         track = newTrack
         pcall(function() track:Play(0, 1, 1) end)
 
-        -- Cosmetic: anchor every limb + break the SpecialPart welds
-        -- so we can CFrame them to the void without dragging the rig.
+        -- Cosmetic: anchor every limb + break the SpecialPart welds,
+        -- CFrame each ONCE to a void position. They stay there until
+        -- restoreLimbs() runs - no per-frame physics replication cost.
         setupLimbs(char)
 
         -- Every Heartbeat: hold the animation at the godmode frame.
         -- AdjustSpeed(0) freezes the play head; setting TimePosition
-        -- back to FREEZE_T defends against any external nudge.
+        -- back to FREEZE_T defends against any external nudge. This
+        -- is the ONLY per-frame loop now - cheap (two property writes).
         hbConn = RunService.Heartbeat:Connect(function()
             if not G.hcGmActive then killTrack(); return end
             if track then
@@ -4895,26 +4910,10 @@ F.games.hoodCustoms.godmode = (function()
             end
         end)
 
-        -- Separate per-frame loop for the limb-void CFrame writes.
-        -- Re-runs setupLimbs if the character changed without us
-        -- noticing (rare but possible if respawn fires faster than
-        -- CharacterAdded -> task.wait re-arm completes).
-        limbConn = RunService.Heartbeat:Connect(function()
-            if not G.hcGmActive then return end
-            if not cachedLimbs[1] or not cachedLimbs[1].Parent then
-                setupLimbs(lplr.Character)
-            end
-            for _, p in ipairs(cachedLimbs) do
-                if p.Parent then
-                    pcall(function() p.CFrame = randVoidCF() end)
-                end
-            end
-        end)
-
         -- HC plays its own animations (equip, move, shoot, etc.).
         -- Whenever a NEW animation starts, our track loses priority
-        -- and the godmode breaks - so re-arm shortly after. Small
-        -- random jitter (20-50ms) to avoid a perfect cadence.
+        -- and the godmode breaks - so re-arm shortly after. Throttle
+        -- above caps the re-arm rate.
         animConn = hum.AnimationPlayed:Connect(function(newAnim)
             if not G.hcGmActive then return end
             if track and newAnim ~= track then
@@ -4926,13 +4925,17 @@ F.games.hoodCustoms.godmode = (function()
     return makeToggle(
         function()
             G.hcGmActive = true
+            lastArmAt = 0  -- bypass throttle on first arm
             arm()
             if charConn then charConn:Disconnect() end
             charConn = lplr.CharacterAdded:Connect(function()
                 if not G.hcGmActive then return end
                 killTrack()
                 task.wait(0.25)  -- let HC finish assembling the new rig
-                if G.hcGmActive then arm() end
+                if G.hcGmActive then
+                    lastArmAt = 0
+                    arm()
+                end
             end)
         end,
         function()
