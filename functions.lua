@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.6.2"
+local SCRIPT_VERSION = "v1.6.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -86,6 +86,8 @@ local TrigSettings = {
 local RageSettings = {
     TargetUserId=nil, TargetPlayer=nil, SkipKnocked=false, IgnoreKnocked=false,
     ShowLine=true, ShowOutline=true, LineOrigin="Bottom", FaceTarget=false,
+    OutlineColor = Color3.fromRGB(255, 80, 80),
+    LineColor    = Color3.fromRGB(255, 60, 60),
     Orbit=false, OrbitDistance=15, OrbitSpeed=60, OrbitHeight=5,
     AutoShoot=false, AutoShootDist=50, AutoShootVis=true, AutoShootRequireTool=false,
     AutoShootCooldown=100, EquipDelay=0.5, FFCheck=true,
@@ -118,6 +120,14 @@ local EspSettings = {
     ChamsEnabled=false, HeldItem=false, SelfESP=false,
     RadarEnabled=false, XCTEnabled=false, TracerHistory=false, TracerHistLen=2,
     BoxStyle="Corners", TracerOrigin="Bottom", ChamsStyle="Overlay",
+    -- Colors (live-readable by render code; setters on F.esp).
+    EnemyColor    = Color3.fromRGB(220,  60,  60),
+    TeamColor     = Color3.fromRGB( 80, 220,  80),
+    NeutralColor  = Color3.fromRGB(255, 255, 255),
+    ChamsFill     = Color3.fromRGB(255,  60,  60),
+    ChamsOutline  = Color3.fromRGB(255, 255, 255),
+    HealthBarColor= Color3.fromRGB( 80, 220,  80),
+    TracerColor   = Color3.fromRGB(255,  60,  60),
 }
 
 local _rbTargetList = {}
@@ -2174,6 +2184,7 @@ RunService.RenderStepped:Connect(function(dt)
                 end
                 RB_targetLine.From = from
                 RB_targetLine.To   = Vector2.new(toX, toY)
+                RB_targetLine.Color = RageSettings.LineColor or Color3.fromRGB(255, 80, 80)
                 RB_targetLine.Visible = true
             end
         else
@@ -2185,6 +2196,7 @@ RunService.RenderStepped:Connect(function(dt)
     if RageSettings.ShowOutline and char then
         local hl = ensureRBHighlight()
         if hl.Adornee ~= char then hl.Adornee = char end
+        hl.OutlineColor = RageSettings.OutlineColor or Color3.fromRGB(255, 80, 80)
         hl.Enabled = true
     elseif RB_outlineHL then
         RB_outlineHL.Enabled = false
@@ -2505,9 +2517,9 @@ local function newText()  if not Drawing then return nil end local t=Drawing.new
 
 local function espColor(plr)
     if EspSettings.TeamCheck then
-        return plr.Team==lplr.Team and Color3.fromRGB(80,220,80) or Color3.fromRGB(220,60,60)
+        return plr.Team==lplr.Team and EspSettings.TeamColor or EspSettings.EnemyColor
     end
-    return Color3.fromRGB(255,255,255)
+    return EspSettings.NeutralColor
 end
 
 local function createEspForPlayer(plr)
@@ -2521,7 +2533,7 @@ local function createEspForPlayer(plr)
     }
     EspDrawings[plr]=d
     local hi=Instance.new("Highlight")
-    hi.FillColor=Color3.fromRGB(255,60,60); hi.OutlineColor=Color3.new(1,1,1)
+    hi.FillColor=EspSettings.ChamsFill; hi.OutlineColor=EspSettings.ChamsOutline
     hi.FillTransparency=0.5; hi.OutlineTransparency=0
     hi.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hi.Enabled=false
     EspHighlights[plr]=hi
@@ -2689,6 +2701,9 @@ local function updateEspForPlayer(plr)
             if EspSettings.ChamsStyle=="Overlay" then hi.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hi.FillTransparency=0.4; hi.OutlineTransparency=0
             elseif EspSettings.ChamsStyle=="Occluded" then hi.DepthMode=Enum.HighlightDepthMode.Occluded; hi.FillTransparency=0.3; hi.OutlineTransparency=0
             elseif EspSettings.ChamsStyle=="Outline" then hi.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hi.FillTransparency=1; hi.OutlineTransparency=0 end
+            -- Re-apply colors each frame so the color picker updates live.
+            hi.FillColor    = EspSettings.ChamsFill
+            hi.OutlineColor = EspSettings.ChamsOutline
             hi.Parent=char; hi.Enabled=true
         else hi.Enabled=false end
     end
@@ -3181,6 +3196,8 @@ F.ragebot = {
     setShowLine     = function(b) RageSettings.ShowLine = b == true end,
     setShowOutline  = function(b) RageSettings.ShowOutline = b == true end,
     setLineOrigin   = function(s) RageSettings.LineOrigin = tostring(s) end,
+    setOutlineColor = function(c) if typeof(c) == "Color3" then RageSettings.OutlineColor = c; if RB_outlineHL then RB_outlineHL.OutlineColor = c end end end,
+    setLineColor    = function(c) if typeof(c) == "Color3" then RageSettings.LineColor    = c end end,
     setSkipKnocked  = function(b) RageSettings.SkipKnocked = b == true end,
     setIgnoreKnocked = function(b) RageSettings.IgnoreKnocked = b == true end,
     setFaceTarget  = function(b) RageSettings.FaceTarget = b == true end,
@@ -3256,6 +3273,14 @@ F.esp = {
     setTracerOrigin  = function(s) EspSettings.TracerOrigin  = tostring(s) end,
     setChamsStyle    = function(s) EspSettings.ChamsStyle    = tostring(s) end,
     setTracerHistLen = function(n) EspSettings.TracerHistLen = math.clamp(tonumber(n) or 2, 0.5, 10) end,
+    -- Color setters. Render loop reads EspSettings.* each frame so
+    -- the picker updates take effect immediately - no reset needed.
+    setEnemyColor     = function(c) if typeof(c) == "Color3" then EspSettings.EnemyColor    = c end end,
+    setTeamColor      = function(c) if typeof(c) == "Color3" then EspSettings.TeamColor     = c end end,
+    setNeutralColor   = function(c) if typeof(c) == "Color3" then EspSettings.NeutralColor  = c end end,
+    setChamsFill      = function(c) if typeof(c) == "Color3" then EspSettings.ChamsFill     = c end end,
+    setChamsOutline   = function(c) if typeof(c) == "Color3" then EspSettings.ChamsOutline  = c end end,
+    setTracerColor    = function(c) if typeof(c) == "Color3" then EspSettings.TracerColor   = c end end,
 }
 
 -- players

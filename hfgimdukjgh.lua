@@ -286,6 +286,12 @@ do
     })
     Tgt:AddToggle("RageShowOutline",   { Text = "Show target outline",
         Default = F.ragebot.settings.ShowOutline, Callback = F.ragebot.setShowOutline })
+    Tgt:AddLabel("Line color"):AddColorPicker("RageLineColor", {
+        Default = F.ragebot.settings.LineColor, Title = "Line color",
+        Callback = F.ragebot.setLineColor })
+    Tgt:AddLabel("Outline color"):AddColorPicker("RageOutlineColor", {
+        Default = F.ragebot.settings.OutlineColor, Title = "Outline color",
+        Callback = F.ragebot.setOutlineColor })
     Tgt:AddToggle("RageFaceTarget",    { Text = "Face target",
         Default = F.ragebot.settings.FaceTarget,  Callback = F.ragebot.setFaceTarget })
     Tgt:AddToggle("RageCamSnap",       { Text = "Cam snap",
@@ -844,6 +850,24 @@ do
     TabEspPlayers:AddToggle("EspTeamColors", { Text = "Team colors",
         Default = F.esp.settings.TeamCheck, Callback = F.esp.setTeamCheck })
 
+    TabEspPlayers:AddDivider()
+    TabEspPlayers:AddLabel("Colors")
+
+    -- Enemy / team / neutral colors. Render reads EspSettings live,
+    -- so pickers update instantly without re-toggling ESP.
+    TabEspPlayers:AddLabel("Enemy"):AddColorPicker("EspEnemyColor", {
+        Default = F.esp.settings.EnemyColor, Title = "Enemy color",
+        Callback = F.esp.setEnemyColor })
+    TabEspPlayers:AddLabel("Team"):AddColorPicker("EspTeamColor", {
+        Default = F.esp.settings.TeamColor, Title = "Team color",
+        Callback = F.esp.setTeamColor })
+    TabEspPlayers:AddLabel("Neutral"):AddColorPicker("EspNeutralColor", {
+        Default = F.esp.settings.NeutralColor, Title = "Neutral color",
+        Callback = F.esp.setNeutralColor })
+    TabEspPlayers:AddLabel("Tracer"):AddColorPicker("EspTracerColor", {
+        Default = F.esp.settings.TracerColor, Title = "Tracer color",
+        Callback = F.esp.setTracerColor })
+
     -- ---------------- RIGHT TABBOX ----------------
     local Right = Tabs.Visual:AddRightTabbox()
 
@@ -898,6 +922,12 @@ do
         Default = F.esp.settings.ChamsStyle,
         Text = "Chams style", Callback = F.esp.setChamsStyle,
     })
+    TabEspWorld:AddLabel("Chams fill"):AddColorPicker("EspChamsFill", {
+        Default = F.esp.settings.ChamsFill, Title = "Chams fill",
+        Callback = F.esp.setChamsFill })
+    TabEspWorld:AddLabel("Chams outline"):AddColorPicker("EspChamsOutline", {
+        Default = F.esp.settings.ChamsOutline, Title = "Chams outline",
+        Callback = F.esp.setChamsOutline })
 
     TabEspWorld:AddDivider()
 
