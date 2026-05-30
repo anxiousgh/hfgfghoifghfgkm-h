@@ -1469,15 +1469,6 @@ do
 
     Act:AddDivider()
 
-    Act:AddButton({ Text = "Anti VC ban", DoubleClick = true,
-        Func = function()
-            F.antiVcBan.fire()
-            Library:Notify("Anti VC ban running - wait ~7s", 5)
-        end,
-    })
-
-    Act:AddDivider()
-
     Act:AddButton({ Text = "PANIC - disable everything", DoubleClick = true,
         Func = function()
             F.disableAll()
