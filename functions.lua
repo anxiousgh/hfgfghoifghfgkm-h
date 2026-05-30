@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.5.4"
+local SCRIPT_VERSION = "v1.5.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4730,207 +4730,108 @@ end)()
 -- top-level chunk's 200-register Luau budget (we're at the limit).
 F.games.hoodCustoms.godmode = (function()
     -- ============================================================
-    -- HC godmode = DETACH-AND-VOID THE LIMBS.
+    -- HC godmode = FROZEN EMOTE EXPLOIT.
     --
-    -- v1.0.6 was insufficient - voiding only the SpecialParts had
-    -- no effect, which means HC's hit detection actually targets
-    -- the REAL limb MeshParts, not the SpecialPart hitboxes.
+    -- The limb-detach approach turned out to be unreliable on HC's
+    -- current build. This is a much simpler exploit that actually
+    -- works: load a specific emote animation, play it, then every
+    -- Heartbeat re-set its TimePosition to a specific frame
+    -- (freezetime) and AdjustSpeed(0). This locks the character in
+    -- the very first pose of the emote, which puts HC's hit-detection
+    -- in a state where damage doesn't apply.
     --
-    -- To void the real limbs without dragging the rig, we have to
-    -- detach them from the rig assembly first. Detaching them
-    -- normally triggers HC's 14 BallSocketConstraints in the
-    -- 'RagdollConstraints' folder, which produced the wiggle on
-    -- earlier attempts. So:
+    -- Two helpers that keep it solid:
+    --   * AnimationPlayed listener: HC plays its own animations on
+    --     equip / move / shoot etc. The moment another animation
+    --     starts, our frozen track gets blended out and we lose
+    --     godmode. So we listen for AnimationPlayed and re-fire the
+    --     setup ~20-50ms later (small random jitter so we don't trip
+    --     "scripted on every frame" detection).
+    --   * CharacterAdded: respawn rebuilds the Humanoid - wait 0.25s
+    --     for HC to fully assemble the new rig, then re-fire setup.
     --
-    --   1. Disable every Constraint in RagdollConstraints/ (set
-    --      Enabled=false). Constraints can't take over when the
-    --      Motor6Ds break.
-    --   2. Break every limb Motor6D (Part0 + Part1 = nil). Real
-    --      limbs become free parts, disconnected from the rig.
-    --      HRP / torso / head are still all connected to each other
-    --      via Root, Waist, and Neck Motor6Ds, so walking works.
-    --   3. Break each SpecialPart limb weld (Part0 = nil) so it
-    --      doesn't pull the now-free real limb when we move things.
-    --   4. Anchor every limb (real + SpecialPart) so they don't
-    --      drift under gravity now that they're free parts.
-    --   5. Each Heartbeat, write a fresh random void CFrame to
-    --      every limb (real + SpecialPart). Server sees them in
-    --      the void wherever HC raycasts.
-    --
-    -- Local visual: limbs are way out in the void (invisible at
-    -- that distance). Character renders as torso + head moving
-    -- around without limbs. Movement (walking, running, jumping)
-    -- works fine because the HRP -> torso -> head chain is fully
-    -- intact and the Humanoid drives the rest.
-    --
-    -- Toggle off restore order matters:
-    --   restore Motor6Ds  -> rig is wired back up
-    --   restore welds     -> SpecialParts pinned to real limbs
-    --   unanchor          -> Motor6Ds + welds drive positions
-    --   re-enable constraints -> ragdoll system ready again
+    -- Toggle off: stop+destroy the animation track, disconnect both
+    -- helpers. Nothing to restore - we never touched joints, welds,
+    -- constraints, or anchors. Cleanup is essentially free.
     -- ============================================================
-    local LIMB_NAMES = {
-        LeftHand = true,     RightHand = true,
-        LeftLowerArm = true, RightLowerArm = true,
-        LeftUpperArm = true, RightUpperArm = true,
-        LeftFoot = true,     RightFoot = true,
-        LeftLowerLeg = true, RightLowerLeg = true,
-        LeftUpperLeg = true, RightUpperLeg = true,
-    }
-    local LIMB_MOTORS = {
-        LeftShoulder = true, LeftElbow  = true, LeftWrist  = true,
-        RightShoulder= true, RightElbow = true, RightWrist = true,
-        LeftHip  = true, LeftKnee  = true, LeftAnkle  = true,
-        RightHip = true, RightKnee = true, RightAnkle = true,
-    }
-    local VOID_MIN = 5000
-    local VOID_MAX = 20000
+    local EMOTE_ID   = "rbxassetid://70883871260184"
+    local FREEZE_T   = 0.1265
 
-    local savedMotors      = {}  -- [Motor6D]    = { part0, part1 }
-    local savedWelds       = {}  -- [Weld]       = { part0, part1 }
-    local savedConstraints = {}  -- [Constraint] = wasEnabled
-    local savedAnchors     = {}  -- [BasePart]   = wasAnchored
-    local cached           = {}  -- list of limb BaseParts (real + SpecialPart)
-    local hbConn, charConn
+    local track, hbConn, animConn, charConn
 
-    local function setup(char)
-        if not char then return end
-        cached = {}
+    local function getHumanoid()
+        local c = lplr.Character
+        if not c then return nil end
+        return c:FindFirstChildOfClass("Humanoid")
+    end
 
-        -- (1) disable RagdollConstraints
-        local rc = char:FindFirstChild("RagdollConstraints")
-        if rc then
-            for _, c in ipairs(rc:GetChildren()) do
-                if c:IsA("Constraint") then
-                    if savedConstraints[c] == nil then
-                        savedConstraints[c] = c.Enabled
-                    end
-                    if c.Enabled then
-                        pcall(function() c.Enabled = false end)
-                    end
-                end
-            end
-        end
-
-        -- (2) break limb Motor6Ds (both ends nil = fully dead joint)
-        for _, d in ipairs(char:GetDescendants()) do
-            if d:IsA("Motor6D") and LIMB_MOTORS[d.Name] then
-                if savedMotors[d] == nil then
-                    savedMotors[d] = { part0 = d.Part0, part1 = d.Part1 }
-                end
-                if d.Part0 ~= nil or d.Part1 ~= nil then
-                    pcall(function() d.Part0 = nil; d.Part1 = nil end)
-                end
-            end
-        end
-
-        -- (3) collect real limb MeshParts + anchor them
-        for _, p in ipairs(char:GetChildren()) do
-            if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
-                if savedAnchors[p] == nil then savedAnchors[p] = p.Anchored end
-                if not p.Anchored then pcall(function() p.Anchored = true end) end
-                table.insert(cached, p)
-            end
-        end
-
-        -- (4) collect SpecialPart limbs + break their welds + anchor
-        local sp = char:FindFirstChild("SpecialParts")
-        if sp then
-            for _, p in ipairs(sp:GetChildren()) do
-                if p:IsA("BasePart") and LIMB_NAMES[p.Name] then
-                    for _, w in ipairs(p:GetChildren()) do
-                        if w:IsA("Weld") or w:IsA("WeldConstraint") then
-                            if savedWelds[w] == nil then
-                                savedWelds[w] = { part0 = w.Part0, part1 = w.Part1 }
-                            end
-                            if w.Part0 ~= nil then
-                                pcall(function() w.Part0 = nil end)
-                            end
-                        end
-                    end
-                    if savedAnchors[p] == nil then savedAnchors[p] = p.Anchored end
-                    if not p.Anchored then pcall(function() p.Anchored = true end) end
-                    table.insert(cached, p)
-                end
-            end
+    local function killTrack()
+        if hbConn   then hbConn:Disconnect();   hbConn   = nil end
+        if animConn then animConn:Disconnect(); animConn = nil end
+        if track then
+            pcall(function() track:Stop() end)
+            pcall(function() track:Destroy() end)
+            track = nil
         end
     end
 
-    local function randVoidPos()
-        local function axis()
-            local m = VOID_MIN + math.random() * (VOID_MAX - VOID_MIN)
-            return (math.random() < 0.5) and -m or m
-        end
-        return CFrame.new(axis(), axis(), axis())
-    end
+    -- declared forward so animConn can re-call after a delay.
+    local arm
+    arm = function()
+        if not G.hcGmActive then return end
+        local hum = getHumanoid()
+        if not hum then return end
 
-    local function bind()
-        if hbConn then hbConn:Disconnect() end
-        setup(lplr.Character)
+        killTrack()
+
+        local anim = Instance.new("Animation")
+        anim.AnimationId = EMOTE_ID
+        local ok, newTrack = pcall(function() return hum:LoadAnimation(anim) end)
+        if not ok or not newTrack then return end
+        track = newTrack
+        pcall(function() track:Play(0, 1, 1) end)
+
+        -- Every Heartbeat: hold the animation at the godmode frame.
+        -- AdjustSpeed(0) freezes the play head; setting TimePosition
+        -- back to FREEZE_T defends against any external nudge.
         hbConn = RunService.Heartbeat:Connect(function()
-            if not G.hcGmActive then return end
-            if not cached[1] or not cached[1].Parent then
-                setup(lplr.Character)
-            end
-            for _, p in ipairs(cached) do
-                if p.Parent then
-                    pcall(function() p.CFrame = randVoidPos() end)
-                end
+            if not G.hcGmActive then killTrack(); return end
+            if track then
+                pcall(function()
+                    track.TimePosition = FREEZE_T
+                    track:AdjustSpeed(0)
+                end)
             end
         end)
-    end
 
-    local function restoreAll()
-        -- order matters:
-        --   motors first  -> rig reconnects
-        --   welds second  -> SpecialParts pinned to real limbs
-        --   anchors third -> joints / welds can drive positions
-        --   constraints last
-        for m, s in pairs(savedMotors) do
-            if m.Parent then
-                pcall(function() m.Part0 = s.part0; m.Part1 = s.part1 end)
+        -- HC plays its own animations (equip, move, shoot, etc.).
+        -- Whenever a NEW animation starts, our track loses priority
+        -- and the godmode breaks - so re-arm shortly after. Small
+        -- random jitter (20-50ms) to avoid a perfect cadence.
+        animConn = hum.AnimationPlayed:Connect(function(newAnim)
+            if not G.hcGmActive then return end
+            if track and newAnim ~= track then
+                task.delay(0.02 + math.random() * 0.03, arm)
             end
-        end
-        for w, s in pairs(savedWelds) do
-            if w.Parent then
-                pcall(function() w.Part0 = s.part0; w.Part1 = s.part1 end)
-            end
-        end
-        for p, wasAnchored in pairs(savedAnchors) do
-            if p.Parent then
-                pcall(function() p.Anchored = wasAnchored end)
-            end
-        end
-        for c, wasEnabled in pairs(savedConstraints) do
-            if c.Parent then
-                pcall(function() c.Enabled = wasEnabled end)
-            end
-        end
-        savedMotors      = {}
-        savedWelds       = {}
-        savedConstraints = {}
-        savedAnchors     = {}
-        cached           = {}
+        end)
     end
 
     return makeToggle(
         function()
             G.hcGmActive = true
-            bind()
+            arm()
             if charConn then charConn:Disconnect() end
             charConn = lplr.CharacterAdded:Connect(function()
                 if not G.hcGmActive then return end
-                savedMotors, savedWelds = {}, {}
-                savedConstraints, savedAnchors, cached = {}, {}, {}
-                task.wait(0.5)  -- let HC build SpecialParts after spawn
-                bind()
+                killTrack()
+                task.wait(0.25)  -- let HC finish assembling the new rig
+                if G.hcGmActive then arm() end
             end)
         end,
         function()
             G.hcGmActive = false
-            if hbConn   then hbConn:Disconnect();   hbConn   = nil end
+            killTrack()
             if charConn then charConn:Disconnect(); charConn = nil end
-            restoreAll()
         end,
         "hcGmActive"
     )

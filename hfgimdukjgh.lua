@@ -1798,7 +1798,7 @@ do
 
     -- ---- Godmode ----
     HC:AddLabel("Godmode")
-    HC:AddToggle("HCGodmode", { Text = "Godmode (limbs)",
+    HC:AddToggle("HCGodmode", { Text = "Godmode (frozen emote)",
         Default = false,
         Callback = function(v)
             if v then F.games.hoodCustoms.godmode.start()
