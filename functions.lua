@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.5.9"
+local SCRIPT_VERSION = "v1.6.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4804,8 +4804,7 @@ F.games.hoodCustoms.godmode = (function()
 
         -- Every Heartbeat: hold the animation at the godmode frame.
         -- AdjustSpeed(0) freezes the play head; setting TimePosition
-        -- back to FREEZE_T defends against any external nudge. This
-        -- is the ONLY per-frame loop now - cheap (two property writes).
+        -- back to FREEZE_T defends against any external nudge.
         hbConn = RunService.Heartbeat:Connect(function()
             if not G.hcGmActive then killTrack(); return end
             if track then
