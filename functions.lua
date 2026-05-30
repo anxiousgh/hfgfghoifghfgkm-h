@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.7.0"
+local SCRIPT_VERSION = "v1.7.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -2719,12 +2719,11 @@ end
 
 local function startEspRender()
     if espRenderConn or not Drawing then return end
-    -- Throttle the ESP render to ~60 Hz max. On 144/240 Hz monitors the
-    -- naive per-frame loop did 2-4x as much work as needed - tracers /
-    -- boxes don't visibly improve past ~60 Hz to the human eye but the
-    -- cost (WorldToViewportPoint per part per player) scales linearly.
-    -- Saves ~50-70% ESP CPU on high-refresh setups.
-    local MIN_DT = 1 / 60
+    -- Throttle the ESP render to ~120 Hz max. Caps the cost
+    -- (WorldToViewportPoint per part per player) on 144/240 Hz
+    -- monitors while still being smooth enough that fast-moving
+    -- targets don't visibly lag behind their boxes.
+    local MIN_DT = 1 / 120
     local accum = 0
     espRenderConn = RunService.RenderStepped:Connect(function(dt)
         if not EspSettings.Enabled then
