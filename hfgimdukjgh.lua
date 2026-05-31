@@ -2245,15 +2245,26 @@ do
             Default = 60, Min = 5, Max = 500, Rounding = 0, Suffix = " studs",
             Callback = function(v) F.games.bms.legitFlag.setRange(v) end,
         })
+        -- Aim-cone filter: only flag tiles within a half-angle from the
+        -- camera's forward vector. Applies to BOTH legit auto-flag and
+        -- auto-play's flag step (shared toggle).
+        BMS:AddToggle("BMSFlagAimCone", { Text = "Only flag what I'm looking at",
+            Default = false,
+            Callback = function(v) F.games.bms.legitFlag.setAimCone(v) end,
+        })
+        BMS:AddSlider("BMSFlagAimAngle", { Text = "Aim cone half-angle",
+            Default = 30, Min = 5, Max = 90, Rounding = 0, Suffix = " degrees",
+            Callback = function(v) F.games.bms.legitFlag.setAimHalfDeg(v) end,
+        })
 
-        BMS:AddDivider()
-
-        BMS:AddLabel("Auto play")
-        BMS:AddToggle("BMSAutoPlay", { Text = "Auto play (walk safes + flag mines)",
+        -- ---- Auto play groupbox (right side, separate from Mine ESP /
+        -- Legit auto-flag so it can't be missed) ----
+        local BMSAuto = Tabs.Games:AddRightGroupbox("Blockerman's Auto play")
+        BMSAuto:AddLabel("Auto play")
+        BMSAuto:AddToggle("BMSAutoPlay", { Text = "Auto play (walk safes + flag mines)",
             Default = false,
             Callback = function(v)
                 if v then
-                    -- mutex: auto play subsumes legit flag
                     if Toggles.BMSLegitFlag and Toggles.BMSLegitFlag.Value then
                         Toggles.BMSLegitFlag:SetValue(false)
                     end
@@ -2263,16 +2274,16 @@ do
                 end
             end,
         })
-        BMS:AddSlider("BMSAutoStepDelay", { Text = "Walk step max delay",
+        BMSAuto:AddSlider("BMSAutoStepDelay", { Text = "Walk step max delay",
             Default = 0.4, Min = 0.05, Max = 3, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.autoPlay.setStepDelay(v) end,
         })
-
-        -- Sanity print so the user can confirm in the console whether the
-        -- Auto play section actually ran to completion. If they see this
-        -- print but no "Auto play" UI, it's a Linoria render quirk; if
-        -- they DON'T see it, the loader is cached at an older version.
-        print("[BMS] UI section reached end - Auto play toggle should be visible")
+        BMSAuto:AddLabel(
+            "Auto play uses the Flag delay + Flag range\n"
+         .. "+ Aim cone settings from the Legit auto-flag\n"
+         .. "section to the left.",
+            true)
+        print("[BMS] UI sections built - 'Blockerman's Auto play' should appear on the RIGHT side of Games tab")
     end
 
     -- ---------------- MATCH THE CARDS! ----------------

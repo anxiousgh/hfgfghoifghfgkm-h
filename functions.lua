@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.12.4"
+local SCRIPT_VERSION = "v1.13.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7353,6 +7353,20 @@ F.games.bms = (function()
     local flagDelay  = 1.0
     local flagRange  = 60
     local flagThread
+    -- aim-cone filter: only flag tiles within a half-angle from camera
+    -- forward. Used by both legit auto-flag and auto-play's flag step.
+    local flagAimCone     = false
+    local flagAimHalfDeg  = 30
+
+    local function inAimCone(tile)
+        if not flagAimCone then return true end
+        local cam = workspace.CurrentCamera
+        if not cam then return true end
+        local toTile = tile.Position - cam.CFrame.Position
+        if toTile.Magnitude < 0.01 then return true end
+        local dot = cam.CFrame.LookVector:Dot(toTile.Unit)
+        return dot >= math.cos(math.rad(flagAimHalfDeg))
+    end
 
     local function legitFlagStart()
         if flagActive then return end
@@ -7377,7 +7391,7 @@ F.games.bms = (function()
                 local rangeSq = flagRange * flagRange
                 local best, bestD2 = nil, math.huge
                 for t in pairs(mines) do
-                    if state[t] ~= "flagged" then
+                    if state[t] ~= "flagged" and inAimCone(t) then
                         local dx = t.Position.X - origin.X
                         local dy = t.Position.Y - origin.Y
                         local dz = t.Position.Z - origin.Z
@@ -7508,7 +7522,7 @@ F.games.bms = (function()
                 if token and remote and (now - lastFlagAt) >= flagDelay then
                     local best, bestD2 = nil, math.huge
                     for t in pairs(mines) do
-                        if state[t] ~= "flagged" then
+                        if state[t] ~= "flagged" and inAimCone(t) then
                             local dx = t.Position.X - origin.X
                             local dz = t.Position.Z - origin.Z
                             local d2 = dx*dx + dz*dz
@@ -7582,6 +7596,8 @@ F.games.bms = (function()
             isActive = function() return flagActive end,
             setDelay = function(n) flagDelay = math.clamp(tonumber(n) or 1, 0.05, 10) end,
             setRange = function(n) flagRange = math.clamp(tonumber(n) or 60, 5, 500) end,
+            setAimCone     = function(v) flagAimCone = v == true end,
+            setAimHalfDeg  = function(n) flagAimHalfDeg = math.clamp(tonumber(n) or 30, 1, 180) end,
         },
         autoPlay = {
             start    = function() legitFlagStop(); autoPlayStart() end,
