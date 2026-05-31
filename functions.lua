@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.13.8"
+local SCRIPT_VERSION = "v1.13.9"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7566,16 +7566,17 @@ F.games.bms = (function()
                 -- (b) walk to nearest REACHABLE deduced-safe tile
                 local startTile = findCurrentTile(all, origin)
                 if startTile then
-                    -- collect safes in range, sort by distance, walk to nearest reachable
+                    -- Collect ALL deduced-safe covered tiles across the
+                    -- entire map (no range filter on walking). Flag range
+                    -- still gates the flagging step above; walking can
+                    -- traverse the whole board to reach a far-away safe.
+                    -- Sorted by distance so we try nearest reachable first.
                     local candidates = {}
                     for s in pairs(safes) do
                         if state[s] == "covered" then
                             local dx = s.Position.X - origin.X
                             local dz = s.Position.Z - origin.Z
-                            local d2 = dx*dx + dz*dz
-                            if d2 < rangeSq then
-                                table.insert(candidates, { tile = s, d2 = d2 })
-                            end
+                            table.insert(candidates, { tile = s, d2 = dx*dx + dz*dz })
                         end
                     end
                     table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
