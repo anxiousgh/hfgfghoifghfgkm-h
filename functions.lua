@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.13.4"
+local SCRIPT_VERSION = "v1.13.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6857,28 +6857,40 @@ F.games.bms = (function()
         end
     end
 
-    -- ---- neighbor cache (rebuilt on Parts.ChildAdded for infinite mode) ----
-    local neighbors = {}      -- [tile] = { tile, ... }
+    -- ---- neighbor caches ----
+    --   neighbors[]         - 8-direction (includes diagonals).
+    --                         Used by the DEDUCTION solver since
+    --                         minesweeper numbers count diagonal mines.
+    --   cardinalNeighbors[] - 4-direction (N/S/E/W only).
+    --                         Used by the AUTO-PLAY pathfinder so the
+    --                         character never cuts diagonally across
+    --                         an unknown tile's corner and falls in.
+    local neighbors         = {}
+    local cardinalNeighbors = {}
     local neighborsDirty = true
     local cachedPartsCount = 0
     local function ensureNeighbors(allParts)
         if not neighborsDirty and #allParts == cachedPartsCount then return end
         neighborsDirty = false
         cachedPartsCount = #allParts
-        neighbors = {}
+        neighbors         = {}
+        cardinalNeighbors = {}
         if not allParts[1] then return end
         local size = math.max(allParts[1].Size.X, allParts[1].Size.Z)
-        local rng  = size * 1.6
-        local rng2 = rng * rng
+        local diagR2 = (size * 1.6) ^ 2   -- includes diagonals
+        local cardR2 = (size * 1.1) ^ 2   -- 4-direction only
         for _, t in ipairs(allParts) do
-            local list, px, pz = {}, t.Position.X, t.Position.Z
+            local list8, list4, px, pz = {}, {}, t.Position.X, t.Position.Z
             for _, o in ipairs(allParts) do
                 if o ~= t then
                     local dx, dz = o.Position.X - px, o.Position.Z - pz
-                    if dx*dx + dz*dz < rng2 then table.insert(list, o) end
+                    local d2 = dx*dx + dz*dz
+                    if d2 < diagR2 then table.insert(list8, o) end
+                    if d2 < cardR2 then table.insert(list4, o) end
                 end
             end
-            neighbors[t] = list
+            neighbors[t]         = list8
+            cardinalNeighbors[t] = list4
         end
     end
 
@@ -7452,6 +7464,9 @@ F.games.bms = (function()
     end
 
     -- BFS through walkable tiles to find a path from start to goal.
+    -- Uses CARDINAL-only neighbors so the path never cuts diagonally
+    -- across an unknown tile's corner (which is what caused the
+    -- character to clip off an edge onto an uncovered tile).
     -- "walkable" = revealed or flagged AND not a deduced mine.
     -- Returns nil if unreachable, else a list of tiles excluding start.
     local function bfsPath(startTile, goalTile, state, knownMines)
@@ -7462,12 +7477,11 @@ F.games.bms = (function()
         local head    = 1
         while head <= #queue do
             local cur = queue[head]; head = head + 1
-            for _, nb in ipairs(neighbors[cur] or {}) do
+            for _, nb in ipairs(cardinalNeighbors[cur] or {}) do
                 if not visited[nb] then
                     visited[nb] = true
                     parent[nb] = cur
                     if nb == goalTile then
-                        -- reconstruct path
                         local path = {}
                         local x = goalTile
                         while x and x ~= startTile do
@@ -7486,20 +7500,32 @@ F.games.bms = (function()
         return nil
     end
 
+    -- Walk one tile via MoveTo then SNAP to exact tile center. The
+    -- snap is the critical bit: MoveTo arrival is imprecise and the
+    -- character routinely lands a stud or two off-center, which on
+    -- the NEXT step compounds and clips an edge onto an unknown
+    -- tile. Re-centering after each hop eliminates drift.
     local function walkTo(tile)
         local c = lplr.Character
         local hum = c and c:FindFirstChildOfClass("Humanoid")
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
-        local goal = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
-        pcall(function() hum:MoveTo(goal) end)
-        local finished = false
-        task.spawn(function() hum.MoveToFinished:Wait(); finished = true end)
+        local goalPos = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
+        pcall(function() hum:MoveTo(goalPos) end)
+        -- Wait for arrival via XZ distance check (more reliable than
+        -- MoveToFinished, which fires even when the humanoid gave up).
         local waited = 0
-        while not finished and waited < autoStepDelay and autoActive do
+        while waited < autoStepDelay and autoActive do
+            local dx = hrp.Position.X - goalPos.X
+            local dz = hrp.Position.Z - goalPos.Z
+            if (dx*dx + dz*dz) < 0.4 then break end  -- within ~0.6 studs
             RunService.Heartbeat:Wait()
             waited = waited + (1/60)
         end
+        -- Snap-correct to exact tile center so drift can't accumulate.
+        pcall(function()
+            hrp.CFrame = CFrame.new(goalPos) * (hrp.CFrame - hrp.CFrame.Position)
+        end)
         return true
     end
 
