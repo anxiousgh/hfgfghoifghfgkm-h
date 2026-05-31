@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.10.1"
+local SCRIPT_VERSION = "v1.10.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6779,15 +6779,30 @@ F.games.bms = (function()
         return f and f:FindFirstChild("Parts")
     end
 
-    -- token capture (always installed, idempotent across reloads)
+    -- Token capture. Cache the remote reference ONCE (in a deferred task
+    -- so the game has time to replicate Events/) and have the hook do
+    -- nothing but a single reference compare. The previous hook called
+    -- FindFirstChild inside every namecall, which re-entered the
+    -- namecall path - likely the cause of MouseControl's bool cast
+    -- error.
+    if not getgenv()._BMS_PLACEFLAG_REF then
+        task.defer(function()
+            local ev = RS:WaitForChild("Events", 30)
+            local fe = ev and ev:WaitForChild("FlagEvents", 30)
+            local pf = fe and fe:WaitForChild("PlaceFlag", 30)
+            getgenv()._BMS_PLACEFLAG_REF = pf
+        end)
+    end
     if not getgenv()._BMS_HOOK_INSTALLED and hookmetamethod then
         getgenv()._BMS_HOOK_INSTALLED = true
         local _old
         _old = hookmetamethod(game, "__namecall", function(self, ...)
-            local m = getnamecallmethod()
-            if (m == "FireServer" or m == "InvokeServer") and self == getPlaceFlag() then
-                local args = { ... }
-                local tok = args[2]
+            -- Fast-path: single ref compare, no method-name lookup, no
+            -- FindFirstChild. If we haven't resolved PlaceFlag yet
+            -- (_BMS_PLACEFLAG_REF still nil), the compare is just
+            -- self == nil = false for every call and we fall through.
+            if self == getgenv()._BMS_PLACEFLAG_REF then
+                local _, tok = ...
                 if typeof(tok) == "string" and #tok > 8 then
                     getgenv()._BMS_TOKEN = tok
                 end
