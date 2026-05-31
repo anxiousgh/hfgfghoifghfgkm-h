@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.9.2"
+local SCRIPT_VERSION = "v1.9.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6637,7 +6637,20 @@ F.games.matchTheCards = (function()
             local tbl   = myTable()
             local cards = tbl and tbl:FindFirstChild("Cards")
             local t     = mouse.Target
-            -- Skip cards that are already matched (green RGB 17,255,17).
+            -- Force every matched (green) card to stay flipped face-up
+            -- every frame. They never enter peeking[] - we just rewrite
+            -- their CFrame and leave them alone.
+            if cards then
+                for _, p in ipairs(cards:GetDescendants()) do
+                    if p:IsA("BasePart") and isCorrect(p) then
+                        p.CFrame = CFrame.new(p.Position) * peekRot
+                    end
+                end
+            end
+
+            -- Skip cards that are already matched for the hover peek path
+            -- (they're already face-up via the loop above; no need to
+            -- enter peeking/restore-timer state).
             local isCard = cards and t and t:IsA("BasePart") and t:IsDescendantOf(cards) and not isCorrect(t)
 
             if isCard then
@@ -6692,11 +6705,18 @@ F.games.matchTheCards = (function()
             local cards = tbl and tbl:FindFirstChild("Cards")
             if not cards then return end
             for _, part in ipairs(cards:GetDescendants()) do
-                if part:IsA("BasePart") and not isCorrect(part) then
-                    if not shown[part] then
-                        shown[part] = part.CFrame - part.CFrame.Position
+                if part:IsA("BasePart") then
+                    if isCorrect(part) then
+                        -- Matched cards: force face-up but don't snapshot.
+                        -- We never want to "restore" their original
+                        -- rotation - they're done, leave them flipped.
+                        part.CFrame = CFrame.new(part.Position) * peekRot
+                    else
+                        if not shown[part] then
+                            shown[part] = part.CFrame - part.CFrame.Position
+                        end
+                        part.CFrame = CFrame.new(part.Position) * peekRot
                     end
-                    part.CFrame = CFrame.new(part.Position) * peekRot
                 end
             end
         end)
