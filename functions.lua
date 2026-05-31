@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.13.2"
+local SCRIPT_VERSION = "v1.13.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")

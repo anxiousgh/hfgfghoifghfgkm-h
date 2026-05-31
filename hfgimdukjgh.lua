@@ -2153,7 +2153,10 @@ do
 
     -- ---------------- BLOCKERMAN'S MINESWEEPER ----------------
     if _currentGame == "Blockerman's Minesweeper" then
+        print("[BMS] >>> starting UI build, _currentGame =", _currentGame)
+        local _bmsOk, _bmsErr = pcall(function()
         local BMS = Tabs.Games:AddLeftGroupbox("Blockerman's Minesweeper")
+        print("[BMS] (1/8) left groupbox created")
 
         BMS:AddLabel("Token capture")
         -- This label updates live: shows the captured token (truncated)
@@ -2205,6 +2208,7 @@ do
                 Library:Notify("No token captured yet", 4)
             end
         end })
+        print("[BMS] (2/8) token capture widgets ok")
 
         BMS:AddDivider()
 
@@ -2227,6 +2231,7 @@ do
             Default = true,
             Callback = function(v) F.games.bms.esp.setShowWarnings(v) end,
         })
+        print("[BMS] (3/8) mine ESP widgets ok")
 
         BMS:AddDivider()
 
@@ -2256,10 +2261,12 @@ do
             Default = 30, Min = 5, Max = 90, Rounding = 0, Suffix = " degrees",
             Callback = function(v) F.games.bms.legitFlag.setAimHalfDeg(v) end,
         })
+        print("[BMS] (4/8) legit auto-flag + aim cone widgets ok")
 
         -- ---- Auto play groupbox (right side, separate from Mine ESP /
         -- Legit auto-flag so it can't be missed) ----
         local BMSAuto = Tabs.Games:AddRightGroupbox("Blockerman's Auto play")
+        print("[BMS] (5/8) right groupbox created")
         BMSAuto:AddLabel("Auto play")
         BMSAuto:AddToggle("BMSAutoPlay", { Text = "Auto play (walk safes + flag mines)",
             Default = false,
@@ -2274,16 +2281,24 @@ do
                 end
             end,
         })
+        print("[BMS] (6/8) auto play toggle ok")
         BMSAuto:AddSlider("BMSAutoStepDelay", { Text = "Walk step max delay",
             Default = 0.4, Min = 0.05, Max = 3, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.autoPlay.setStepDelay(v) end,
         })
+        print("[BMS] (7/8) walk step slider ok")
         BMSAuto:AddLabel(
             "Auto play uses the Flag delay + Flag range\n"
          .. "+ Aim cone settings from the Legit auto-flag\n"
          .. "section to the left.",
             true)
-        print("[BMS] UI sections built - 'Blockerman's Auto play' should appear on the RIGHT side of Games tab")
+        print("[BMS] (8/8) Auto play UI complete")
+        end)  -- pcall close
+        if not _bmsOk then
+            warn("[BMS] UI BUILD FAILED:", _bmsErr)
+        else
+            print("[BMS] UI sections built - 'Blockerman's Auto play' should appear on the RIGHT side of Games tab")
+        end
     end
 
     -- ---------------- MATCH THE CARDS! ----------------
