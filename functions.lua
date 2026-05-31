@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.9.1"
+local SCRIPT_VERSION = "v1.9.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6589,6 +6589,18 @@ F.games.matchTheCards = (function()
         return chairs.Parent  -- Games["N"]
     end
 
+    -- Already-matched cards are recolored to RGB(17, 255, 17) by the
+    -- game. Skip them in both modes so we don't pointlessly re-flip
+    -- cards that are already revealed correct.
+    local CORRECT_R, CORRECT_G, CORRECT_B = 17 / 255, 255 / 255, 17 / 255
+    local COLOR_EPS = 0.02  -- forgive minor float drift from the game
+    local function isCorrect(part)
+        local col = part.Color
+        return math.abs(col.R - CORRECT_R) < COLOR_EPS
+           and math.abs(col.G - CORRECT_G) < COLOR_EPS
+           and math.abs(col.B - CORRECT_B) < COLOR_EPS
+    end
+
     -- ---- PEEK MODE (hover + delay) ----
     local peekActive = false
     local peekConn
@@ -6625,7 +6637,8 @@ F.games.matchTheCards = (function()
             local tbl   = myTable()
             local cards = tbl and tbl:FindFirstChild("Cards")
             local t     = mouse.Target
-            local isCard = cards and t and t:IsA("BasePart") and t:IsDescendantOf(cards)
+            -- Skip cards that are already matched (green RGB 17,255,17).
+            local isCard = cards and t and t:IsA("BasePart") and t:IsDescendantOf(cards) and not isCorrect(t)
 
             if isCard then
                 if hovered ~= t then
@@ -6679,7 +6692,7 @@ F.games.matchTheCards = (function()
             local cards = tbl and tbl:FindFirstChild("Cards")
             if not cards then return end
             for _, part in ipairs(cards:GetDescendants()) do
-                if part:IsA("BasePart") then
+                if part:IsA("BasePart") and not isCorrect(part) then
                     if not shown[part] then
                         shown[part] = part.CFrame - part.CFrame.Position
                     end
