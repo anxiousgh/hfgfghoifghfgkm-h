@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.13.5"
+local SCRIPT_VERSION = "v1.13.6"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7500,11 +7500,13 @@ F.games.bms = (function()
         return nil
     end
 
-    -- Walk one tile via MoveTo then SNAP to exact tile center. The
-    -- snap is the critical bit: MoveTo arrival is imprecise and the
-    -- character routinely lands a stud or two off-center, which on
-    -- the NEXT step compounds and clips an edge onto an unknown
-    -- tile. Re-centering after each hop eliminates drift.
+    -- Walk one tile via MoveTo. The snap-correct from v1.13.5 was
+    -- pulled - even at the end of each step it looked teleporty.
+    -- Cardinal-only pathfinding by itself gives enough margin that
+    -- MoveTo drift rarely clips edges. We only snap-correct on
+    -- EMERGENCY drift (>2.5 studs from goal after the step times
+    -- out) so a runaway path doesn't compound, but the steady-state
+    -- case is pure walking.
     local function walkTo(tile)
         local c = lplr.Character
         local hum = c and c:FindFirstChildOfClass("Humanoid")
@@ -7512,20 +7514,24 @@ F.games.bms = (function()
         if not hum or not hrp then return false end
         local goalPos = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
         pcall(function() hum:MoveTo(goalPos) end)
-        -- Wait for arrival via XZ distance check (more reliable than
-        -- MoveToFinished, which fires even when the humanoid gave up).
         local waited = 0
         while waited < autoStepDelay and autoActive do
             local dx = hrp.Position.X - goalPos.X
             local dz = hrp.Position.Z - goalPos.Z
-            if (dx*dx + dz*dz) < 0.4 then break end  -- within ~0.6 studs
+            if (dx*dx + dz*dz) < 0.5 then return true end
             RunService.Heartbeat:Wait()
             waited = waited + (1/60)
         end
-        -- Snap-correct to exact tile center so drift can't accumulate.
-        pcall(function()
-            hrp.CFrame = CFrame.new(goalPos) * (hrp.CFrame - hrp.CFrame.Position)
-        end)
+        -- Step timed out without reaching the goal. If drift is bad
+        -- (>2.5 studs), snap to prevent compounding errors on the
+        -- next step. Otherwise let it slide.
+        local dx = hrp.Position.X - goalPos.X
+        local dz = hrp.Position.Z - goalPos.Z
+        if (dx*dx + dz*dz) > 6.25 then  -- ~2.5 studs
+            pcall(function()
+                hrp.CFrame = CFrame.new(goalPos) * (hrp.CFrame - hrp.CFrame.Position)
+            end)
+        end
         return true
     end
 
