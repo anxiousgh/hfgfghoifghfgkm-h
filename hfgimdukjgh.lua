@@ -2156,11 +2156,35 @@ do
         local BMS = Tabs.Games:AddLeftGroupbox("Blockerman's Minesweeper")
 
         BMS:AddLabel("Token capture")
-        BMS:AddLabel(
+        -- This label updates live: shows the captured token (truncated)
+        -- once F.games.bms.getToken() returns non-nil.
+        local _bmsTokenLbl = BMS:AddLabel(
             "Place one flag manually first - the token gets\n"
          .. "captured automatically on the first PlaceFlag call.\n"
          .. "If autocapture doesn't work, paste it manually below.",
             true)  -- true = DoesWrap
+        task.spawn(function()
+            local lastShown = nil
+            while true do
+                local tok = F.games.bms.getToken and F.games.bms.getToken() or nil
+                if tok ~= lastShown then
+                    lastShown = tok
+                    pcall(function()
+                        if tok then
+                            -- show first 16 chars + ellipsis so the row
+                            -- doesn't blow up the groupbox width
+                            _bmsTokenLbl:SetText("Captured Token: " .. tok:sub(1, 16) .. "...")
+                        else
+                            _bmsTokenLbl:SetText(
+                                "Place one flag manually first - the token gets\n"
+                             .. "captured automatically on the first PlaceFlag call.\n"
+                             .. "If autocapture doesn't work, paste it manually below.")
+                        end
+                    end)
+                end
+                task.wait(0.5)
+            end
+        end)
         BMS:AddInput("BMSManualToken", {
             Default     = "",
             Placeholder = "paste session token here",
