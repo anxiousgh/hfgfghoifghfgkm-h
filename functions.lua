@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.13.6"
+local SCRIPT_VERSION = "v1.13.7"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7464,10 +7464,9 @@ F.games.bms = (function()
     end
 
     -- BFS through walkable tiles to find a path from start to goal.
-    -- Uses CARDINAL-only neighbors so the path never cuts diagonally
-    -- across an unknown tile's corner (which is what caused the
-    -- character to clip off an edge onto an uncovered tile).
-    -- "walkable" = revealed or flagged AND not a deduced mine.
+    -- Uses 8-direction neighbors (the v1.13.4 behavior). Walkable =
+    -- REVEALED tiles only (not flagged - false flags might be a mine,
+    -- safer to route around them) AND not a deduced mine.
     -- Returns nil if unreachable, else a list of tiles excluding start.
     local function bfsPath(startTile, goalTile, state, knownMines)
         if startTile == goalTile then return {} end
@@ -7477,7 +7476,7 @@ F.games.bms = (function()
         local head    = 1
         while head <= #queue do
             local cur = queue[head]; head = head + 1
-            for _, nb in ipairs(cardinalNeighbors[cur] or {}) do
+            for _, nb in ipairs(neighbors[cur] or {}) do
                 if not visited[nb] then
                     visited[nb] = true
                     parent[nb] = cur
@@ -7490,8 +7489,10 @@ F.games.bms = (function()
                         end
                         return path
                     end
-                    local s = state[nb]
-                    if (s == "revealed" or s == "flagged") and not knownMines[nb] then
+                    -- Tightened: REVEALED only (not flagged). User flags
+                    -- can be wrong; routing through one risks stepping
+                    -- on an actual mine.
+                    if state[nb] == "revealed" and not knownMines[nb] then
                         table.insert(queue, nb)
                     end
                 end
@@ -7500,13 +7501,7 @@ F.games.bms = (function()
         return nil
     end
 
-    -- Walk one tile via MoveTo. The snap-correct from v1.13.5 was
-    -- pulled - even at the end of each step it looked teleporty.
-    -- Cardinal-only pathfinding by itself gives enough margin that
-    -- MoveTo drift rarely clips edges. We only snap-correct on
-    -- EMERGENCY drift (>2.5 studs from goal after the step times
-    -- out) so a runaway path doesn't compound, but the steady-state
-    -- case is pure walking.
+    -- Pure MoveTo walk - no CFrame snapping. Same shape as v1.13.4.
     local function walkTo(tile)
         local c = lplr.Character
         local hum = c and c:FindFirstChildOfClass("Humanoid")
@@ -7514,23 +7509,12 @@ F.games.bms = (function()
         if not hum or not hrp then return false end
         local goalPos = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
         pcall(function() hum:MoveTo(goalPos) end)
+        local finished = false
+        task.spawn(function() hum.MoveToFinished:Wait(); finished = true end)
         local waited = 0
-        while waited < autoStepDelay and autoActive do
-            local dx = hrp.Position.X - goalPos.X
-            local dz = hrp.Position.Z - goalPos.Z
-            if (dx*dx + dz*dz) < 0.5 then return true end
+        while not finished and waited < autoStepDelay and autoActive do
             RunService.Heartbeat:Wait()
             waited = waited + (1/60)
-        end
-        -- Step timed out without reaching the goal. If drift is bad
-        -- (>2.5 studs), snap to prevent compounding errors on the
-        -- next step. Otherwise let it slide.
-        local dx = hrp.Position.X - goalPos.X
-        local dz = hrp.Position.Z - goalPos.Z
-        if (dx*dx + dz*dz) > 6.25 then  -- ~2.5 studs
-            pcall(function()
-                hrp.CFrame = CFrame.new(goalPos) * (hrp.CFrame - hrp.CFrame.Position)
-            end)
         end
         return true
     end
@@ -7595,9 +7579,24 @@ F.games.bms = (function()
                         if not autoActive then break end
                         local path = bfsPath(startTile, c.tile, state, mines)
                         if path and #path > 0 then
-                            -- walk the path tile-by-tile; the LAST tile is the safe
-                            for _, step in ipairs(path) do
+                            local goalTile = c.tile
+                            local lastIdx  = #path
+                            for stepIdx, step in ipairs(path) do
                                 if not autoActive then break end
+                                -- Per-step safety re-check. State may have
+                                -- changed since we computed the path (new
+                                -- reveals reclassifying tiles). For intermediate
+                                -- steps require revealed + not deduced mine.
+                                -- For the FINAL step (the deduced-safe goal),
+                                -- the tile is still covered so just verify it's
+                                -- not now classified as a mine.
+                                local s = tileState(step)
+                                if stepIdx < lastIdx then
+                                    if s ~= "revealed" or mines[step] then break end
+                                else
+                                    -- final step onto the safe tile
+                                    if mines[step] then break end
+                                end
                                 walkTo(step)
                             end
                             walked = true
