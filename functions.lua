@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.12.0"
+local SCRIPT_VERSION = "v1.12.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7032,8 +7032,12 @@ F.games.bms = (function()
         --
         -- Cap each component at MAX_TANK unknowns (2^N enumerations).
         -- 14 = ~16k iters per component = milliseconds; 18 = ~260k =
-        -- borderline. 14 is a safe default.
+        -- borderline. 14 is a safe default. MAX_TANK_TOTAL is a per-
+        -- deduce-call budget across ALL components combined - prevents
+        -- a board with 10 connected 14-tile blobs from spinning for
+        -- ~160k * 10 iters in one tick.
         local MAX_TANK = 14
+        local MAX_TANK_TOTAL = 50000
         local function tankPass(cs)
             if #cs == 0 then return false end
             -- union-find groups constraints that share any unknown
@@ -7080,9 +7084,17 @@ F.games.bms = (function()
                 end
             end
             local changed = false
+            local totalBudget = MAX_TANK_TOTAL
             for root, unknowns in pairs(groupUnk) do
                 local n = #unknowns
                 if n > 0 and n <= MAX_TANK then
+                    local twoN_check = 1
+                    for _ = 1, n do twoN_check = twoN_check * 2 end
+                    if twoN_check > totalBudget then
+                        -- skip this component if it'd blow the per-tick budget
+                        -- (still useful: smaller components after still run)
+                    else
+                    totalBudget = totalBudget - twoN_check
                     local gcs = groupCons[root] or {}
                     -- precompute: idx[tile] = position in unknowns
                     -- cIdx[ci] = list of unknown indices for constraint ci
@@ -7139,6 +7151,7 @@ F.games.bms = (function()
                             end
                         end
                     end
+                    end  -- close totalBudget check
                 end
             end
             return changed
@@ -7217,7 +7230,25 @@ F.games.bms = (function()
         -- state map for ALL tiles (deduction needs full picture)
         local state = {}
         for _, t in ipairs(all) do state[t] = tileState(t) end
-        local mines, safes, falseFlags = deduce(all, state)
+        -- deduce is pcall'd so a tank-solver edge case can't break ESP
+        -- silently. If it errors, we log once and continue using empty
+        -- results so highlights drop instead of freezing on stale data.
+        local ok, mines, safes, falseFlags = pcall(deduce, all, state)
+        if not ok then
+            warn("[BMS] deduce error:", mines)  -- 'mines' is the error msg on failure
+            mines, safes, falseFlags = {}, {}, {}
+        end
+        -- prune dead highlights: tiles that got destroyed between ticks
+        -- (revealed-tile -> new tile, infinite mode shuffle, etc.) leave
+        -- orphaned Highlight instances whose Adornee is nil. Iterating
+        -- 1000+ of these every tick was probably what stalled ESP late
+        -- game.
+        for tile, hl in pairs(highlights) do
+            if not tile.Parent or not hl.Parent then
+                pcall(function() hl:Destroy() end)
+                highlights[tile] = nil
+            end
+        end
         -- only highlight within range of player
         local origin  = myPos()
         local rangeSq = espRange * espRange
