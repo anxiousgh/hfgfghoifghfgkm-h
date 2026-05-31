@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.10.3"
+local SCRIPT_VERSION = "v1.11.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6891,37 +6891,121 @@ F.games.bms = (function()
         end
     end
 
-    -- ---- deduction (doesn't trust user-placed flags) ----
-    -- Returns (knownMines, knownSafes, falseFlags) as { [tile]=true }.
-    -- falseFlags = tiles the user flagged but our deduction says are SAFE.
+    -- ---- deduction (basic rules + subset reduction) ----
+    --
+    -- For each revealed number N we get a constraint:
+    --   "exactly (N - knownMinesAround) mines exist in this set of
+    --   unknown neighbors."
+    --
+    -- Basic rules:
+    --   rule 1: remaining == |unknown|  -> all unknown are mines
+    --   rule 2: remaining == 0          -> all unknown are safe
+    --
+    -- Subset reduction (this is what catches 1-2-1, 1-2-2-1, edge
+    -- patterns and a lot of mid-game stuff the basic rules miss):
+    --   if constraint A.set is a STRICT subset of constraint B.set,
+    --   then B.set \ A.set contains exactly (B.remaining - A.remaining)
+    --   mines. From which:
+    --     if (B.rem - A.rem) == |B.set \ A.set|  -> all extras are mines
+    --     if (B.rem - A.rem) == 0                -> all extras are safe
+    --
+    -- Both rules + subset reduction are re-applied to fixed point so
+    -- newly-discovered mines/safes propagate into the next iteration.
+    -- ============================================================
     local function deduce(parts, state)
-        -- iterate to fixed point: any time we discover a new mine, the
-        -- consequences propagate to other revealed-tile rules.
         local knownMines = {}
-        for _ = 1, 8 do
-            local changed = false
+        local knownSafes = {}
+
+        local function buildConstraints()
+            -- Rebuild the constraint list from the current known sets.
+            -- Each constraint = { set = {tile=true,...}, list = {tile,...},
+            --                     remaining = mines_left, count = #list }
+            -- Skip constraints whose unknown set is empty.
+            local out = {}
             for _, t in ipairs(parts) do
                 if state[t] == "revealed" then
                     local n = tileNumber(t)
                     if n then
                         local nbrs = neighbors[t]
                         if nbrs then
-                            local mineCount, unknown = 0, {}
+                            local minesIn, set, list = 0, {}, {}
                             for _, nb in ipairs(nbrs) do
-                                local s = state[nb]
                                 if knownMines[nb] then
-                                    mineCount = mineCount + 1
-                                elseif s == "covered" or s == "flagged" then
-                                    -- treat "flagged" as unknown (false flags)
-                                    table.insert(unknown, nb)
+                                    minesIn = minesIn + 1
+                                elseif knownSafes[nb] then
+                                    -- already safe = ignore from constraint
+                                elseif state[nb] == "covered" or state[nb] == "flagged" then
+                                    -- "flagged" stays in unknown set; we
+                                    -- don't trust user flags.
+                                    if not set[nb] then
+                                        set[nb] = true
+                                        table.insert(list, nb)
+                                    end
                                 end
                             end
-                            -- rule 1: number == knownMines + #unknown -> all unknown are mines
-                            if n == mineCount + #unknown and #unknown > 0 then
-                                for _, c in ipairs(unknown) do
-                                    if not knownMines[c] then
-                                        knownMines[c] = true
-                                        changed = true
+                            if #list > 0 then
+                                table.insert(out, {
+                                    set = set, list = list,
+                                    remaining = n - minesIn,
+                                    count = #list,
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+            return out
+        end
+
+        local function basicPass(constraints)
+            local changed = false
+            for _, c in ipairs(constraints) do
+                -- rule 1
+                if c.remaining == c.count then
+                    for _, u in ipairs(c.list) do
+                        if not knownMines[u] then knownMines[u] = true; changed = true end
+                    end
+                end
+                -- rule 2
+                if c.remaining == 0 then
+                    for _, u in ipairs(c.list) do
+                        if not knownSafes[u] then knownSafes[u] = true; changed = true end
+                    end
+                end
+            end
+            return changed
+        end
+
+        local function subsetPass(constraints)
+            local changed = false
+            for i = 1, #constraints do
+                local A = constraints[i]
+                for j = 1, #constraints do
+                    if i ~= j then
+                        local B = constraints[j]
+                        -- check A.set strictly subset of B.set, A smaller
+                        if A.count < B.count then
+                            local subset = true
+                            for u in pairs(A.set) do
+                                if not B.set[u] then subset = false; break end
+                            end
+                            if subset then
+                                local extras = {}
+                                for u in pairs(B.set) do
+                                    if not A.set[u] then table.insert(extras, u) end
+                                end
+                                local extraMines = B.remaining - A.remaining
+                                if extraMines == #extras and extraMines > 0 then
+                                    for _, u in ipairs(extras) do
+                                        if not knownMines[u] then
+                                            knownMines[u] = true; changed = true
+                                        end
+                                    end
+                                elseif extraMines == 0 then
+                                    for _, u in ipairs(extras) do
+                                        if not knownSafes[u] then
+                                            knownSafes[u] = true; changed = true
+                                        end
                                     end
                                 end
                             end
@@ -6929,33 +7013,20 @@ F.games.bms = (function()
                     end
                 end
             end
-            if not changed then break end
+            return changed
         end
-        -- derive safes + false flags from the now-stable knownMines set
-        local knownSafes, falseFlags = {}, {}
-        for _, t in ipairs(parts) do
-            if state[t] == "revealed" then
-                local n = tileNumber(t)
-                if n then
-                    local nbrs = neighbors[t]
-                    if nbrs then
-                        local mineCount, unknown = 0, {}
-                        for _, nb in ipairs(nbrs) do
-                            local s = state[nb]
-                            if knownMines[nb] then mineCount = mineCount + 1
-                            elseif s == "covered" or s == "flagged" then
-                                table.insert(unknown, nb)
-                            end
-                        end
-                        -- rule 2: number == knownMines -> all unknown are safe
-                        if n == mineCount and #unknown > 0 then
-                            for _, c in ipairs(unknown) do knownSafes[c] = true end
-                        end
-                    end
-                end
-            end
+
+        -- iterate basic + subset to fixed point. Cap at 12 outer
+        -- iterations so a misbehaved board can't lock us up.
+        for _ = 1, 12 do
+            local cs = buildConstraints()
+            local c1 = basicPass(cs)
+            local c2 = subsetPass(cs)
+            if not c1 and not c2 then break end
         end
+
         -- false flags: user flagged it but our deduction says safe
+        local falseFlags = {}
         for _, t in ipairs(parts) do
             if state[t] == "flagged" and not knownMines[t] and knownSafes[t] then
                 falseFlags[t] = true
@@ -7132,6 +7203,171 @@ F.games.bms = (function()
         if flagThread then pcall(task.cancel, flagThread); flagThread = nil end
     end
 
+    -- ---- auto-play (walk to safes + flag mines, never step on unknowns) ----
+    --
+    -- Loop:
+    --   1. Deduce mines + safes.
+    --   2. If there's an unflagged deduced mine within range, flag it
+    --      (one at a time, respecting flagDelay).
+    --   3. Otherwise pick the nearest deduced-safe tile that is REACHABLE
+    --      via revealed/flagged tiles only (BFS through walkable
+    --      neighbors), walk to its closest walkable neighbor, then step
+    --      onto the safe tile.
+    --   4. If neither flag nor walk has work, idle briefly.
+    --
+    -- Pathfinding is restricted: only tiles whose state is "revealed"
+    -- or "flagged" AND not a deduced mine count as walkable. So we
+    -- never accidentally step onto a covered/unknown tile en route.
+    local autoActive = false
+    local autoThread
+    local autoStepDelay = 0.4  -- per-tile MoveTo cap
+
+    local function findCurrentTile(allParts, originPos)
+        -- Pick the tile closest to player HRP on XZ.
+        local best, bestD2 = nil, math.huge
+        for _, t in ipairs(allParts) do
+            local dx = t.Position.X - originPos.X
+            local dz = t.Position.Z - originPos.Z
+            local d2 = dx*dx + dz*dz
+            if d2 < bestD2 then best, bestD2 = t, d2 end
+        end
+        return best
+    end
+
+    -- BFS through walkable tiles to find a path from start to goal.
+    -- "walkable" = revealed or flagged AND not a deduced mine.
+    -- Returns nil if unreachable, else a list of tiles excluding start.
+    local function bfsPath(startTile, goalTile, state, knownMines)
+        if startTile == goalTile then return {} end
+        local visited = { [startTile] = true }
+        local parent  = {}
+        local queue   = { startTile }
+        local head    = 1
+        while head <= #queue do
+            local cur = queue[head]; head = head + 1
+            for _, nb in ipairs(neighbors[cur] or {}) do
+                if not visited[nb] then
+                    visited[nb] = true
+                    parent[nb] = cur
+                    if nb == goalTile then
+                        -- reconstruct path
+                        local path = {}
+                        local x = goalTile
+                        while x and x ~= startTile do
+                            table.insert(path, 1, x)
+                            x = parent[x]
+                        end
+                        return path
+                    end
+                    local s = state[nb]
+                    if (s == "revealed" or s == "flagged") and not knownMines[nb] then
+                        table.insert(queue, nb)
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function walkTo(tile)
+        local c = lplr.Character
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp then return false end
+        local goal = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
+        pcall(function() hum:MoveTo(goal) end)
+        local finished = false
+        task.spawn(function() hum.MoveToFinished:Wait(); finished = true end)
+        local waited = 0
+        while not finished and waited < autoStepDelay and autoActive do
+            RunService.Heartbeat:Wait()
+            waited = waited + (1/60)
+        end
+        return true
+    end
+
+    local function autoPlayStart()
+        if autoActive then return end
+        autoActive = true
+        if autoThread then pcall(task.cancel, autoThread) end
+        autoThread = task.spawn(function()
+            local lastFlagAt = 0
+            while autoActive do
+                local parts = getParts()
+                if not parts then task.wait(0.3); continue end
+                local all = parts:GetChildren()
+                ensureNeighbors(all)
+                local state = {}
+                for _, t in ipairs(all) do state[t] = tileState(t) end
+                local mines, safes = deduce(all, state)
+                local origin  = myPos()
+                local rangeSq = flagRange * flagRange
+                -- (a) flag closest unflagged deduced mine if cooldown elapsed
+                local token  = getgenv()._BMS_TOKEN
+                local remote = getPlaceFlag()
+                local now    = tick()
+                if token and remote and (now - lastFlagAt) >= flagDelay then
+                    local best, bestD2 = nil, math.huge
+                    for t in pairs(mines) do
+                        if state[t] ~= "flagged" then
+                            local dx = t.Position.X - origin.X
+                            local dz = t.Position.Z - origin.Z
+                            local d2 = dx*dx + dz*dz
+                            if d2 < rangeSq and d2 < bestD2 then
+                                best, bestD2 = t, d2
+                            end
+                        end
+                    end
+                    if best then
+                        pcall(function() remote:FireServer(best, token, true) end)
+                        lastFlagAt = now
+                        task.wait(0.1)
+                        continue
+                    end
+                end
+                -- (b) walk to nearest REACHABLE deduced-safe tile
+                local startTile = findCurrentTile(all, origin)
+                if startTile then
+                    -- collect safes in range, sort by distance, walk to nearest reachable
+                    local candidates = {}
+                    for s in pairs(safes) do
+                        if state[s] == "covered" then
+                            local dx = s.Position.X - origin.X
+                            local dz = s.Position.Z - origin.Z
+                            local d2 = dx*dx + dz*dz
+                            if d2 < rangeSq then
+                                table.insert(candidates, { tile = s, d2 = d2 })
+                            end
+                        end
+                    end
+                    table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
+                    local walked = false
+                    for _, c in ipairs(candidates) do
+                        if not autoActive then break end
+                        local path = bfsPath(startTile, c.tile, state, mines)
+                        if path and #path > 0 then
+                            -- walk the path tile-by-tile; the LAST tile is the safe
+                            for _, step in ipairs(path) do
+                                if not autoActive then break end
+                                walkTo(step)
+                            end
+                            walked = true
+                            break
+                        end
+                    end
+                    if not walked then task.wait(0.3) end
+                else
+                    task.wait(0.3)
+                end
+            end
+        end)
+    end
+
+    local function autoPlayStop()
+        autoActive = false
+        if autoThread then pcall(task.cancel, autoThread); autoThread = nil end
+    end
+
     return {
         esp = {
             start    = espStart,
@@ -7147,6 +7383,12 @@ F.games.bms = (function()
             isActive = function() return flagActive end,
             setDelay = function(n) flagDelay = math.clamp(tonumber(n) or 1, 0.05, 10) end,
             setRange = function(n) flagRange = math.clamp(tonumber(n) or 60, 5, 500) end,
+        },
+        autoPlay = {
+            start    = function() legitFlagStop(); autoPlayStart() end,
+            stop     = autoPlayStop,
+            isActive = function() return autoActive end,
+            setStepDelay = function(n) autoStepDelay = math.clamp(tonumber(n) or 0.4, 0.05, 3) end,
         },
         hasToken      = function() return getgenv()._BMS_TOKEN ~= nil end,
         setToken      = setManualToken,

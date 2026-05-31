@@ -2221,6 +2221,28 @@ do
             Default = 60, Min = 5, Max = 500, Rounding = 0, Suffix = " studs",
             Callback = function(v) F.games.bms.legitFlag.setRange(v) end,
         })
+
+        BMS:AddDivider()
+
+        BMS:AddLabel("Auto play")
+        BMS:AddToggle("BMSAutoPlay", { Text = "Auto play (walk safes + flag mines)",
+            Default = false,
+            Callback = function(v)
+                if v then
+                    -- mutex: auto play subsumes legit flag
+                    if Toggles.BMSLegitFlag and Toggles.BMSLegitFlag.Value then
+                        Toggles.BMSLegitFlag:SetValue(false)
+                    end
+                    F.games.bms.autoPlay.start()
+                else
+                    F.games.bms.autoPlay.stop()
+                end
+            end,
+        })
+        BMS:AddSlider("BMSAutoStepDelay", { Text = "Walk step max delay",
+            Default = 0.4, Min = 0.05, Max = 3, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.bms.autoPlay.setStepDelay(v) end,
+        })
     end
 
     -- ---------------- MATCH THE CARDS! ----------------
