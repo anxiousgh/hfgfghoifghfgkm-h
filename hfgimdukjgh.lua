@@ -1665,6 +1665,7 @@ do
     local SUPPORTED_GAMES = {
         ["Hood Customs"]      = { 138995385694035, 9825515356 },
         ["Murder Mystery 2"]  = { 142823291 },
+        ["Match the Cards!"]  = { 138397085393482 },
     }
     local function findCurrentGame()
         for name, ids in pairs(SUPPORTED_GAMES) do
@@ -2167,6 +2168,49 @@ do
             print("[cclosure.vip] Shoot Murderer keybind fired")
             tryShootMurderer()
         end)
+    end
+
+    -- ---------------- MATCH THE CARDS! ----------------
+    if _currentGame == "Match the Cards!" then
+        local MTC = Tabs.Games:AddLeftGroupbox("Match the Cards!")
+
+        MTC:AddLabel("Card peek")
+        MTC:AddToggle("MTCPeek", { Text = "Peek on hover (legit)",
+            Default = false,
+            Callback = function(v)
+                if v then
+                    -- mutex: showAll fights for the same cards, kill it
+                    if Toggles.MTCShowAll and Toggles.MTCShowAll.Value then
+                        Toggles.MTCShowAll:SetValue(false)
+                    end
+                    F.games.matchTheCards.peek.start()
+                else
+                    F.games.matchTheCards.peek.stop()
+                end
+            end,
+        })
+        MTC:AddSlider("MTCPeekStay", { Text = "Stay flipped after leaving",
+            Default = F.games.matchTheCards.peek.getStayTime(),
+            Min = 0, Max = 30, Rounding = 1, Suffix = " s",
+            Callback = function(v) F.games.matchTheCards.peek.setStayTime(v) end,
+        })
+
+        MTC:AddDivider()
+
+        MTC:AddLabel("Show all (not legit)")
+        MTC:AddToggle("MTCShowAll", { Text = "Constantly flip every card",
+            Default = false,
+            Callback = function(v)
+                if v then
+                    if Toggles.MTCPeek and Toggles.MTCPeek.Value then
+                        Toggles.MTCPeek:SetValue(false)
+                    end
+                    F.games.matchTheCards.showAll.start()
+                else
+                    F.games.matchTheCards.showAll.stop()
+                end
+            end,
+        })
     end
 end
 

@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.8.0"
+local SCRIPT_VERSION = "v1.9.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6573,6 +6573,162 @@ F.games.mm2 = (function()
         },
         shootMurderer = {
             fire = shootMurdererFire,
+        },
+    }
+end)()
+
+-- ============================================================
+--  GAMES: MATCH THE CARDS!  (place id 138397085393482)
+-- ============================================================
+--  Detects which table the local player is sitting at by walking
+--    Humanoid.SeatPart -> ChairN -> Chairs -> Games["N"]
+--  and exposes two card-reveal modes against that table's Cards
+--  folder:
+--    peek     - hover-only flip with a configurable "stay flipped"
+--               delay after the mouse leaves the card. Restores the
+--               original rotation on timer expiry.
+--    showAll  - constantly flip every card in the table face-up.
+--               Restores all cards when toggled off.
+--
+--  Mutually exclusive at runtime: starting showAll disables peek
+--  (and vice versa) since they fight for control of the cards.
+-- ============================================================
+F.games.matchTheCards = (function()
+    local UserInputService = game:GetService("UserInputService")
+
+    local peekRot = CFrame.Angles(0, math.rad(90), 0)
+
+    local function myTable()
+        local c = lplr.Character; if not c then return nil end
+        local hum = c:FindFirstChildOfClass("Humanoid"); if not hum then return nil end
+        local seat = hum.SeatPart; if not seat then return nil end
+        local chair = seat.Parent
+        local chairs = chair and chair.Parent
+        if not chairs or chairs.Name ~= "Chairs" then return nil end
+        return chairs.Parent  -- Games["N"]
+    end
+
+    -- ---- PEEK MODE (hover + delay) ----
+    local peekActive = false
+    local peekConn
+    -- peeking[part] = { savedRot = CFrame, restoreAt = number | math.huge }
+    local peeking = {}
+    local STAY_TIME = 3
+    local hovered = nil
+
+    local function flipBack(part, rot)
+        if part and part.Parent and rot then
+            part.CFrame = CFrame.new(part.Position) * rot
+        end
+    end
+
+    local function flipUp(part)
+        if peeking[part] then
+            peeking[part].restoreAt = math.huge
+            return
+        end
+        peeking[part] = {
+            savedRot  = part.CFrame - part.CFrame.Position,
+            restoreAt = math.huge,
+        }
+        part.CFrame = CFrame.new(part.Position) * peekRot
+    end
+
+    local function peekStart()
+        if peekActive then return end
+        peekActive = true
+        if peekConn then peekConn:Disconnect() end
+        peekConn = RunService.RenderStepped:Connect(function()
+            if not peekActive then return end
+            local mouse = lplr:GetMouse()
+            local tbl   = myTable()
+            local cards = tbl and tbl:FindFirstChild("Cards")
+            local t     = mouse.Target
+            local isCard = cards and t and t:IsA("BasePart") and t:IsDescendantOf(cards)
+
+            if isCard then
+                if hovered ~= t then
+                    if hovered and peeking[hovered] then
+                        peeking[hovered].restoreAt = tick() + STAY_TIME
+                    end
+                    hovered = t
+                    flipUp(t)
+                end
+            else
+                if hovered and peeking[hovered] then
+                    peeking[hovered].restoreAt = tick() + STAY_TIME
+                end
+                hovered = nil
+            end
+
+            local now = tick()
+            for part, info in pairs(peeking) do
+                if now >= info.restoreAt then
+                    flipBack(part, info.savedRot)
+                    peeking[part] = nil
+                end
+            end
+        end)
+    end
+
+    local function peekStop()
+        peekActive = false
+        if peekConn then peekConn:Disconnect(); peekConn = nil end
+        -- restore any cards still face-up
+        for part, info in pairs(peeking) do
+            flipBack(part, info.savedRot)
+        end
+        peeking = {}
+        hovered = nil
+    end
+
+    -- ---- SHOW ALL MODE ----
+    local showAllActive = false
+    local showConn
+    -- shown[part] = savedRot. We snapshot on first sight and restore on stop.
+    local shown = {}
+
+    local function showAllStart()
+        if showAllActive then return end
+        showAllActive = true
+        if showConn then showConn:Disconnect() end
+        showConn = RunService.Heartbeat:Connect(function()
+            if not showAllActive then return end
+            local tbl = myTable()
+            local cards = tbl and tbl:FindFirstChild("Cards")
+            if not cards then return end
+            for _, part in ipairs(cards:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if not shown[part] then
+                        shown[part] = part.CFrame - part.CFrame.Position
+                    end
+                    part.CFrame = CFrame.new(part.Position) * peekRot
+                end
+            end
+        end)
+    end
+
+    local function showAllStop()
+        showAllActive = false
+        if showConn then showConn:Disconnect(); showConn = nil end
+        for part, rot in pairs(shown) do
+            flipBack(part, rot)
+        end
+        shown = {}
+    end
+
+    return {
+        peek = {
+            start    = function() showAllStop(); peekStart() end,
+            stop     = peekStop,
+            isActive = function() return peekActive end,
+            setStayTime = function(n) STAY_TIME = math.clamp(tonumber(n) or 3, 0, 30) end,
+            getStayTime = function() return STAY_TIME end,
+        },
+        showAll = {
+            start    = function() peekStop(); showAllStart() end,
+            stop     = showAllStop,
+            isActive = function() return showAllActive end,
         },
     }
 end)()
