@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.13.0"
+local SCRIPT_VERSION = "v1.13.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7357,6 +7357,24 @@ F.games.bms = (function()
     -- forward. Used by both legit auto-flag and auto-play's flag step.
     local flagAimCone     = false
     local flagAimHalfDeg  = 30
+    -- "follow chain" - when picking the next mine to flag, prefer the
+    -- closest mine to the LAST tile we flagged (instead of the player).
+    -- Makes the flag placement visually flow neighbor-to-neighbor
+    -- instead of randomly bouncing across the board. The reference
+    -- decays back to player position after FLAG_CHAIN_TIMEOUT seconds
+    -- of inactivity so a stale "last flag" in another area doesn't
+    -- keep pulling the next pick away from where you are now.
+    local _lastFlaggedTile = nil
+    local _lastFlaggedAt   = 0
+    local FLAG_CHAIN_TIMEOUT = 4
+
+    local function getFlagReferencePos(originPos)
+        if _lastFlaggedTile and _lastFlaggedTile.Parent
+           and (tick() - _lastFlaggedAt) < FLAG_CHAIN_TIMEOUT then
+            return _lastFlaggedTile.Position
+        end
+        return originPos
+    end
 
     local function inAimCone(tile)
         if not flagAimCone then return true end
@@ -7389,20 +7407,30 @@ F.games.bms = (function()
                 -- pick the closest unflagged deduced mine within range
                 local origin  = myPos()
                 local rangeSq = flagRange * flagRange
+                -- Range is measured from PLAYER, but pick = closest to
+                -- the LAST FLAGGED tile (so flags chain neighbor->neighbor
+                -- instead of bouncing). Falls back to player pos if no
+                -- recent flag.
+                local ref = getFlagReferencePos(origin)
                 local best, bestD2 = nil, math.huge
                 for t in pairs(mines) do
                     if state[t] ~= "flagged" and inAimCone(t) then
-                        local dx = t.Position.X - origin.X
-                        local dy = t.Position.Y - origin.Y
-                        local dz = t.Position.Z - origin.Z
-                        local d2 = dx*dx + dy*dy + dz*dz
-                        if d2 < rangeSq and d2 < bestD2 then
-                            best, bestD2 = t, d2
+                        local pdx = t.Position.X - origin.X
+                        local pdy = t.Position.Y - origin.Y
+                        local pdz = t.Position.Z - origin.Z
+                        local playerD2 = pdx*pdx + pdy*pdy + pdz*pdz
+                        if playerD2 < rangeSq then
+                            local dx = t.Position.X - ref.X
+                            local dz = t.Position.Z - ref.Z
+                            local d2 = dx*dx + dz*dz
+                            if d2 < bestD2 then best, bestD2 = t, d2 end
                         end
                     end
                 end
                 if best then
                     pcall(function() remote:FireServer(best, token, true) end)
+                    _lastFlaggedTile = best
+                    _lastFlaggedAt   = tick()
                     task.wait(flagDelay)
                 else
                     task.wait(0.25)  -- nothing to flag right now, idle
@@ -7520,19 +7548,24 @@ F.games.bms = (function()
                 local remote = getPlaceFlag()
                 local now    = tick()
                 if token and remote and (now - lastFlagAt) >= flagDelay then
+                    local ref = getFlagReferencePos(origin)
                     local best, bestD2 = nil, math.huge
                     for t in pairs(mines) do
                         if state[t] ~= "flagged" and inAimCone(t) then
-                            local dx = t.Position.X - origin.X
-                            local dz = t.Position.Z - origin.Z
-                            local d2 = dx*dx + dz*dz
-                            if d2 < rangeSq and d2 < bestD2 then
-                                best, bestD2 = t, d2
+                            local pdx = t.Position.X - origin.X
+                            local pdz = t.Position.Z - origin.Z
+                            if (pdx*pdx + pdz*pdz) < rangeSq then
+                                local dx = t.Position.X - ref.X
+                                local dz = t.Position.Z - ref.Z
+                                local d2 = dx*dx + dz*dz
+                                if d2 < bestD2 then best, bestD2 = t, d2 end
                             end
                         end
                     end
                     if best then
                         pcall(function() remote:FireServer(best, token, true) end)
+                        _lastFlaggedTile = best
+                        _lastFlaggedAt   = now
                         lastFlagAt = now
                         task.wait(0.1)
                         continue
