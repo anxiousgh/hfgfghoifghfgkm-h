@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.10.2"
+local SCRIPT_VERSION = "v1.10.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6779,36 +6779,62 @@ F.games.bms = (function()
         return f and f:FindFirstChild("Parts")
     end
 
-    -- Token capture. Cache the remote reference ONCE (in a deferred task
-    -- so the game has time to replicate Events/) and have the hook do
-    -- nothing but a single reference compare. The previous hook called
-    -- FindFirstChild inside every namecall, which re-entered the
-    -- namecall path - likely the cause of MouseControl's bool cast
-    -- error.
-    if not getgenv()._BMS_PLACEFLAG_REF then
-        task.defer(function()
-            local ev = RS:WaitForChild("Events", 30)
-            local fe = ev and ev:WaitForChild("FlagEvents", 30)
-            local pf = fe and fe:WaitForChild("PlaceFlag", 30)
+    -- Token capture. Resolve the remote ref once (try immediate, fall
+    -- back to deferred WaitForChild) and have the hook do nothing but
+    -- a single ref compare against the cached ref.
+    local function resolveRefSync()
+        local ev = RS:FindFirstChild("Events")
+        local fe = ev and ev:FindFirstChild("FlagEvents")
+        local pf = fe and fe:FindFirstChild("PlaceFlag")
+        if pf then
             getgenv()._BMS_PLACEFLAG_REF = pf
-        end)
+            print("[BMS] resolved PlaceFlag ref:", pf:GetFullName())
+            return true
+        end
+        return false
+    end
+    if not getgenv()._BMS_PLACEFLAG_REF then
+        if not resolveRefSync() then
+            task.defer(function()
+                local ev = RS:WaitForChild("Events", 30)
+                local fe = ev and ev:WaitForChild("FlagEvents", 30)
+                local pf = fe and fe:WaitForChild("PlaceFlag", 30)
+                if pf then
+                    getgenv()._BMS_PLACEFLAG_REF = pf
+                    print("[BMS] resolved PlaceFlag ref (deferred):", pf:GetFullName())
+                else
+                    warn("[BMS] failed to resolve PlaceFlag - Events folder never appeared")
+                end
+            end)
+        end
     end
     if not getgenv()._BMS_HOOK_INSTALLED and hookmetamethod then
         getgenv()._BMS_HOOK_INSTALLED = true
         local _old
         _old = hookmetamethod(game, "__namecall", function(self, ...)
-            -- Fast-path: single ref compare, no method-name lookup, no
-            -- FindFirstChild. If we haven't resolved PlaceFlag yet
-            -- (_BMS_PLACEFLAG_REF still nil), the compare is just
-            -- self == nil = false for every call and we fall through.
             if self == getgenv()._BMS_PLACEFLAG_REF then
                 local _, tok = ...
-                if typeof(tok) == "string" and #tok > 8 then
+                if typeof(tok) == "string" and #tok > 8 and getgenv()._BMS_TOKEN ~= tok then
                     getgenv()._BMS_TOKEN = tok
+                    print("[BMS] captured token:", tok)
                 end
             end
             return _old(self, ...)
         end)
+        print("[BMS] __namecall hook installed (hookmetamethod available)")
+    elseif not hookmetamethod then
+        warn("[BMS] hookmetamethod not available on this executor - use manual token input")
+    end
+
+    -- Public helper for manual token entry (UI exposes a textbox).
+    local function setManualToken(s)
+        s = tostring(s or "")
+        if #s > 8 then
+            getgenv()._BMS_TOKEN = s
+            print("[BMS] manual token set:", s)
+            return true
+        end
+        return false
     end
 
     -- ---- per-tile helpers ----
@@ -6964,11 +6990,14 @@ F.games.bms = (function()
         local hl = highlights[tile]
         if hl and hl.Parent then return hl end
         hl = Instance.new("Highlight")
-        hl.FillTransparency    = 1   -- outline only - cleaner, no fill clutter
+        -- Knife-reach-style fill: Occluded DepthMode (renders only where
+        -- the tile is visible, not through other geometry), solid color
+        -- fill so the tile itself is colored red/green/yellow.
+        hl.FillTransparency    = 0.35
         hl.OutlineTransparency = 0
-        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Adornee = tile
-        hl.Parent  = tile
+        hl.DepthMode           = Enum.HighlightDepthMode.Occluded
+        hl.Adornee             = tile
+        hl.Parent              = tile
         highlights[tile] = hl
         return hl
     end
@@ -6998,6 +7027,7 @@ F.games.bms = (function()
             if inRange(t, origin, rangeSq) then
                 seen[t] = true
                 local hl = ensureHl(t)
+                hl.FillColor    = MINE_COLOR
                 hl.OutlineColor = MINE_COLOR
                 hl.Enabled = true
             end
@@ -7007,6 +7037,7 @@ F.games.bms = (function()
                 if inRange(t, origin, rangeSq) then
                     seen[t] = true
                     local hl = ensureHl(t)
+                    hl.FillColor    = SAFE_COLOR
                     hl.OutlineColor = SAFE_COLOR
                     hl.Enabled = true
                 end
@@ -7017,6 +7048,7 @@ F.games.bms = (function()
                 if inRange(t, origin, rangeSq) then
                     seen[t] = true
                     local hl = ensureHl(t)
+                    hl.FillColor    = WARN_COLOR
                     hl.OutlineColor = WARN_COLOR
                     hl.Enabled = true
                 end
@@ -7116,7 +7148,9 @@ F.games.bms = (function()
             setDelay = function(n) flagDelay = math.clamp(tonumber(n) or 1, 0.05, 10) end,
             setRange = function(n) flagRange = math.clamp(tonumber(n) or 60, 5, 500) end,
         },
-        hasToken = function() return getgenv()._BMS_TOKEN ~= nil end,
+        hasToken      = function() return getgenv()._BMS_TOKEN ~= nil end,
+        setToken      = setManualToken,
+        getToken      = function() return getgenv()._BMS_TOKEN end,
     }
 end)()
 

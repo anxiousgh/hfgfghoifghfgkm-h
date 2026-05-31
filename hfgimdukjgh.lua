@@ -2158,8 +2158,29 @@ do
         BMS:AddLabel("Token capture")
         BMS:AddLabel(
             "Place one flag manually first - the token gets\n"
-         .. "captured automatically on the first PlaceFlag call.",
+         .. "captured automatically on the first PlaceFlag call.\n"
+         .. "If autocapture doesn't work, paste it manually below.",
             true)  -- true = DoesWrap
+        BMS:AddInput("BMSManualToken", {
+            Default     = "",
+            Placeholder = "paste session token here",
+            Text        = "Manual token",
+            Tooltip     = "Set the session token manually if autocapture fails",
+            Callback    = function(v)
+                if v and #v > 8 then
+                    F.games.bms.setToken(v)
+                    Library:Notify("BMS token set manually", 3)
+                end
+            end,
+        })
+        BMS:AddButton({ Text = "Test token", Func = function()
+            local t = F.games.bms.getToken()
+            if t then
+                Library:Notify("Token set: " .. t:sub(1, 16) .. "...", 4)
+            else
+                Library:Notify("No token captured yet", 4)
+            end
+        end })
 
         BMS:AddDivider()
 
