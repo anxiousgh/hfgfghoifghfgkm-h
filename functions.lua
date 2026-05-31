@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.12.2"
+local SCRIPT_VERSION = "v1.12.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7190,32 +7190,62 @@ F.games.bms = (function()
         return hrp and hrp.Position or Vector3.zero
     end
 
-    -- ---- ESP ----
-    local highlights = {}  -- [tile] = Highlight (reused across frames)
+    -- ---- ESP (SurfaceGui-based, no per-scene cap) ----
+    --
+    -- Highlight instances have a soft cap (~31 active before they
+    -- silently stop rendering). Late-game with 80+ flagged tiles
+    -- caused ESP to vanish. Switching to a SurfaceGui parented to
+    -- each tile (Top face) - it's just a colored Frame + UIStroke,
+    -- no engine cap, no scene-wide cost.
+    local surfaces = {}  -- [tile] = SurfaceGui (cached)
     local espActive = false
     local espRange = 80
     local espShowSafes = false
     local espShowWarnings = true
     local espThread
 
-    local function ensureHl(tile)
-        local hl = highlights[tile]
-        if hl and hl.Parent then return hl end
-        hl = Instance.new("Highlight")
-        -- Knife-reach-style fill: Occluded DepthMode (renders only where
-        -- the tile is visible, not through other geometry), solid color
-        -- fill so the tile itself is colored red/green/yellow.
-        hl.FillTransparency    = 0.35
-        hl.OutlineTransparency = 0
-        hl.DepthMode           = Enum.HighlightDepthMode.Occluded
-        hl.Adornee             = tile
-        hl.Parent              = tile
-        highlights[tile] = hl
-        return hl
+    local function ensureSurface(tile)
+        local sg = surfaces[tile]
+        if sg and sg.Parent then return sg end
+        sg = Instance.new("SurfaceGui")
+        sg.Name              = "_BMS_ESP"
+        sg.Face              = Enum.NormalId.Top
+        sg.AlwaysOnTop       = true
+        sg.LightInfluence    = 0
+        sg.SizingMode        = Enum.SurfaceGuiSizingMode.PixelsPerStud
+        sg.PixelsPerStud     = 50
+        sg.Adornee           = tile
+        sg.Parent            = tile
+
+        local frame = Instance.new("Frame")
+        frame.Name                   = "Fill"
+        frame.Size                   = UDim2.fromScale(1, 1)
+        frame.BackgroundTransparency = 0.4
+        frame.BorderSizePixel        = 0
+        frame.Parent                 = sg
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Thickness    = 3
+        stroke.Transparency = 0
+        stroke.Parent       = frame
+
+        surfaces[tile] = sg
+        return sg
+    end
+
+    local function setColor(tile, color)
+        local sg = ensureSurface(tile)
+        local fr = sg:FindFirstChild("Fill")
+        if fr then
+            fr.BackgroundColor3 = color
+            local st = fr:FindFirstChildOfClass("UIStroke")
+            if st then st.Color = color end
+        end
+        sg.Enabled = true
     end
 
     local function clearAllHl()
-        for _, hl in pairs(highlights) do hl.Enabled = false end
+        for _, sg in pairs(surfaces) do if sg then sg.Enabled = false end end
     end
 
     local MINE_COLOR = Color3.fromRGB(255, 40, 40)
@@ -7238,15 +7268,13 @@ F.games.bms = (function()
             warn("[BMS] deduce error:", mines)  -- 'mines' is the error msg on failure
             mines, safes, falseFlags = {}, {}, {}
         end
-        -- prune dead highlights: tiles that got destroyed between ticks
-        -- (revealed-tile -> new tile, infinite mode shuffle, etc.) leave
-        -- orphaned Highlight instances whose Adornee is nil. Iterating
-        -- 1000+ of these every tick was probably what stalled ESP late
-        -- game.
-        for tile, hl in pairs(highlights) do
-            if not tile.Parent or not hl.Parent then
-                pcall(function() hl:Destroy() end)
-                highlights[tile] = nil
+        -- prune dead surfaces: tiles destroyed between ticks leave
+        -- orphan SurfaceGui entries in the table. Iterating thousands
+        -- of those per tick would stall ESP late game.
+        for tile, sg in pairs(surfaces) do
+            if not tile.Parent or not sg.Parent then
+                pcall(function() sg:Destroy() end)
+                surfaces[tile] = nil
             end
         end
         -- only highlight within range of player
@@ -7256,20 +7284,14 @@ F.games.bms = (function()
         for t in pairs(mines) do
             if inRange(t, origin, rangeSq) then
                 seen[t] = true
-                local hl = ensureHl(t)
-                hl.FillColor    = MINE_COLOR
-                hl.OutlineColor = MINE_COLOR
-                hl.Enabled = true
+                setColor(t, MINE_COLOR)
             end
         end
         if espShowSafes then
             for t in pairs(safes) do
                 if inRange(t, origin, rangeSq) then
                     seen[t] = true
-                    local hl = ensureHl(t)
-                    hl.FillColor    = SAFE_COLOR
-                    hl.OutlineColor = SAFE_COLOR
-                    hl.Enabled = true
+                    setColor(t, SAFE_COLOR)
                 end
             end
         end
@@ -7277,16 +7299,13 @@ F.games.bms = (function()
             for t in pairs(falseFlags) do
                 if inRange(t, origin, rangeSq) then
                     seen[t] = true
-                    local hl = ensureHl(t)
-                    hl.FillColor    = WARN_COLOR
-                    hl.OutlineColor = WARN_COLOR
-                    hl.Enabled = true
+                    setColor(t, WARN_COLOR)
                 end
             end
         end
-        -- hide highlights not in the visible set
-        for tile, hl in pairs(highlights) do
-            if not seen[tile] then hl.Enabled = false end
+        -- hide surfaces not in the visible set
+        for tile, sg in pairs(surfaces) do
+            if not seen[tile] then sg.Enabled = false end
         end
     end
 
