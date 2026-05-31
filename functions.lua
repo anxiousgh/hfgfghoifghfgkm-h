@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.11.0"
+local SCRIPT_VERSION = "v1.12.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7016,13 +7016,141 @@ F.games.bms = (function()
             return changed
         end
 
-        -- iterate basic + subset to fixed point. Cap at 12 outer
-        -- iterations so a misbehaved board can't lock us up.
+        -- ---- TANK SOLVER (brute-force enumeration) ----
+        --
+        -- After pattern rules converge, split the remaining constraints
+        -- into connected components (constraints linked by shared
+        -- unknowns). For each component small enough to brute-force,
+        -- enumerate all 2^N mine/safe assignments, keep the valid ones
+        -- (satisfy every constraint exactly), then mark any unknown
+        -- that's a mine in EVERY valid assignment (definite mine) or
+        -- safe in every valid assignment (definite safe).
+        --
+        -- This catches every named pattern (1>2<1 pinch, T-pattern,
+        -- T1-T5 tricks, corner combinations, etc) because they're all
+        -- special cases of global constraint satisfaction.
+        --
+        -- Cap each component at MAX_TANK unknowns (2^N enumerations).
+        -- 14 = ~16k iters per component = milliseconds; 18 = ~260k =
+        -- borderline. 14 is a safe default.
+        local MAX_TANK = 14
+        local function tankPass(cs)
+            if #cs == 0 then return false end
+            -- union-find groups constraints that share any unknown
+            local parent_uf = {}
+            local function find(x)
+                while parent_uf[x] ~= x do x = parent_uf[x] end
+                return x
+            end
+            local function union(a, b)
+                a = find(a); b = find(b)
+                if a ~= b then parent_uf[a] = b end
+            end
+            local allUnk = {}  -- ordered list of all unknown tiles across cs
+            local seenU = {}
+            for _, c in ipairs(cs) do
+                for u in pairs(c.set) do
+                    if not seenU[u] then
+                        seenU[u] = true
+                        parent_uf[u] = u
+                        table.insert(allUnk, u)
+                    end
+                end
+            end
+            for _, c in ipairs(cs) do
+                local prev
+                for u in pairs(c.set) do
+                    if prev then union(prev, u) end
+                    prev = u
+                end
+            end
+            -- group unknowns + constraints by root
+            local groupUnk, groupCons = {}, {}
+            for _, u in ipairs(allUnk) do
+                local r = find(u)
+                groupUnk[r] = groupUnk[r] or {}
+                table.insert(groupUnk[r], u)
+            end
+            for _, c in ipairs(cs) do
+                local anyU; for u in pairs(c.set) do anyU = u; break end
+                if anyU then
+                    local r = find(anyU)
+                    groupCons[r] = groupCons[r] or {}
+                    table.insert(groupCons[r], c)
+                end
+            end
+            local changed = false
+            for root, unknowns in pairs(groupUnk) do
+                local n = #unknowns
+                if n > 0 and n <= MAX_TANK then
+                    local gcs = groupCons[root] or {}
+                    -- precompute: idx[tile] = position in unknowns
+                    -- cIdx[ci] = list of unknown indices for constraint ci
+                    local idx = {}
+                    for i = 1, n do idx[unknowns[i]] = i end
+                    local cIdx = {}
+                    local cRem = {}
+                    for ci, c in ipairs(gcs) do
+                        local list = {}
+                        for u in pairs(c.set) do
+                            list[#list + 1] = idx[u]
+                        end
+                        cIdx[ci] = list
+                        cRem[ci] = c.remaining
+                    end
+                    local mineYes, mineNo = {}, {}
+                    for i = 1, n do mineYes[i] = 0; mineNo[i] = 0 end
+                    local totalValid = 0
+                    local twoN = 1
+                    for _ = 1, n do twoN = twoN * 2 end
+                    -- assignment vector is 0/1 ints so we can sum directly
+                    local assign = table.create and table.create(n, 0) or {}
+                    if #assign < n then for i = 1, n do assign[i] = 0 end end
+                    for mask = 0, twoN - 1 do
+                        local m = mask
+                        for i = 1, n do
+                            local bit = m % 2
+                            assign[i] = bit
+                            m = (m - bit) * 0.5
+                        end
+                        -- check all constraints; early-out on failure
+                        local valid = true
+                        for ci = 1, #gcs do
+                            local list = cIdx[ci]
+                            local mc = 0
+                            for k = 1, #list do mc = mc + assign[list[k]] end
+                            if mc ~= cRem[ci] then valid = false; break end
+                        end
+                        if valid then
+                            totalValid = totalValid + 1
+                            for i = 1, n do
+                                if assign[i] == 1 then mineYes[i] = mineYes[i] + 1
+                                else                   mineNo[i]  = mineNo[i]  + 1 end
+                            end
+                        end
+                    end
+                    if totalValid > 0 then
+                        for i = 1, n do
+                            local u = unknowns[i]
+                            if mineYes[i] == totalValid and not knownMines[u] then
+                                knownMines[u] = true; changed = true
+                            elseif mineNo[i] == totalValid and not knownSafes[u] then
+                                knownSafes[u] = true; changed = true
+                            end
+                        end
+                    end
+                end
+            end
+            return changed
+        end
+
+        -- iterate basic + subset + tank to fixed point.
         for _ = 1, 12 do
             local cs = buildConstraints()
             local c1 = basicPass(cs)
             local c2 = subsetPass(cs)
-            if not c1 and not c2 then break end
+            local c3 = tankPass(cs)
+            if not c1 and not c2 and not c3 then break end
         end
 
         -- false flags: user flagged it but our deduction says safe
