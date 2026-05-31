@@ -2267,6 +2267,12 @@ do
             Default = 0.4, Min = 0.05, Max = 3, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.autoPlay.setStepDelay(v) end,
         })
+
+        -- Sanity print so the user can confirm in the console whether the
+        -- Auto play section actually ran to completion. If they see this
+        -- print but no "Auto play" UI, it's a Linoria render quirk; if
+        -- they DON'T see it, the loader is cached at an older version.
+        print("[BMS] UI section reached end - Auto play toggle should be visible")
     end
 
     -- ---------------- MATCH THE CARDS! ----------------

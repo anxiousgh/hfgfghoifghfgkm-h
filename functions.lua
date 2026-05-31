@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.12.3"
+local SCRIPT_VERSION = "v1.12.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7252,21 +7252,42 @@ F.games.bms = (function()
     local SAFE_COLOR = Color3.fromRGB(40, 220, 80)
     local WARN_COLOR = Color3.fromRGB(255, 220, 0)
 
+    -- Per-tick cache so we only re-deduce when state actually changed.
+    -- Cheap signature: count of covered/revealed/flagged. If counts
+    -- match the prior tick the constraints are the same -> reuse the
+    -- prior mines/safes/falseFlags result and just re-render. This is
+    -- the dominant late-game lag fix: skip the O(C^2 * iters) deduce
+    -- on every tick when nothing changed.
+    local _lastSig, _lastResult = nil, nil
+
     local function espTick()
         local parts = getParts()
         if not parts then clearAllHl(); return end
         local all = parts:GetChildren()
         ensureNeighbors(all)
-        -- state map for ALL tiles (deduction needs full picture)
         local state = {}
-        for _, t in ipairs(all) do state[t] = tileState(t) end
-        -- deduce is pcall'd so a tank-solver edge case can't break ESP
-        -- silently. If it errors, we log once and continue using empty
-        -- results so highlights drop instead of freezing on stale data.
-        local ok, mines, safes, falseFlags = pcall(deduce, all, state)
-        if not ok then
-            warn("[BMS] deduce error:", mines)  -- 'mines' is the error msg on failure
-            mines, safes, falseFlags = {}, {}, {}
+        local cov, rev, flg = 0, 0, 0
+        for _, t in ipairs(all) do
+            local s = tileState(t)
+            state[t] = s
+            if     s == "covered"  then cov = cov + 1
+            elseif s == "revealed" then rev = rev + 1
+            elseif s == "flagged"  then flg = flg + 1 end
+        end
+        local sig = cov * 1e6 + rev * 1000 + flg
+        local mines, safes, falseFlags
+        if _lastSig == sig and _lastResult then
+            mines, safes, falseFlags = _lastResult[1], _lastResult[2], _lastResult[3]
+        else
+            local ok, m, s2, ff = pcall(deduce, all, state)
+            if not ok then
+                warn("[BMS] deduce error:", m)
+                mines, safes, falseFlags = {}, {}, {}
+            else
+                mines, safes, falseFlags = m, s2, ff
+            end
+            _lastSig    = sig
+            _lastResult = { mines, safes, falseFlags }
         end
         -- prune dead surfaces: tiles destroyed between ticks leave
         -- orphan SurfaceGui entries in the table. Iterating thousands
