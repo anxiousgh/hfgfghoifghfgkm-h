@@ -2255,6 +2255,26 @@ do
             Default = true,
             Callback = function(v) F.games.bms.esp.setShowWarnings(v) end,
         })
+        BMS:AddToggle("BMSEspShowFifties", { Text = "Highlight 50/50 tiles (blue)",
+            Default = true,
+            Callback = function(v) F.games.bms.esp.setShowFifties(v) end,
+        })
+        BMS:AddLabel("Mine color"):AddColorPicker("BMSEspMineColor", {
+            Default = F.games.bms.esp.getMineColor(), Title = "Mine color",
+            Callback = F.games.bms.esp.setMineColor,
+        })
+        BMS:AddLabel("Safe color"):AddColorPicker("BMSEspSafeColor", {
+            Default = F.games.bms.esp.getSafeColor(), Title = "Safe color",
+            Callback = F.games.bms.esp.setSafeColor,
+        })
+        BMS:AddLabel("False-flag color"):AddColorPicker("BMSEspWarnColor", {
+            Default = F.games.bms.esp.getWarnColor(), Title = "False-flag warning color",
+            Callback = F.games.bms.esp.setWarnColor,
+        })
+        BMS:AddLabel("50/50 color"):AddColorPicker("BMSEspFiftyColor", {
+            Default = F.games.bms.esp.getFiftyColor(), Title = "50/50 tile color",
+            Callback = F.games.bms.esp.setFiftyColor,
+        })
         print("[BMS] (3/8) mine ESP widgets ok")
 
         BMS:AddDivider()
@@ -2310,7 +2330,11 @@ do
             Default = 0.4, Min = 0.05, Max = 3, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.autoPlay.setStepDelay(v) end,
         })
-        print("[BMS] (7/8) walk step slider ok")
+        BMSAuto:AddToggle("BMSAutoGuess", { Text = "Guess on 50/50 when stuck",
+            Default = false,
+            Callback = function(v) F.games.bms.autoPlay.setGuess(v) end,
+        })
+        print("[BMS] (7/8) walk step + guess widgets ok")
         BMSAuto:AddLabel(
             "Auto play uses the Flag delay + Flag range\n"
          .. "+ Aim cone settings from the Legit auto-flag\n"

@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.13.9"
+local SCRIPT_VERSION = "v1.14.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6927,6 +6927,7 @@ F.games.bms = (function()
     local function deduce(parts, state)
         local knownMines = {}
         local knownSafes = {}
+        local tileProbs  = {}  -- [tile] = mine probability (only filled by tank solver for tiles in small components)
 
         local function buildConstraints()
             -- Rebuild the constraint list from the current known sets.
@@ -7160,6 +7161,10 @@ F.games.bms = (function()
                                 knownMines[u] = true; changed = true
                             elseif mineNo[i] == totalValid and not knownSafes[u] then
                                 knownSafes[u] = true; changed = true
+                            else
+                                -- partial: record mine probability for
+                                -- 50/50 ESP + auto-play guessing
+                                tileProbs[u] = mineYes[i] / totalValid
                             end
                         end
                     end
@@ -7185,7 +7190,11 @@ F.games.bms = (function()
                 falseFlags[t] = true
             end
         end
-        return knownMines, knownSafes, falseFlags
+        -- prune probs for tiles we now know definitively
+        for t in pairs(tileProbs) do
+            if knownMines[t] or knownSafes[t] then tileProbs[t] = nil end
+        end
+        return knownMines, knownSafes, falseFlags, tileProbs
     end
 
     -- ---- range filter ----
@@ -7260,9 +7269,12 @@ F.games.bms = (function()
         for _, sg in pairs(surfaces) do if sg then sg.Enabled = false end end
     end
 
-    local MINE_COLOR = Color3.fromRGB(255, 40, 40)
-    local SAFE_COLOR = Color3.fromRGB(40, 220, 80)
-    local WARN_COLOR = Color3.fromRGB(255, 220, 0)
+    -- All ESP colors are user-settable via F.games.bms.esp.set*Color
+    local MINE_COLOR  = Color3.fromRGB(255, 40,  40)
+    local SAFE_COLOR  = Color3.fromRGB(40,  220, 80)
+    local WARN_COLOR  = Color3.fromRGB(255, 220, 0)
+    local FIFTY_COLOR = Color3.fromRGB(60,  140, 255)
+    local espShowFifties = true
 
     -- Per-tick cache so we only re-deduce when state actually changed.
     -- Cheap signature: count of covered/revealed/flagged. If counts
@@ -7288,18 +7300,19 @@ F.games.bms = (function()
         end
         local sig = cov * 1e6 + rev * 1000 + flg
         local mines, safes, falseFlags
+        local probs
         if _lastSig == sig and _lastResult then
-            mines, safes, falseFlags = _lastResult[1], _lastResult[2], _lastResult[3]
+            mines, safes, falseFlags, probs = _lastResult[1], _lastResult[2], _lastResult[3], _lastResult[4]
         else
-            local ok, m, s2, ff = pcall(deduce, all, state)
+            local ok, m, s2, ff, pr = pcall(deduce, all, state)
             if not ok then
                 warn("[BMS] deduce error:", m)
-                mines, safes, falseFlags = {}, {}, {}
+                mines, safes, falseFlags, probs = {}, {}, {}, {}
             else
-                mines, safes, falseFlags = m, s2, ff
+                mines, safes, falseFlags, probs = m, s2, ff, pr or {}
             end
             _lastSig    = sig
-            _lastResult = { mines, safes, falseFlags }
+            _lastResult = { mines, safes, falseFlags, probs }
         end
         -- prune dead surfaces: tiles destroyed between ticks leave
         -- orphan SurfaceGui entries in the table. Iterating thousands
@@ -7333,6 +7346,19 @@ F.games.bms = (function()
                 if inRange(t, origin, rangeSq) then
                     seen[t] = true
                     setColor(t, WARN_COLOR)
+                end
+            end
+        end
+        -- 50/50 tiles: probability in [0.4, 0.6]. Tank solver only fills
+        -- probs for tiles in small connected components (<=14 unknowns).
+        if espShowFifties and probs then
+            for t, p in pairs(probs) do
+                if p >= 0.4 and p <= 0.6 and inRange(t, origin, rangeSq) then
+                    -- don't overpaint if already marked (mine/safe/warn win)
+                    if not seen[t] then
+                        seen[t] = true
+                        setColor(t, FIFTY_COLOR)
+                    end
                 end
             end
         end
@@ -7450,6 +7476,7 @@ F.games.bms = (function()
     local autoActive = false
     local autoThread
     local autoStepDelay = 0.4  -- per-tile MoveTo cap
+    local autoGuess     = false  -- when stuck, walk to a 50/50 tile
 
     local function findCurrentTile(allParts, originPos)
         -- Pick the tile closest to player HRP on XZ.
@@ -7537,7 +7564,8 @@ F.games.bms = (function()
                 ensureNeighbors(all)
                 local state = {}
                 for _, t in ipairs(all) do state[t] = tileState(t) end
-                local mines, safes = deduce(all, state)
+                local mines, safes, _ff, probs = deduce(all, state)
+                probs = probs or {}
                 local origin  = myPos()
                 local rangeSq = flagRange * flagRange
                 -- (a) flag closest unflagged deduced mine if cooldown elapsed
@@ -7609,6 +7637,36 @@ F.games.bms = (function()
                             break
                         end
                     end
+                    -- GUESS FALLBACK: nothing definitively safe is
+                    -- reachable. If guess mode is on, walk to the tile
+                    -- with the lowest mine probability (50/50 or
+                    -- better). Only walks tiles in {0.4..0.55} so we
+                    -- never deliberately step onto a > coinflip mine.
+                    if not walked and autoGuess and startTile then
+                        local guesses = {}
+                        for tile, p in pairs(probs) do
+                            if state[tile] == "covered" and p <= 0.55 then
+                                table.insert(guesses, { tile = tile, p = p })
+                            end
+                        end
+                        table.sort(guesses, function(a, b) return a.p < b.p end)
+                        for _, g in ipairs(guesses) do
+                            if not autoActive then break end
+                            local path = bfsPath(startTile, g.tile, state, mines)
+                            if path and #path > 0 then
+                                for stepIdx, step in ipairs(path) do
+                                    if not autoActive then break end
+                                    local s = tileState(step)
+                                    if stepIdx < #path then
+                                        if s ~= "revealed" or mines[step] then break end
+                                    end
+                                    walkTo(step)
+                                end
+                                walked = true
+                                break
+                            end
+                        end
+                    end
                     if not walked then task.wait(0.3) end
                 else
                     task.wait(0.3)
@@ -7630,6 +7688,15 @@ F.games.bms = (function()
             setRange         = function(n) espRange         = math.clamp(tonumber(n) or 80,  10, 1000) end,
             setShowSafes     = function(v) espShowSafes     = v == true end,
             setShowWarnings  = function(v) espShowWarnings  = v == true end,
+            setShowFifties   = function(v) espShowFifties   = v == true end,
+            setMineColor     = function(c) if typeof(c) == "Color3" then MINE_COLOR  = c end end,
+            setSafeColor     = function(c) if typeof(c) == "Color3" then SAFE_COLOR  = c end end,
+            setWarnColor     = function(c) if typeof(c) == "Color3" then WARN_COLOR  = c end end,
+            setFiftyColor    = function(c) if typeof(c) == "Color3" then FIFTY_COLOR = c end end,
+            getMineColor     = function() return MINE_COLOR end,
+            getSafeColor     = function() return SAFE_COLOR end,
+            getWarnColor     = function() return WARN_COLOR end,
+            getFiftyColor    = function() return FIFTY_COLOR end,
         },
         legitFlag = {
             start    = legitFlagStart,
@@ -7645,6 +7712,7 @@ F.games.bms = (function()
             stop     = autoPlayStop,
             isActive = function() return autoActive end,
             setStepDelay = function(n) autoStepDelay = math.clamp(tonumber(n) or 0.4, 0.05, 3) end,
+            setGuess     = function(v) autoGuess = v == true end,
         },
         hasToken      = function() return getgenv()._BMS_TOKEN ~= nil end,
         setToken      = setManualToken,
