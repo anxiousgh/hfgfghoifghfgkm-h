@@ -3,14 +3,38 @@
 --  executor: Potassium
 -- ============================================================
 
-local _functionsSrc = game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/functions.lua?_=" .. tick())
+print("[loader] cclosure.vip hfgimdukjgh v1.13.3 loaded - if you don't see this, your loader file itself is cached")
+
+-- raw.githubusercontent.com IGNORES query strings for cache keying so
+-- the old `?_=tick()` trick is a no-op. SHA-pin the URLs via the
+-- GitHub API instead - different commit SHA = different URL path =
+-- different cache key, always fresh. Fall back to main-branch if the
+-- API call fails so the loader still boots.
+local _ghOwner, _ghRepo, _ghBranch = "anxiousgh", "hfgfghoifghfgkm-h", "main"
+local _sha
+do
+    local apiUrl = "https://api.github.com/repos/" .. _ghOwner .. "/" .. _ghRepo .. "/commits/" .. _ghBranch
+    local ok, body = pcall(game.HttpGet, game, apiUrl)
+    if ok and type(body) == "string" then
+        _sha = body:match('"sha"%s*:%s*"([0-9a-f]+)"')
+    end
+end
+local repo
+if _sha then
+    repo = "https://raw.githubusercontent.com/" .. _ghOwner .. "/" .. _ghRepo .. "/" .. _sha .. "/"
+    print("[loader] SHA-pinned base:", _sha:sub(1,12) .. "...")
+else
+    repo = "https://raw.githubusercontent.com/" .. _ghOwner .. "/" .. _ghRepo .. "/" .. _ghBranch .. "/"
+    warn("[loader] GitHub API failed - falling back to main branch (may be cached)")
+end
+
+local _functionsSrc = game:HttpGet(repo .. "functions.lua")
 local _fnFn, _fnErr = loadstring(_functionsSrc)
 if not _fnFn then
     error("[cclosure.vip] functions.lua failed to compile: " .. tostring(_fnErr), 0)
 end
 local F = _fnFn()
 
-local repo = "https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/"
 local Library      = loadstring(game:HttpGet(repo .. "lib.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "libaddons/tman.lua"))()
 local SaveManager  = loadstring(game:HttpGet(repo .. "libaddons/sman.lua"))()
