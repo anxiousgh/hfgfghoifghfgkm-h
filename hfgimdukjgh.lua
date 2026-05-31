@@ -1117,10 +1117,10 @@ end
 do
     local Desync = Tabs.Movement:AddRightGroupbox("Desync")
 
-    local DESYNC_KEYS = {
-        "DesyncVoid", "DesyncSky", "DesyncSpin", "DesyncVelocity",
-        "DesyncRaknet", "HCVoidspam", "MM2Invisible",
-    }
+    -- Mutex - the new single "DesyncEnabled" toggle replaces the old
+    -- per-mode toggles. HC voidspam + MM2 invisible still need to be
+    -- mutually exclusive with us, so they're still tracked here.
+    local DESYNC_KEYS = { "DesyncEnabled", "HCVoidspam", "MM2Invisible" }
     local function selectMode(name)
         for _, k in ipairs(DESYNC_KEYS) do
             if k ~= name and Toggles[k] and Toggles[k].Value then
@@ -1131,54 +1131,58 @@ do
     -- expose the mutex helper to other tabs (HC tab uses it for HCVoidspam)
     getgenv()._F_DESYNC_SELECT = selectMode
 
-    Desync:AddToggle("DesyncVoid", { Text = "Void desync",
-        Default = false,
-        Callback = function(v)
-            if v then selectMode("DesyncVoid"); F.desync.startVoid()
-            else      F.desync.stop() end
+    -- Map mode-name -> start fn for the dropdown selection. Raknet is
+    -- handled inline because its start can fail (needs executor support).
+    local MODE_START = {
+        Void     = function() F.desync.startVoid()     return true end,
+        Sky      = function() F.desync.startSky()      return true end,
+        Spin     = function() F.desync.startSpin()     return true end,
+        Velocity = function() F.desync.startVelocity() return true end,
+        Raknet   = function()
+            local ok = F.desync.startRaknet()
+            if not ok then
+                Library:Notify("Raknet desync unavailable: executor doesn't expose `raknet`", 4)
+            end
+            return ok
         end,
-    })
-    Desync:AddToggle("DesyncSky", { Text = "Sky desync",
-        Default = false,
+    }
+    local currentMode = "Void"
+
+    Desync:AddDropdown("DesyncMode", {
+        Values = { "Void", "Sky", "Spin", "Velocity", "Raknet" },
+        Default = currentMode,
+        Text = "Desync mode",
         Callback = function(v)
-            if v then selectMode("DesyncSky"); F.desync.startSky()
-            else      F.desync.stop() end
-        end,
-    })
-    Desync:AddToggle("DesyncSpin", { Text = "Spin desync",
-        Default = false,
-        Callback = function(v)
-            if v then selectMode("DesyncSpin"); F.desync.startSpin()
-            else      F.desync.stop() end
-        end,
-    })
-    Desync:AddToggle("DesyncVelocity", { Text = "Velocity desync",
-        Default = false,
-        Callback = function(v)
-            if v then selectMode("DesyncVelocity"); F.desync.startVelocity()
-            else      F.desync.stop() end
+            currentMode = v
+            -- if we're already active, restart in the new mode so the
+            -- swap is instant instead of "off then re-toggle"
+            if Toggles.DesyncEnabled and Toggles.DesyncEnabled.Value then
+                F.desync.stop()
+                local starter = MODE_START[currentMode]
+                if starter and not starter() then
+                    Toggles.DesyncEnabled:SetValue(false)
+                end
+            end
         end,
     })
 
-    -- Raknet desync: requires the executor to expose `raknet`. Always
-    -- shown so the user can attempt it; availability is checked lazily
-    -- on toggle-on (some executors expose raknet after script load).
-    Desync:AddToggle("DesyncRaknet", { Text = "Raknet desync",
+    Desync:AddToggle("DesyncEnabled", { Text = "Enable desync",
         Default = false,
         Callback = function(v)
             if v then
-                selectMode("DesyncRaknet")
-                local ok = F.desync.startRaknet()
-                if not ok then
-                    -- raknet not exposed by this executor - turn the
-                    -- toggle back off and tell the user.
-                    Toggles.DesyncRaknet:SetValue(false)
-                    Library:Notify("Raknet desync unavailable: executor doesn't expose `raknet`", 4)
+                selectMode("DesyncEnabled")
+                local starter = MODE_START[currentMode]
+                if not starter or not starter() then
+                    -- raknet failed or unknown mode - turn back off
+                    Toggles.DesyncEnabled:SetValue(false)
                 end
             else
                 F.desync.stop()
             end
         end,
+    }):AddKeyPicker("DesyncKey", {
+        Default = "Y", Mode = "Toggle", Text = "Desync key",
+        SyncToggleState = true,
     })
 
     Desync:AddDivider()
@@ -1897,30 +1901,6 @@ do
         Callback = function(v) F.games.hoodCustoms.forceHit.setTracerStyle(v) end,
     })
     HC:AddDivider()
-    -- Bullet whoosh sound (separate from hit sound, plays on every shot).
-    HC:AddToggle("HCForceHitWhoosh", { Text = "Bullet whoosh sound",
-        Default = false,
-        Callback = function(v) F.games.hoodCustoms.forceHit.setWhooshEnabled(v) end,
-    })
-    HC:AddDropdown("HCForceHitWhooshId", {
-        Values = {
-            "9119713949 (short whoosh)",
-            "131961136  (windy whoosh)",
-            "5081173541 (laser whoosh)",
-            "6403566022 (sci-fi shot)",
-        },
-        Default = "9119713949 (short whoosh)",
-        Text = "Whoosh sound",
-        Callback = function(v)
-            local id = tonumber(v:match("^(%d+)")) or 9119713949
-            F.games.hoodCustoms.forceHit.setWhooshId(id)
-        end,
-    })
-    HC:AddSlider("HCForceHitWhooshVol", {
-        Text = "Whoosh volume",
-        Default = 0.5, Min = 0, Max = 2, Rounding = 2,
-        Callback = function(v) F.games.hoodCustoms.forceHit.setWhooshVolume(v) end,
-    })
     -- Trail particles along beam path (sparkles that linger after shot).
     HC:AddToggle("HCForceHitTrail", { Text = "Trail particles along beam",
         Default = false,

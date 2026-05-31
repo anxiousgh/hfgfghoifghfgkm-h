@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.9.0"
+local SCRIPT_VERSION = "v1.9.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4932,10 +4932,6 @@ F.games.hoodCustoms.forceHit = (function()
     --   "Plasma"    - thick pulsing glowing beam
     --   "Thin"      - single thin beam in solid color, no halo
     local tracerStyle     = "Standard"
-    -- Bullet whoosh sound on each shot (subtle, plays from PlayerGui).
-    local whooshEnabled   = false
-    local whooshId        = 9119713949  -- short whoosh, switchable
-    local whooshVolume    = 0.5
     -- Trail particles along the beam path (sparkles linger after the shot).
     local trailEnabled    = false
     local hitSoundEnabled = true
@@ -5111,18 +5107,6 @@ F.games.hoodCustoms.forceHit = (function()
                 inner.TextureLength = 6
                 inner.TextureSpeed = 8
             end)
-        end
-
-        -- WHOOSH SOUND: short subtle bullet whoosh on shot. Parented to
-        -- PlayerGui so distance attenuation doesn't fade it.
-        if whooshEnabled and whooshId and whooshId ~= 0 then
-            local pg = lplr:FindFirstChildOfClass("PlayerGui")
-            local s = Instance.new("Sound")
-            s.SoundId = "rbxassetid://" .. tostring(whooshId)
-            s.Volume  = math.clamp(whooshVolume, 0, 5)
-            s.Parent  = pg or workspace
-            s:Play()
-            task.delay(3, function() if s and s.Parent then s:Destroy() end end)
         end
 
         -- TRAIL PARTICLES: sparkles along the bullet path that linger
@@ -5753,9 +5737,6 @@ F.games.hoodCustoms.forceHit = (function()
     t.setTracerThickness = function(n) tracerThickness = math.clamp(tonumber(n) or 0.12, 0.02, 1) end
     t.setTracerStyle    = function(s) tracerStyle = tostring(s or "Standard") end
     t.getTracerStyle    = function() return tracerStyle end
-    t.setWhooshEnabled  = function(v) whooshEnabled = v == true end
-    t.setWhooshId       = function(id) whooshId = tonumber(id) or 0 end
-    t.setWhooshVolume   = function(n) whooshVolume = math.clamp(tonumber(n) or 0.5, 0, 5) end
     t.setTrailEnabled   = function(v) trailEnabled = v == true end
     t.setHitSoundEnabled = function(v) hitSoundEnabled = v == true end
     t.setHitSoundId      = function(id) hitSoundId = tonumber(id) or 0 end
