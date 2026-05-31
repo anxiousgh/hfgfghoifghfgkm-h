@@ -2155,9 +2155,11 @@ do
     if _currentGame == "Blockerman's Minesweeper" then
         local BMS = Tabs.Games:AddLeftGroupbox("Blockerman's Minesweeper")
 
-        BMS:AddLabel("Token capture", true):AddLabel(
-            "Place one flag manually first - the token gets captured\n"
-         .. "automatically on the first PlaceFlag call.", true)
+        BMS:AddLabel("Token capture")
+        BMS:AddLabel(
+            "Place one flag manually first - the token gets\n"
+         .. "captured automatically on the first PlaceFlag call.",
+            true)  -- true = DoesWrap
 
         BMS:AddDivider()
 
