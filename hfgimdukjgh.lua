@@ -1667,9 +1667,10 @@ do
     -- All supported games keyed by display name -> list of PlaceIds.
     -- Add new entries here when adding a new game block below.
     local SUPPORTED_GAMES = {
-        ["Hood Customs"]      = { 138995385694035, 9825515356 },
-        ["Murder Mystery 2"]  = { 142823291 },
-        ["Match the Cards!"]  = { 138397085393482 },
+        ["Hood Customs"]              = { 138995385694035, 9825515356 },
+        ["Murder Mystery 2"]          = { 142823291 },
+        ["Match the Cards!"]          = { 138397085393482 },
+        ["Blockerman's Minesweeper"]  = { 7871169780 },
     }
     local function findCurrentGame()
         for name, ids in pairs(SUPPORTED_GAMES) do
@@ -2148,6 +2149,55 @@ do
             print("[cclosure.vip] Shoot Murderer keybind fired")
             tryShootMurderer()
         end)
+    end
+
+    -- ---------------- BLOCKERMAN'S MINESWEEPER ----------------
+    if _currentGame == "Blockerman's Minesweeper" then
+        local BMS = Tabs.Games:AddLeftGroupbox("Blockerman's Minesweeper")
+
+        BMS:AddLabel("Token capture", true):AddLabel(
+            "Place one flag manually first - the token gets captured\n"
+         .. "automatically on the first PlaceFlag call.", true)
+
+        BMS:AddDivider()
+
+        BMS:AddLabel("Mine ESP")
+        BMS:AddToggle("BMSEsp", { Text = "Mine ESP",
+            Default = false,
+            Callback = function(v)
+                if v then F.games.bms.esp.start() else F.games.bms.esp.stop() end
+            end,
+        })
+        BMS:AddSlider("BMSEspRange", { Text = "ESP range",
+            Default = 80, Min = 10, Max = 1000, Rounding = 0, Suffix = " studs",
+            Callback = function(v) F.games.bms.esp.setRange(v) end,
+        })
+        BMS:AddToggle("BMSEspShowSafes", { Text = "Highlight deduced-safe tiles",
+            Default = false,
+            Callback = function(v) F.games.bms.esp.setShowSafes(v) end,
+        })
+        BMS:AddToggle("BMSEspShowWarnings", { Text = "Highlight false-flag warnings",
+            Default = true,
+            Callback = function(v) F.games.bms.esp.setShowWarnings(v) end,
+        })
+
+        BMS:AddDivider()
+
+        BMS:AddLabel("Legit auto-flag")
+        BMS:AddToggle("BMSLegitFlag", { Text = "Auto-flag deduced mines",
+            Default = false,
+            Callback = function(v)
+                if v then F.games.bms.legitFlag.start() else F.games.bms.legitFlag.stop() end
+            end,
+        })
+        BMS:AddSlider("BMSFlagDelay", { Text = "Flag delay (one at a time)",
+            Default = 1.0, Min = 0.05, Max = 10, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.bms.legitFlag.setDelay(v) end,
+        })
+        BMS:AddSlider("BMSFlagRange", { Text = "Flag range",
+            Default = 60, Min = 5, Max = 500, Rounding = 0, Suffix = " studs",
+            Callback = function(v) F.games.bms.legitFlag.setRange(v) end,
+        })
     end
 
     -- ---------------- MATCH THE CARDS! ----------------

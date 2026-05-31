@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.9.3"
+local SCRIPT_VERSION = "v1.10.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6744,6 +6744,364 @@ F.games.matchTheCards = (function()
             stop     = showAllStop,
             isActive = function() return showAllActive end,
         },
+    }
+end)()
+
+-- ============================================================
+--  GAMES: BLOCKERMAN'S MINESWEEPER  (place id 7871169780)
+-- ============================================================
+--  Tile model:
+--    workspace.Flag.Parts.<child>   one BasePart per tile
+--    state per tile:
+--      covered  - no NumberGui child, no Model child
+--      revealed - has child named "NumberGui" (number inside it)
+--      flagged  - has any Model child (auto-inserted on flag)
+--      mine     - revealed mine = part.Color flipped to (252,0,0)
+--
+--  Server-side flag remote:
+--    ReplicatedStorage.Events.FlagEvents.PlaceFlag:FireServer(
+--      tile, sessionToken, true)
+--    sessionToken is minted client-side once per session, the server
+--    validates it. We grab it via a __namecall hook on the first
+--    flag the user places manually, then reuse it.
+-- ============================================================
+F.games.bms = (function()
+    local RS = game:GetService("ReplicatedStorage")
+
+    local function getPlaceFlag()
+        local ev = RS:FindFirstChild("Events")
+        local fe = ev and ev:FindFirstChild("FlagEvents")
+        return fe and fe:FindFirstChild("PlaceFlag")
+    end
+
+    local function getParts()
+        local f = workspace:FindFirstChild("Flag")
+        return f and f:FindFirstChild("Parts")
+    end
+
+    -- token capture (always installed, idempotent across reloads)
+    if not getgenv()._BMS_HOOK_INSTALLED and hookmetamethod then
+        getgenv()._BMS_HOOK_INSTALLED = true
+        local _old
+        _old = hookmetamethod(game, "__namecall", function(self, ...)
+            local m = getnamecallmethod()
+            if (m == "FireServer" or m == "InvokeServer") and self == getPlaceFlag() then
+                local args = { ... }
+                local tok = args[2]
+                if typeof(tok) == "string" and #tok > 8 then
+                    getgenv()._BMS_TOKEN = tok
+                end
+            end
+            return _old(self, ...)
+        end)
+    end
+
+    -- ---- per-tile helpers ----
+    local function tileState(tile)
+        for _, ch in ipairs(tile:GetChildren()) do
+            if ch:IsA("Model")        then return "flagged"  end
+            if ch.Name == "NumberGui" then return "revealed" end
+        end
+        return "covered"
+    end
+
+    local function tileNumber(tile)
+        local g = tile:FindFirstChild("NumberGui")
+        if not g then return nil end
+        for _, d in ipairs(g:GetDescendants()) do
+            if d:IsA("TextLabel") or d:IsA("TextButton") then
+                local n = tonumber(d.Text)
+                if n then return n end
+            end
+        end
+    end
+
+    -- ---- neighbor cache (rebuilt on Parts.ChildAdded for infinite mode) ----
+    local neighbors = {}      -- [tile] = { tile, ... }
+    local neighborsDirty = true
+    local cachedPartsCount = 0
+    local function ensureNeighbors(allParts)
+        if not neighborsDirty and #allParts == cachedPartsCount then return end
+        neighborsDirty = false
+        cachedPartsCount = #allParts
+        neighbors = {}
+        if not allParts[1] then return end
+        local size = math.max(allParts[1].Size.X, allParts[1].Size.Z)
+        local rng  = size * 1.6
+        local rng2 = rng * rng
+        for _, t in ipairs(allParts) do
+            local list, px, pz = {}, t.Position.X, t.Position.Z
+            for _, o in ipairs(allParts) do
+                if o ~= t then
+                    local dx, dz = o.Position.X - px, o.Position.Z - pz
+                    if dx*dx + dz*dz < rng2 then table.insert(list, o) end
+                end
+            end
+            neighbors[t] = list
+        end
+    end
+
+    -- watch for new tiles in infinite mode
+    do
+        local parts = getParts()
+        if parts then
+            parts.ChildAdded:Connect(function() neighborsDirty = true end)
+            parts.ChildRemoved:Connect(function() neighborsDirty = true end)
+        end
+    end
+
+    -- ---- deduction (doesn't trust user-placed flags) ----
+    -- Returns (knownMines, knownSafes, falseFlags) as { [tile]=true }.
+    -- falseFlags = tiles the user flagged but our deduction says are SAFE.
+    local function deduce(parts, state)
+        -- iterate to fixed point: any time we discover a new mine, the
+        -- consequences propagate to other revealed-tile rules.
+        local knownMines = {}
+        for _ = 1, 8 do
+            local changed = false
+            for _, t in ipairs(parts) do
+                if state[t] == "revealed" then
+                    local n = tileNumber(t)
+                    if n then
+                        local nbrs = neighbors[t]
+                        if nbrs then
+                            local mineCount, unknown = 0, {}
+                            for _, nb in ipairs(nbrs) do
+                                local s = state[nb]
+                                if knownMines[nb] then
+                                    mineCount = mineCount + 1
+                                elseif s == "covered" or s == "flagged" then
+                                    -- treat "flagged" as unknown (false flags)
+                                    table.insert(unknown, nb)
+                                end
+                            end
+                            -- rule 1: number == knownMines + #unknown -> all unknown are mines
+                            if n == mineCount + #unknown and #unknown > 0 then
+                                for _, c in ipairs(unknown) do
+                                    if not knownMines[c] then
+                                        knownMines[c] = true
+                                        changed = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if not changed then break end
+        end
+        -- derive safes + false flags from the now-stable knownMines set
+        local knownSafes, falseFlags = {}, {}
+        for _, t in ipairs(parts) do
+            if state[t] == "revealed" then
+                local n = tileNumber(t)
+                if n then
+                    local nbrs = neighbors[t]
+                    if nbrs then
+                        local mineCount, unknown = 0, {}
+                        for _, nb in ipairs(nbrs) do
+                            local s = state[nb]
+                            if knownMines[nb] then mineCount = mineCount + 1
+                            elseif s == "covered" or s == "flagged" then
+                                table.insert(unknown, nb)
+                            end
+                        end
+                        -- rule 2: number == knownMines -> all unknown are safe
+                        if n == mineCount and #unknown > 0 then
+                            for _, c in ipairs(unknown) do knownSafes[c] = true end
+                        end
+                    end
+                end
+            end
+        end
+        -- false flags: user flagged it but our deduction says safe
+        for _, t in ipairs(parts) do
+            if state[t] == "flagged" and not knownMines[t] and knownSafes[t] then
+                falseFlags[t] = true
+            end
+        end
+        return knownMines, knownSafes, falseFlags
+    end
+
+    -- ---- range filter ----
+    local function inRange(tile, originPos, rangeSq)
+        local dx = tile.Position.X - originPos.X
+        local dy = tile.Position.Y - originPos.Y
+        local dz = tile.Position.Z - originPos.Z
+        return (dx*dx + dy*dy + dz*dz) < rangeSq
+    end
+
+    local function myPos()
+        local c = lplr.Character
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        return hrp and hrp.Position or Vector3.zero
+    end
+
+    -- ---- ESP ----
+    local highlights = {}  -- [tile] = Highlight (reused across frames)
+    local espActive = false
+    local espRange = 80
+    local espShowSafes = false
+    local espShowWarnings = true
+    local espThread
+
+    local function ensureHl(tile)
+        local hl = highlights[tile]
+        if hl and hl.Parent then return hl end
+        hl = Instance.new("Highlight")
+        hl.FillTransparency    = 1   -- outline only - cleaner, no fill clutter
+        hl.OutlineTransparency = 0
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Adornee = tile
+        hl.Parent  = tile
+        highlights[tile] = hl
+        return hl
+    end
+
+    local function clearAllHl()
+        for _, hl in pairs(highlights) do hl.Enabled = false end
+    end
+
+    local MINE_COLOR = Color3.fromRGB(255, 40, 40)
+    local SAFE_COLOR = Color3.fromRGB(40, 220, 80)
+    local WARN_COLOR = Color3.fromRGB(255, 220, 0)
+
+    local function espTick()
+        local parts = getParts()
+        if not parts then clearAllHl(); return end
+        local all = parts:GetChildren()
+        ensureNeighbors(all)
+        -- state map for ALL tiles (deduction needs full picture)
+        local state = {}
+        for _, t in ipairs(all) do state[t] = tileState(t) end
+        local mines, safes, falseFlags = deduce(all, state)
+        -- only highlight within range of player
+        local origin  = myPos()
+        local rangeSq = espRange * espRange
+        local seen = {}
+        for t in pairs(mines) do
+            if inRange(t, origin, rangeSq) then
+                seen[t] = true
+                local hl = ensureHl(t)
+                hl.OutlineColor = MINE_COLOR
+                hl.Enabled = true
+            end
+        end
+        if espShowSafes then
+            for t in pairs(safes) do
+                if inRange(t, origin, rangeSq) then
+                    seen[t] = true
+                    local hl = ensureHl(t)
+                    hl.OutlineColor = SAFE_COLOR
+                    hl.Enabled = true
+                end
+            end
+        end
+        if espShowWarnings then
+            for t in pairs(falseFlags) do
+                if inRange(t, origin, rangeSq) then
+                    seen[t] = true
+                    local hl = ensureHl(t)
+                    hl.OutlineColor = WARN_COLOR
+                    hl.Enabled = true
+                end
+            end
+        end
+        -- hide highlights not in the visible set
+        for tile, hl in pairs(highlights) do
+            if not seen[tile] then hl.Enabled = false end
+        end
+    end
+
+    local function espStart()
+        if espActive then return end
+        espActive = true
+        if espThread then pcall(task.cancel, espThread) end
+        espThread = task.spawn(function()
+            while espActive do
+                pcall(espTick)
+                task.wait(0.1)  -- 10 Hz - smoother than the old 2 Hz
+            end
+        end)
+    end
+
+    local function espStop()
+        espActive = false
+        if espThread then pcall(task.cancel, espThread); espThread = nil end
+        clearAllHl()
+    end
+
+    -- ---- legit auto-flag (queued, one at a time) ----
+    local flagActive = false
+    local flagDelay  = 1.0
+    local flagRange  = 60
+    local flagThread
+
+    local function legitFlagStart()
+        if flagActive then return end
+        flagActive = true
+        if flagThread then pcall(task.cancel, flagThread) end
+        flagThread = task.spawn(function()
+            while flagActive do
+                local token = getgenv()._BMS_TOKEN
+                local remote = getPlaceFlag()
+                if not token or not remote then
+                    task.wait(0.5); continue
+                end
+                local parts = getParts()
+                if not parts then task.wait(0.5); continue end
+                local all = parts:GetChildren()
+                ensureNeighbors(all)
+                local state = {}
+                for _, t in ipairs(all) do state[t] = tileState(t) end
+                local mines = deduce(all, state)
+                -- pick the closest unflagged deduced mine within range
+                local origin  = myPos()
+                local rangeSq = flagRange * flagRange
+                local best, bestD2 = nil, math.huge
+                for t in pairs(mines) do
+                    if state[t] ~= "flagged" then
+                        local dx = t.Position.X - origin.X
+                        local dy = t.Position.Y - origin.Y
+                        local dz = t.Position.Z - origin.Z
+                        local d2 = dx*dx + dy*dy + dz*dz
+                        if d2 < rangeSq and d2 < bestD2 then
+                            best, bestD2 = t, d2
+                        end
+                    end
+                end
+                if best then
+                    pcall(function() remote:FireServer(best, token, true) end)
+                    task.wait(flagDelay)
+                else
+                    task.wait(0.25)  -- nothing to flag right now, idle
+                end
+            end
+        end)
+    end
+
+    local function legitFlagStop()
+        flagActive = false
+        if flagThread then pcall(task.cancel, flagThread); flagThread = nil end
+    end
+
+    return {
+        esp = {
+            start    = espStart,
+            stop     = espStop,
+            isActive = function() return espActive end,
+            setRange         = function(n) espRange         = math.clamp(tonumber(n) or 80,  10, 1000) end,
+            setShowSafes     = function(v) espShowSafes     = v == true end,
+            setShowWarnings  = function(v) espShowWarnings  = v == true end,
+        },
+        legitFlag = {
+            start    = legitFlagStart,
+            stop     = legitFlagStop,
+            isActive = function() return flagActive end,
+            setDelay = function(n) flagDelay = math.clamp(tonumber(n) or 1, 0.05, 10) end,
+            setRange = function(n) flagRange = math.clamp(tonumber(n) or 60, 5, 500) end,
+        },
+        hasToken = function() return getgenv()._BMS_TOKEN ~= nil end,
     }
 end)()
 
