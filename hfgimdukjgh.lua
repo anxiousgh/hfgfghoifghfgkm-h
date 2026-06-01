@@ -2330,11 +2330,16 @@ do
             Default = 0.4, Min = 0.05, Max = 3, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.autoPlay.setStepDelay(v) end,
         })
-        BMSAuto:AddToggle("BMSAutoGuess", { Text = "Guess on 50/50 when stuck",
+        BMSAuto:AddToggle("BMSAutoGuess", { Text = "Guess when truly stuck",
             Default = false,
             Callback = function(v) F.games.bms.autoPlay.setGuess(v) end,
         })
-        print("[BMS] (7/8) walk step + guess widgets ok")
+        BMSAuto:AddSlider("BMSAutoTargetDebounce", {
+            Text = "Target switch debounce",
+            Default = 0.2, Min = 0, Max = 5, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.bms.autoPlay.setTargetDebounce(v) end,
+        })
+        print("[BMS] (7/8) walk step + guess + debounce widgets ok")
         BMSAuto:AddLabel(
             "Auto play uses the Flag delay + Flag range\n"
          .. "+ Aim cone settings from the Legit auto-flag\n"

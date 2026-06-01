@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.14.0"
+local SCRIPT_VERSION = "v1.14.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7475,8 +7475,15 @@ F.games.bms = (function()
     -- never accidentally step onto a covered/unknown tile en route.
     local autoActive = false
     local autoThread
-    local autoStepDelay = 0.4  -- per-tile MoveTo cap
-    local autoGuess     = false  -- when stuck, walk to a 50/50 tile
+    local autoStepDelay = 0.4   -- per-tile MoveTo cap
+    local autoGuess     = false -- when stuck, walk to a 50/50 tile
+    -- target-switch debounce: once the auto-play picks a tile to walk
+    -- to, don't switch to a different target for this many seconds even
+    -- if a closer safe appears. Prevents jittery target-flipping
+    -- between candidate safes when deductions reshuffle mid-walk.
+    local autoTargetDebounce = 0.2
+    local _lastWalkTarget    = nil
+    local _lastWalkTargetAt  = 0
 
     local function findCurrentTile(allParts, originPos)
         -- Pick the tile closest to player HRP on XZ.
@@ -7594,55 +7601,84 @@ F.games.bms = (function()
                 -- (b) walk to nearest REACHABLE deduced-safe tile
                 local startTile = findCurrentTile(all, origin)
                 if startTile then
-                    -- Collect ALL deduced-safe covered tiles across the
-                    -- entire map (no range filter on walking). Flag range
-                    -- still gates the flagging step above; walking can
-                    -- traverse the whole board to reach a far-away safe.
-                    -- Sorted by distance so we try nearest reachable first.
-                    local candidates = {}
-                    for s in pairs(safes) do
-                        if state[s] == "covered" then
-                            local dx = s.Position.X - origin.X
-                            local dz = s.Position.Z - origin.Z
-                            table.insert(candidates, { tile = s, d2 = dx*dx + dz*dz })
+                    -- Pick the tile to walk to. If we just chose a target
+                    -- recently (within autoTargetDebounce) AND it's still
+                    -- a valid covered deduced-safe AND still reachable,
+                    -- STICK with it - prevents target jitter when new
+                    -- deductions shuffle the candidate list mid-walk.
+                    local nowTick = tick()
+                    local pick    = nil
+                    if _lastWalkTarget and _lastWalkTarget.Parent
+                       and (nowTick - _lastWalkTargetAt) < autoTargetDebounce
+                       and state[_lastWalkTarget] == "covered"
+                       and safes[_lastWalkTarget]
+                       and not mines[_lastWalkTarget] then
+                        local p = bfsPath(startTile, _lastWalkTarget, state, mines)
+                        if p and #p > 0 then pick = _lastWalkTarget end
+                    end
+                    -- No locked target (or it became invalid) - pick fresh
+                    -- from the full board, sorted by distance.
+                    if not pick then
+                        local candidates = {}
+                        for s in pairs(safes) do
+                            if state[s] == "covered" then
+                                local dx = s.Position.X - origin.X
+                                local dz = s.Position.Z - origin.Z
+                                table.insert(candidates, { tile = s, d2 = dx*dx + dz*dz })
+                            end
+                        end
+                        table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
+                        for _, c in ipairs(candidates) do
+                            if not autoActive then break end
+                            local p = bfsPath(startTile, c.tile, state, mines)
+                            if p and #p > 0 then
+                                pick = c.tile
+                                _lastWalkTarget   = pick
+                                _lastWalkTargetAt = nowTick
+                                break
+                            end
                         end
                     end
-                    table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
                     local walked = false
-                    for _, c in ipairs(candidates) do
-                        if not autoActive then break end
-                        local path = bfsPath(startTile, c.tile, state, mines)
+                    if pick then
+                        local path = bfsPath(startTile, pick, state, mines)
                         if path and #path > 0 then
-                            local goalTile = c.tile
-                            local lastIdx  = #path
+                            local lastIdx = #path
                             for stepIdx, step in ipairs(path) do
                                 if not autoActive then break end
-                                -- Per-step safety re-check. State may have
-                                -- changed since we computed the path (new
-                                -- reveals reclassifying tiles). For intermediate
-                                -- steps require revealed + not deduced mine.
-                                -- For the FINAL step (the deduced-safe goal),
-                                -- the tile is still covered so just verify it's
-                                -- not now classified as a mine.
                                 local s = tileState(step)
                                 if stepIdx < lastIdx then
                                     if s ~= "revealed" or mines[step] then break end
                                 else
-                                    -- final step onto the safe tile
                                     if mines[step] then break end
                                 end
                                 walkTo(step)
                             end
                             walked = true
-                            break
                         end
                     end
-                    -- GUESS FALLBACK: nothing definitively safe is
-                    -- reachable. If guess mode is on, walk to the tile
-                    -- with the lowest mine probability (50/50 or
-                    -- better). Only walks tiles in {0.4..0.55} so we
-                    -- never deliberately step onto a > coinflip mine.
-                    if not walked and autoGuess and startTile then
+                    -- GUESS FALLBACK: only fires when NOTHING ELSE is
+                    -- solveable. That means BOTH:
+                    --   (a) no reachable deduced-safe to walk to
+                    --       (already true if we got here without walking)
+                    --   (b) no unflagged deduced mine anywhere on the
+                    --       board (we'd still have flag work otherwise -
+                    --       user might move closer to it later)
+                    --   (c) no DEDUCED SAFE anywhere on the board that
+                    --       might become reachable after more reveals
+                    -- If all three are true, the deduction has reached
+                    -- a stuck point and a guess is genuinely the only
+                    -- way to make progress.
+                    local _hasUnflaggedMine = false
+                    for t in pairs(mines) do
+                        if state[t] ~= "flagged" then _hasUnflaggedMine = true; break end
+                    end
+                    local _hasUncoveredSafe = false
+                    for t in pairs(safes) do
+                        if state[t] == "covered" then _hasUncoveredSafe = true; break end
+                    end
+                    local stuck = (not _hasUnflaggedMine) and (not _hasUncoveredSafe)
+                    if not walked and autoGuess and startTile and stuck then
                         local guesses = {}
                         for tile, p in pairs(probs) do
                             if state[tile] == "covered" and p <= 0.55 then
@@ -7711,8 +7747,9 @@ F.games.bms = (function()
             start    = function() legitFlagStop(); autoPlayStart() end,
             stop     = autoPlayStop,
             isActive = function() return autoActive end,
-            setStepDelay = function(n) autoStepDelay = math.clamp(tonumber(n) or 0.4, 0.05, 3) end,
-            setGuess     = function(v) autoGuess = v == true end,
+            setStepDelay      = function(n) autoStepDelay = math.clamp(tonumber(n) or 0.4, 0.05, 3) end,
+            setGuess          = function(v) autoGuess = v == true end,
+            setTargetDebounce = function(n) autoTargetDebounce = math.clamp(tonumber(n) or 0.2, 0, 5) end,
         },
         hasToken      = function() return getgenv()._BMS_TOKEN ~= nil end,
         setToken      = setManualToken,
