@@ -2351,6 +2351,15 @@ do
             Default = 0.2, Min = 0, Max = 5, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.autoPlay.setTargetDebounce(v) end,
         })
+        BMSAuto:AddToggle("BMSAutoPathPreview", { Text = "Show path preview (glowing line)",
+            Default = false,
+            Callback = function(v) F.games.bms.autoPlay.setPathPreview(v) end,
+        })
+        BMSAuto:AddLabel("Path color"):AddColorPicker("BMSAutoPathColor", {
+            Default = F.games.bms.autoPlay.getPathPreviewColor(),
+            Title = "Path preview color",
+            Callback = F.games.bms.autoPlay.setPathPreviewColor,
+        })
         print("[BMS] (7/8) walk step + guess + debounce widgets ok")
         BMSAuto:AddLabel(
             "Auto play uses the Flag delay + Flag range\n"

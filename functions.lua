@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.16.2"
+local SCRIPT_VERSION = "v1.17.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7617,6 +7617,60 @@ F.games.bms = (function()
     local autoThread
     local autoStepDelay = 0.4   -- per-tile MoveTo cap
     local autoGuess     = false -- when stuck, walk to a 50/50 tile
+
+    -- ---- path preview ----
+    -- Glowing neon segments between consecutive tiles on the path the
+    -- bot is about to walk. Parts are pooled (reused across ticks) so
+    -- we don't churn Instance.new every iteration.
+    local pathPreview      = false
+    local pathPreviewColor = Color3.fromRGB(0, 200, 255)
+    local pathSegments     = {}
+    local function ensurePathSeg(i)
+        local p = pathSegments[i]
+        if p and p.Parent then return p end
+        p = Instance.new("Part")
+        p.Anchored     = true
+        p.CanCollide   = false
+        p.CanTouch     = false
+        p.CanQuery     = false
+        p.CastShadow   = false
+        p.Material     = Enum.Material.Neon
+        p.Color        = pathPreviewColor
+        p.Size         = Vector3.new(0.25, 0.25, 0.25)
+        p.Name         = "_BMS_path_seg"
+        p.Parent       = workspace
+        pathSegments[i] = p
+        return p
+    end
+    local function hidePathSegments(startIdx)
+        for i = startIdx or 1, #pathSegments do
+            local p = pathSegments[i]
+            if p then p.Transparency = 1 end
+        end
+    end
+    local function clearPathPreview()
+        for _, p in ipairs(pathSegments) do
+            if p and p.Parent then pcall(function() p:Destroy() end) end
+        end
+        pathSegments = {}
+    end
+    local function drawPathPreview(tiles)
+        if not pathPreview or not tiles or #tiles < 1 then
+            hidePathSegments(); return
+        end
+        for i = 1, #tiles - 1 do
+            local a = tiles[i].Position
+            local b = tiles[i + 1].Position
+            local mid  = (a + b) * 0.5
+            local len  = (b - a).Magnitude
+            local seg  = ensurePathSeg(i)
+            seg.Color        = pathPreviewColor
+            seg.Size         = Vector3.new(0.25, 0.25, len)
+            seg.CFrame       = CFrame.new(mid, b)
+            seg.Transparency = 0
+        end
+        hidePathSegments(#tiles)  -- hide trailing pool entries
+    end
     -- target-switch debounce: once the auto-play picks a tile to walk
     -- to, don't switch to a different target for this many seconds even
     -- if a closer safe appears. Prevents jittery target-flipping
@@ -7804,6 +7858,9 @@ F.games.bms = (function()
                     if pick then
                         local path = bfsPath(startTile, pick, state, mines)
                         if path and #path > 0 then
+                            -- prepend the current tile so the preview line
+                            -- starts at the player's feet, not at the next step
+                            drawPathPreview({ startTile, table.unpack(path) })
                             local lastIdx = #path
                             for stepIdx, step in ipairs(path) do
                                 if not autoActive then break end
@@ -7818,6 +7875,7 @@ F.games.bms = (function()
                             walked = true
                         end
                     end
+                    if not walked then hidePathSegments() end
                     -- GUESS FALLBACK: we got here without walking a safe
                     -- AND the flag step above didn't fire (it would have
                     -- `continue`d the loop). So nothing useful happened
@@ -7901,6 +7959,7 @@ F.games.bms = (function()
     local function autoPlayStop()
         autoActive = false
         if autoThread then pcall(task.cancel, autoThread); autoThread = nil end
+        clearPathPreview()
     end
 
     return {
@@ -7940,6 +7999,9 @@ F.games.bms = (function()
             setStepDelay      = function(n) autoStepDelay = math.clamp(tonumber(n) or 0.4, 0.05, 3) end,
             setGuess          = function(v) autoGuess = v == true end,
             setTargetDebounce = function(n) autoTargetDebounce = math.clamp(tonumber(n) or 0.2, 0, 5) end,
+            setPathPreview    = function(v) pathPreview = v == true; if not v then hidePathSegments() end end,
+            setPathPreviewColor = function(c) if typeof(c) == "Color3" then pathPreviewColor = c end end,
+            getPathPreviewColor = function() return pathPreviewColor end,
         },
         hasToken      = function() return getgenv()._BMS_TOKEN ~= nil end,
         setToken      = setManualToken,
