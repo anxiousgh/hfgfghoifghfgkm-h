@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.18.1"
+local SCRIPT_VERSION = "v1.18.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7717,9 +7717,16 @@ F.games.bms = (function()
         if startTile == goalTile then return {} end
 
         local function isWalkable(t)
-            if knownMines[t] or knownFalse[t] then return false end
             local s = state[t]
-            return s == "revealed" or s == "flagged"
+            -- Flagged tiles are ALWAYS walkable. In Blockerman's
+            -- Minesweeper the flag (any Model child of the tile)
+            -- physically protects you - walking on a flagged tile is
+            -- harmless whether the underlying tile is a mine or safe.
+            -- So we ignore knownMines/knownFalse for flagged tiles.
+            if s == "flagged" then return true end
+            -- Non-flagged: only revealed-and-not-deduced-mine is safe.
+            if s == "revealed" then return not knownMines[t] end
+            return false
         end
 
         -- diagonal-corner check: returns {cornerA, cornerB} (or {}) by
@@ -7941,8 +7948,14 @@ F.games.bms = (function()
                                 if not autoActive then break end
                                 local s = tileState(step)
                                 if stepIdx < lastIdx then
-                                    if (s ~= "revealed" and s ~= "flagged") or mines[step] or falseFlags[step] then break end
+                                    -- intermediate steps: flagged OR revealed (and not a deduced mine)
+                                    if s == "flagged" then
+                                        -- ok, flag protects
+                                    elseif s ~= "revealed" or mines[step] then
+                                        break
+                                    end
                                 else
+                                    -- final step (the deduced-safe goal). Should still be covered.
                                     if mines[step] then break end
                                 end
                                 walkTo(step)
@@ -7987,7 +8000,11 @@ F.games.bms = (function()
                                     if not autoActive then break end
                                     local s = tileState(step)
                                     if stepIdx < #path then
-                                        if (s ~= "revealed" and s ~= "flagged") or mines[step] or falseFlags[step] then break end
+                                        if s == "flagged" then
+                                            -- ok
+                                        elseif s ~= "revealed" or mines[step] then
+                                            break
+                                        end
                                     end
                                     walkTo(step)
                                 end
@@ -8015,7 +8032,11 @@ F.games.bms = (function()
                                         if not autoActive then break end
                                         local s = tileState(step)
                                         if stepIdx < #path then
-                                            if (s ~= "revealed" and s ~= "flagged") or mines[step] or falseFlags[step] then break end
+                                            if s == "flagged" then
+                                                -- ok
+                                            elseif s ~= "revealed" or mines[step] then
+                                                break
+                                            end
                                         end
                                         walkTo(step)
                                     end
