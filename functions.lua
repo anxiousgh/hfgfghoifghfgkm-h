@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.18.3"
+local SCRIPT_VERSION = "v1.19.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7760,11 +7760,25 @@ F.games.bms = (function()
                     -- corner-cut prevention: a diagonal move into nb is
                     -- only allowed if BOTH corner tiles are walkable.
                     -- Cardinal moves have 0 corner tiles -> always pass.
+                    -- Detect diagonal by position so board-edge cases (where
+                    -- one of the two corner tiles doesn't exist) aren't
+                    -- mistakenly allowed. The old `#corners == 2` check
+                    -- silently passed edge-of-board diagonals through with
+                    -- only 1 corner. That's how some 'unsafe' moves were
+                    -- happening - a missing corner could be an unknown.
                     local corners = diagonalCorners(cur, nb)
                     local canStep = true
-                    if #corners == 2 then
-                        -- diagonal: stricter corner check (revealed only)
-                        if not (isCornerSafe(corners[1]) and isCornerSafe(corners[2])) then
+                    local dxN = nb.Position.X - cur.Position.X
+                    local dzN = nb.Position.Z - cur.Position.Z
+                    local tsz = math.max(cur.Size.X, cur.Size.Z)
+                    local isDiagMove =
+                        (math.abs(dxN) > tsz * 0.5) and (math.abs(dzN) > tsz * 0.5)
+                    if isDiagMove then
+                        if #corners < 2 then
+                            -- diagonal at board edge - one or both corners
+                            -- don't exist as tiles. Refuse the move.
+                            canStep = false
+                        elseif not (isCornerSafe(corners[1]) and isCornerSafe(corners[2])) then
                             canStep = false
                         end
                     end
@@ -7815,11 +7829,18 @@ F.games.bms = (function()
         return true
     end
 
-    -- Switch Roblox's Computer camera movement mode to Follow while
-    -- auto-play is active. Follow makes the camera rotate to follow
-    -- the character's facing direction; the user can still freely
-    -- pan/tilt with the mouse. Restored on stop.
+    -- Camera setup while auto-play is active:
+    --   1. Switch Roblox's Computer movement mode to Follow so the
+    --      camera tracks the character's facing direction.
+    --   2. Every 1 second, briefly flip CameraType to Scriptable and
+    --      write a CFrame with a slight downward pitch (so the user
+    --      can see the board). Then flip back to Custom - the Roblox
+    --      CameraScript picks up the new orientation as its starting
+    --      state. The user can still mouse-look freely in between.
     local _camModeBefore = nil
+    local _camTiltThread = nil
+    local _camTiltAngle  = math.rad(-25)  -- 25 degrees down
+
     local function setFollowCam(enable)
         local ok, ugs = pcall(function()
             return UserSettings():GetService("UserGameSettings")
@@ -7832,7 +7853,28 @@ F.games.bms = (function()
             pcall(function()
                 ugs.ComputerCameraMovementMode = Enum.ComputerCameraMovementMode.Follow
             end)
+            if _camTiltThread then pcall(task.cancel, _camTiltThread) end
+            _camTiltThread = task.spawn(function()
+                while autoActive do
+                    local cam = workspace.CurrentCamera
+                    if cam then
+                        local pos   = cam.CFrame.Position
+                        local lookV = cam.CFrame.LookVector
+                        local yaw   = math.atan2(-lookV.X, -lookV.Z)
+                        pcall(function()
+                            local prev = cam.CameraType
+                            cam.CameraType = Enum.CameraType.Scriptable
+                            cam.CFrame = CFrame.new(pos)
+                                * CFrame.fromOrientation(_camTiltAngle, yaw, 0)
+                            task.wait()
+                            cam.CameraType = prev
+                        end)
+                    end
+                    task.wait(1)
+                end
+            end)
         else
+            if _camTiltThread then pcall(task.cancel, _camTiltThread); _camTiltThread = nil end
             if _camModeBefore ~= nil then
                 pcall(function() ugs.ComputerCameraMovementMode = _camModeBefore end)
                 _camModeBefore = nil
