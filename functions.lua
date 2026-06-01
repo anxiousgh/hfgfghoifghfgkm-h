@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.7"
+local SCRIPT_VERSION = "v1.20.8"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7622,6 +7622,74 @@ F.games.bms = (function()
     local autoStepDelay = 0.4   -- per-tile MoveTo cap
     local autoGuess     = false -- when stuck, walk to a 50/50 tile
 
+    -- ---- PathfindingService blacklist ----
+    -- Each tile gets a PathfindingModifier child. Its Label is one of:
+    --   "BMS_Safe"  - revealed (non-mine), flagged (any), or deduced
+    --                 covered-safe destination
+    --   "BMS_Avoid" - covered+unknown, OR deduced mine
+    -- The path is computed with Costs.BMS_Avoid = math.huge, so the
+    -- navmesh REFUSES to route over any avoid tile. Better: the path
+    -- automatically stays AgentRadius (2 studs) away from any avoid
+    -- tile's boundary - that's a hard clearance guarantee, no more
+    -- 'pixel touched the covered tile' deaths.
+    local PathfindingService = game:GetService("PathfindingService")
+    local pfModifiers = {}  -- tile -> modifier instance (cached so we
+                            -- don't re-find or re-create per tick)
+    local pfLabels    = {}  -- tile -> last-applied label (skip
+                            -- redundant property writes)
+
+    local function ensurePfModifier(tile)
+        local m = pfModifiers[tile]
+        if m and m.Parent == tile then return m end
+        m = tile:FindFirstChild("_BMS_PFM")
+        if not m then
+            m = Instance.new("PathfindingModifier")
+            m.Name = "_BMS_PFM"
+            m.Parent = tile
+        end
+        pfModifiers[tile] = m
+        return m
+    end
+
+    local function updatePfModifiers(parts, state, knownMines, knownSafes)
+        for _, t in ipairs(parts) do
+            local s = state[t]
+            local label
+            if knownMines[t] then
+                label = "BMS_Avoid"
+            elseif s == "covered" then
+                -- covered-deduced-safe IS the bot's destination, so
+                -- those need to be reachable. Other covered = avoid.
+                label = knownSafes[t] and "BMS_Safe" or "BMS_Avoid"
+            else
+                -- revealed or flagged - safe to traverse
+                label = "BMS_Safe"
+            end
+            if pfLabels[t] ~= label then
+                local m = ensurePfModifier(t)
+                m.Label = label
+                pfLabels[t] = label
+            end
+        end
+    end
+
+    local function computePfPath(startPos, goalPos)
+        local path = PathfindingService:CreatePath({
+            AgentRadius     = 2,
+            AgentHeight     = 5,
+            AgentCanJump    = false,
+            WaypointSpacing = 2,
+            Costs = {
+                BMS_Avoid = math.huge,
+                BMS_Safe  = 1,
+            },
+        })
+        local ok = pcall(function() path:ComputeAsync(startPos, goalPos) end)
+        if not ok then return nil end
+        if path.Status ~= Enum.PathStatus.Success then return nil end
+        return path:GetWaypoints()
+    end
+
     -- ---- path preview ----
     -- Glowing neon segments between consecutive tiles on the path the
     -- bot is about to walk. Parts are pooled (reused across ticks) so
@@ -7658,6 +7726,27 @@ F.games.bms = (function()
         end
         pathSegments = {}
     end
+    -- Draw segments between raw world positions (for PathfindingService
+    -- waypoints, which are Vector3s, not tile parts).
+    local function drawPathPreviewPositions(positions)
+        if not pathPreview or not positions or #positions < 2 then
+            hidePathSegments(); return
+        end
+        for i = 1, #positions - 1 do
+            local a, b = positions[i], positions[i + 1]
+            local mid  = (a + b) * 0.5
+            local diff = b - a
+            local len  = diff.Magnitude
+            if len < 0.05 then continue end
+            local seg = ensurePathSeg(i)
+            seg.Color        = pathPreviewColor
+            seg.Size         = Vector3.new(0.4, 0.4, len)
+            seg.CFrame       = CFrame.new(mid, b)
+            seg.Transparency = 0
+        end
+        hidePathSegments(#positions)
+    end
+
     local function drawPathPreview(tiles)
         if not pathPreview or not tiles or #tiles < 2 then
             hidePathSegments(); return
@@ -7779,6 +7868,42 @@ F.games.bms = (function()
             if (dx*dx + dz*dz) < 0.36 then return true end
             RunService.Heartbeat:Wait()
             waited = waited + (1/60)
+        end
+        return true
+    end
+
+    -- Walk a sequence of PathfindingService waypoints. The path was
+    -- computed with BMS_Avoid = math.huge, so every waypoint is over
+    -- safe ground AND at least AgentRadius (2 studs) clear of any
+    -- avoid-tile boundary - no body brushing possible.
+    local function walkPfWaypoints(waypoints)
+        if not waypoints or #waypoints < 2 then return false end
+        for i = 2, #waypoints do
+            if not autoActive then return false end
+            local wp = waypoints[i]
+            local c = lplr.Character
+            local hum = c and c:FindFirstChildOfClass("Humanoid")
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if not hum or not hrp then return false end
+            pcall(function() hum:MoveTo(wp.Position) end)
+            local waited = 0
+            while waited < autoStepDelay and autoActive do
+                local dx = hrp.Position.X - wp.Position.X
+                local dz = hrp.Position.Z - wp.Position.Z
+                if (dx*dx + dz*dz) < 1.0 then break end
+                RunService.Heartbeat:Wait()
+                waited = waited + (1/60)
+            end
+        end
+        -- Brake at the end (same rationale as the cardinal-BFS walk):
+        -- kill leftover momentum so the body doesn't slide past the
+        -- final waypoint into a neighbouring tile.
+        local c   = lplr.Character
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if hum and hrp then
+            pcall(function() hum:Move(Vector3.new(0, 0, 0), false) end)
+            pcall(function() hum:MoveTo(hrp.Position) end)
         end
         return true
     end
@@ -7970,40 +8095,59 @@ F.games.bms = (function()
                     end
                     local walked = false
                     if pick then
-                        local path = bfsPath(startTile, pick, state, mines, falseFlags)
-                        if path and #path > 0 then
-                            drawPathPreview({ startTile, table.unpack(path) })
-                            local lastIdx = #path
-                            for stepIdx, step in ipairs(path) do
-                                if not autoActive then break end
-                                local s = tileState(step)
-                                if stepIdx < lastIdx then
-                                    if s == "flagged" then
-                                        -- ok, flag protects
-                                    elseif s ~= "revealed" or mines[step] then
-                                        break
-                                    end
-                                else
-                                    if mines[step] then break end
-                                end
-                                walkTo(step)
-                                -- Brake at the final tile so leftover
-                                -- momentum doesn't carry the character body
-                                -- past the goal center into a neighbouring
-                                -- (possibly covered) tile - the user
-                                -- reported that 'even a pixel touching' an
-                                -- uncovered tile triggers a reveal.
-                                if stepIdx == lastIdx then
-                                    local c   = lplr.Character
-                                    local hum = c and c:FindFirstChildOfClass("Humanoid")
-                                    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-                                    if hum and hrp then
-                                        pcall(function() hum:Move(Vector3.new(0, 0, 0), false) end)
-                                        pcall(function() hum:MoveTo(hrp.Position) end)
-                                    end
-                                end
+                        -- Try PathfindingService first - it produces a
+                        -- physically-precise route with hard 2-stud
+                        -- clearance from every blacklisted (covered/
+                        -- mine) tile.
+                        updatePfModifiers(all, state, mines, safes)
+                        local c   = lplr.Character
+                        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                        local startPos = hrp and hrp.Position or origin
+                        local goalPos  = pick.Position
+                            + Vector3.new(0, pick.Size.Y * 0.5 + 3, 0)
+                        local waypoints = computePfPath(startPos, goalPos)
+                        if waypoints and #waypoints >= 2 then
+                            -- preview the waypoints
+                            local poss = {}
+                            for _, wp in ipairs(waypoints) do
+                                table.insert(poss, wp.Position + Vector3.new(0, 0.6, 0))
                             end
+                            drawPathPreviewPositions(poss)
+                            walkPfWaypoints(waypoints)
                             walked = true
+                        else
+                            -- Fall back to cardinal-only BFS if PF fails
+                            -- (e.g. navmesh hiccup, start/goal in
+                            -- inaccessible spot).
+                            local path = bfsPath(startTile, pick, state, mines, falseFlags)
+                            if path and #path > 0 then
+                                drawPathPreview({ startTile, table.unpack(path) })
+                                local lastIdx = #path
+                                for stepIdx, step in ipairs(path) do
+                                    if not autoActive then break end
+                                    local s = tileState(step)
+                                    if stepIdx < lastIdx then
+                                        if s == "flagged" then
+                                            -- ok, flag protects
+                                        elseif s ~= "revealed" or mines[step] then
+                                            break
+                                        end
+                                    else
+                                        if mines[step] then break end
+                                    end
+                                    walkTo(step)
+                                    if stepIdx == lastIdx then
+                                        local c2   = lplr.Character
+                                        local hum2 = c2 and c2:FindFirstChildOfClass("Humanoid")
+                                        local hrp2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+                                        if hum2 and hrp2 then
+                                            pcall(function() hum2:Move(Vector3.new(0, 0, 0), false) end)
+                                            pcall(function() hum2:MoveTo(hrp2.Position) end)
+                                        end
+                                    end
+                                end
+                                walked = true
+                            end
                         end
                     end
                     if not walked then hidePathSegments() end
