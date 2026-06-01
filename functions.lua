@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.15.0"
+local SCRIPT_VERSION = "v1.15.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6774,36 +6774,73 @@ end)()
 -- ============================================================
 F.games.bmsBullets = (function()
     local active = false
-    local conn
+    local conn, charConn, pollThread
+    local killCount = 0
 
     local function destroyIfBullet(d)
-        if not active then return end
+        if not active or not d then return end
         if d.Name == "Bullet-Part" then
             pcall(function() d:Destroy() end)
+            killCount = killCount + 1
         end
     end
 
     local function sweepWorkspace()
         for _, d in ipairs(workspace:GetDescendants()) do
+            if not active then return end
             if d.Name == "Bullet-Part" then
                 pcall(function() d:Destroy() end)
+                killCount = killCount + 1
             end
         end
+    end
+
+    -- DescendantAdded sometimes silently drops on respawn / round
+    -- transitions on Potassium. The poll loop is the backup that
+    -- guarantees bullets get destroyed even if the event listener
+    -- never fires.
+    local function startPoll()
+        if pollThread then pcall(task.cancel, pollThread) end
+        pollThread = task.spawn(function()
+            while active do
+                sweepWorkspace()
+                task.wait(0.05)
+            end
+        end)
+    end
+
+    -- Re-attach the event listener on every character respawn since
+    -- some games re-parent workspace contents after the character
+    -- streams in.
+    local function attachListener()
+        if conn then conn:Disconnect() end
+        conn = workspace.DescendantAdded:Connect(destroyIfBullet)
     end
 
     return {
         start = function()
             if active then return end
             active = true
-            if conn then conn:Disconnect() end
-            conn = workspace.DescendantAdded:Connect(destroyIfBullet)
+            killCount = 0
+            attachListener()
+            if charConn then charConn:Disconnect() end
+            charConn = game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function()
+                task.wait(0.2)
+                if active then attachListener(); sweepWorkspace() end
+            end)
+            startPoll()
             sweepWorkspace()
+            print("[BMS bullets] enabled - polling every 50ms + DescendantAdded listener")
         end,
         stop = function()
             active = false
-            if conn then conn:Disconnect(); conn = nil end
+            if conn       then conn:Disconnect();     conn       = nil end
+            if charConn   then charConn:Disconnect(); charConn   = nil end
+            if pollThread then pcall(task.cancel, pollThread); pollThread = nil end
+            print(("[BMS bullets] disabled - %d bullets destroyed"):format(killCount))
         end,
         isActive = function() return active end,
+        getKills = function() return killCount end,
     }
 end)()
 
