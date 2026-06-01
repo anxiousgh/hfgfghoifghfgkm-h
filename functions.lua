@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.17.0"
+local SCRIPT_VERSION = "v1.17.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7655,17 +7655,26 @@ F.games.bms = (function()
         pathSegments = {}
     end
     local function drawPathPreview(tiles)
-        if not pathPreview or not tiles or #tiles < 1 then
+        if not pathPreview or not tiles or #tiles < 2 then
             hidePathSegments(); return
         end
         for i = 1, #tiles - 1 do
-            local a = tiles[i].Position
-            local b = tiles[i + 1].Position
+            local ta, tb = tiles[i], tiles[i + 1]
+            if not ta or not tb or not ta.Parent or not tb.Parent then break end
+            -- Lift the line ABOVE the tile top face. Without this the
+            -- segment center sits inside the tile and the neon part is
+            -- occluded by the floor mesh - which is exactly the
+            -- 'path not visible' symptom.
+            local lift = Vector3.new(0, ta.Size.Y * 0.5 + 0.6, 0)
+            local a    = ta.Position + lift
+            local b    = tb.Position + lift
             local mid  = (a + b) * 0.5
-            local len  = (b - a).Magnitude
+            local diff = b - a
+            local len  = diff.Magnitude
+            if len < 0.05 then continue end
             local seg  = ensurePathSeg(i)
             seg.Color        = pathPreviewColor
-            seg.Size         = Vector3.new(0.25, 0.25, len)
+            seg.Size         = Vector3.new(0.4, 0.4, len)
             seg.CFrame       = CFrame.new(mid, b)
             seg.Transparency = 0
         end
@@ -7907,6 +7916,7 @@ F.games.bms = (function()
                                 -- onto a mine the flag still happened)
                                 pcall(function() remote:FireServer(flagTile, token, true) end)
                                 lastFlagAt = tick()
+                                drawPathPreview({ startTile, table.unpack(path) })
                                 for stepIdx, step in ipairs(path) do
                                     if not autoActive then break end
                                     local s = tileState(step)
@@ -7934,6 +7944,7 @@ F.games.bms = (function()
                                 if not autoActive then break end
                                 local path = bfsPath(startTile, g.tile, state, mines)
                                 if path and #path > 0 then
+                                    drawPathPreview({ startTile, table.unpack(path) })
                                     for stepIdx, step in ipairs(path) do
                                         if not autoActive then break end
                                         local s = tileState(step)
