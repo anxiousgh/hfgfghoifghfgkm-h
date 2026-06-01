@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.19.2"
+local SCRIPT_VERSION = "v1.19.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7843,7 +7843,7 @@ F.games.bms = (function()
     --      state. The user can still mouse-look freely in between.
     local _camModeBefore = nil
     local _camTiltThread = nil
-    local _camTiltAngle  = math.rad(-45)  -- 45 degrees down (steeper top-down view)
+    local _camTiltAngle  = math.rad(-60)  -- 60 degrees down (near top-down)
 
     local function setFollowCam(enable)
         local ok, ugs = pcall(function()
