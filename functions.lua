@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.4"
+local SCRIPT_VERSION = "v1.20.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7658,10 +7658,21 @@ F.games.bms = (function()
         end
         pathSegments = {}
     end
+    -- Skip the rebuild when the tile list is byte-identical to last
+    -- call. Saves a few hundred Vector3/CFrame ops per autoplay tick
+    -- while standing still or walking the same path - the visible
+    -- output doesn't change, so the work is wasted.
+    local _lastPathKey = nil
     local function drawPathPreview(tiles)
         if not pathPreview or not tiles or #tiles < 2 then
+            _lastPathKey = nil
             hidePathSegments(); return
         end
+        -- cheap hash: concatenate object addresses via tostring
+        local key = #tiles .. "|"
+        for i = 1, #tiles do key = key .. tostring(tiles[i]) .. "," end
+        if key == _lastPathKey then return end
+        _lastPathKey = key
         for i = 1, #tiles - 1 do
             local ta, tb = tiles[i], tiles[i + 1]
             if not ta or not tb or not ta.Parent or not tb.Parent then break end
@@ -7859,26 +7870,158 @@ F.games.bms = (function()
         return nil
     end
 
-    -- Thin alias kept for the autoplay call sites. (Earlier two-tier
-    -- 'avoid flagged' behavior is gone - flagged is walkable, see the
-    -- Dijkstra comment above.)
+    -- Thin alias kept for guess-mode call sites that probe single tiles.
     local function findPath(startTile, goalTile, state, knownMines, knownFalse, knownSafes)
         return bfsPath(startTile, goalTile, state, knownMines, knownFalse, knownSafes)
     end
 
+    -- One-shot all-reachable Dijkstra. Called ONCE per autoplay tick;
+    -- gives (dist, parent) tables covering every reachable tile from
+    -- startTile. The candidate iteration then becomes O(safes) lookups
+    -- instead of O(safes * Dijkstra) - that K-Dijkstra-per-tick was
+    -- the main per-tick lag source in mid/late game with many
+    -- candidate safes.
+    --
+    -- Exploration rule: only TRANSIT through walkable tiles
+    -- (flagged + revealed-safe). Covered-deduced-safe tiles are valid
+    -- LANDING spots (parent + dist gets recorded) but not transitable -
+    -- they're still covered until we step on them, so a path can end
+    -- there but cannot pass through.
+    local function pathfindAll(startTile, state, knownMines, knownFalse, knownSafes)
+        knownFalse = knownFalse or {}
+        knownSafes = knownSafes or {}
+
+        local function isCornerSafe(t)
+            local s = state[t]
+            if s == "flagged"  then return true end
+            if s == "revealed" then return not knownMines[t] end
+            return false
+        end
+        local function diagonalCorners(cur, nb)
+            local cardCur = cardinalNeighbors[cur]
+            local cardNb  = cardinalNeighbors[nb]
+            if not cardCur or not cardNb then return {} end
+            local set, out = {}, {}
+            for _, n in ipairs(cardNb) do if n ~= cur then set[n] = true end end
+            for _, n in ipairs(cardCur) do
+                if n ~= nb and set[n] then table.insert(out, n) end
+            end
+            return out
+        end
+        local scareCache = {}
+        local function scariness(t)
+            local cached = scareCache[t]
+            if cached then return cached end
+            local n = 0
+            for _, nb in ipairs(neighbors[t] or {}) do
+                local s = state[nb]
+                if s == "covered" then
+                    if not knownSafes[nb] and not knownMines[nb] then
+                        n = n + 1
+                    end
+                elseif knownMines[nb] then
+                    n = n + 1
+                end
+            end
+            scareCache[t] = n
+            return n
+        end
+
+        local INF      = math.huge
+        local dist     = { [startTile] = 0 }
+        local parent   = {}
+        local frontier = { [startTile] = true }
+
+        while true do
+            local cur, curD
+            for t in pairs(frontier) do
+                local d = dist[t] or INF
+                if not curD or d < curD then cur, curD = t, d end
+            end
+            if not cur then break end
+            frontier[cur] = nil
+
+            for _, nb in ipairs(neighbors[cur] or {}) do
+                local dxN = nb.Position.X - cur.Position.X
+                local dzN = nb.Position.Z - cur.Position.Z
+                local tsz = math.max(cur.Size.X, cur.Size.Z)
+                local isDiagMove =
+                    (math.abs(dxN) > tsz * 0.5) and (math.abs(dzN) > tsz * 0.5)
+                local canStep = true
+                if isDiagMove then
+                    local corners = diagonalCorners(cur, nb)
+                    if #corners < 2 then
+                        canStep = false
+                    elseif not (isCornerSafe(corners[1]) and isCornerSafe(corners[2])) then
+                        canStep = false
+                    end
+                end
+                if canStep then
+                    local s = state[nb]
+                    local transit  = (s == "flagged")
+                                  or (s == "revealed" and not knownMines[nb])
+                    local landable = transit or (s == "covered" and knownSafes[nb])
+                    if landable then
+                        local stepCost
+                        if s == "covered" then
+                            stepCost = 1  -- destination, don't price exposure
+                        else
+                            stepCost = 1 + scariness(nb)
+                        end
+                        local newD = curD + stepCost
+                        if newD < (dist[nb] or INF) then
+                            dist[nb]   = newD
+                            parent[nb] = cur
+                            if transit then frontier[nb] = true end
+                        end
+                    end
+                end
+            end
+        end
+        return dist, parent
+    end
+
+    local function buildPath(parent, startTile, goalTile)
+        if not parent[goalTile] then return nil end
+        local path = {}
+        local x = goalTile
+        while x and x ~= startTile do
+            table.insert(path, 1, x)
+            x = parent[x]
+        end
+        return path
+    end
+
     -- Pure MoveTo walk. No CFrame snap.
-    local function walkTo(tile)
+    --
+    -- 'isLast' tells us not to exit early on the destination tile -
+    -- we actually need to STAND on it to reveal it. For intermediate
+    -- steps the reach threshold is much wider (~half a tile width)
+    -- so we hand off to the next MoveTo while the character is still
+    -- at full walking speed, instead of after it has decelerated to
+    -- a near-stop at the tile center. This is the main chop fix:
+    -- the old 0.6-stud threshold made the character momentarily halt
+    -- at every tile boundary.
+    local function walkTo(tile, isLast)
         local c = lplr.Character
         local hum = c and c:FindFirstChildOfClass("Humanoid")
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
         local goalPos = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
         pcall(function() hum:MoveTo(goalPos) end)
+        local reachR
+        if isLast then
+            reachR = 0.6  -- last tile: stand on it precisely
+        else
+            -- intermediate: hand off to next MoveTo while still in motion
+            reachR = math.max(1.5, tile.Size.X * 0.45)
+        end
+        local reachR2 = reachR * reachR
         local waited = 0
         while waited < autoStepDelay and autoActive do
             local dx = hrp.Position.X - goalPos.X
             local dz = hrp.Position.Z - goalPos.Z
-            if (dx*dx + dz*dz) < 0.36 then return true end
+            if (dx*dx + dz*dz) < reachR2 then return true end
             RunService.Heartbeat:Wait()
             waited = waited + (1/60)
         end
@@ -8032,6 +8175,12 @@ F.games.bms = (function()
                 -- (b) walk to nearest REACHABLE deduced-safe tile
                 local startTile = findCurrentTile(all, origin)
                 if startTile then
+                    -- ONE Dijkstra from startTile for the whole tick.
+                    -- Pickng a target + building its path are now table
+                    -- lookups on the precomputed (dist, parent) maps.
+                    local pfDist, pfParent =
+                        pathfindAll(startTile, state, mines, falseFlags, safes)
+
                     -- Pick the tile to walk to. If we just chose a target
                     -- recently (within autoTargetDebounce) AND it's still
                     -- a valid covered deduced-safe AND still reachable,
@@ -8043,36 +8192,34 @@ F.games.bms = (function()
                        and (nowTick - _lastWalkTargetAt) < autoTargetDebounce
                        and state[_lastWalkTarget] == "covered"
                        and safes[_lastWalkTarget]
-                       and not mines[_lastWalkTarget] then
-                        local p = findPath(startTile, _lastWalkTarget, state, mines, falseFlags, safes)
-                        if p and #p > 0 then pick = _lastWalkTarget end
+                       and not mines[_lastWalkTarget]
+                       and pfDist[_lastWalkTarget] then
+                        pick = _lastWalkTarget
                     end
-                    -- No locked target (or it became invalid) - pick fresh
-                    -- from the full board, sorted by distance.
+                    -- No locked target (or it became invalid) - pick the
+                    -- LOWEST-cost reachable covered-deduced-safe. The
+                    -- Dijkstra cost is `1 + scariness` per transit tile,
+                    -- so lowest cost == fewest steps biased toward safe
+                    -- interior - exactly what we want for a target.
                     if not pick then
-                        local candidates = {}
+                        local bestD = math.huge
                         for s in pairs(safes) do
                             if state[s] == "covered" then
-                                local dx = s.Position.X - origin.X
-                                local dz = s.Position.Z - origin.Z
-                                table.insert(candidates, { tile = s, d2 = dx*dx + dz*dz })
+                                local d = pfDist[s]
+                                if d and d < bestD then
+                                    bestD = d
+                                    pick  = s
+                                end
                             end
                         end
-                        table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
-                        for _, c in ipairs(candidates) do
-                            if not autoActive then break end
-                            local p = findPath(startTile, c.tile, state, mines, falseFlags, safes)
-                            if p and #p > 0 then
-                                pick = c.tile
-                                _lastWalkTarget   = pick
-                                _lastWalkTargetAt = nowTick
-                                break
-                            end
+                        if pick then
+                            _lastWalkTarget   = pick
+                            _lastWalkTargetAt = nowTick
                         end
                     end
                     local walked = false
                     if pick then
-                        local path = findPath(startTile, pick, state, mines, falseFlags, safes)
+                        local path = buildPath(pfParent, startTile, pick)
                         if path and #path > 0 then
                             drawPathPreview({ startTile, table.unpack(path) })
                             local lastIdx = #path
@@ -8088,7 +8235,7 @@ F.games.bms = (function()
                                 else
                                     if mines[step] then break end
                                 end
-                                walkTo(step)
+                                walkTo(step, stepIdx == lastIdx)
                             end
                             walked = true
                         end
@@ -8134,7 +8281,7 @@ F.games.bms = (function()
                                             break
                                         end
                                     end
-                                    walkTo(step)
+                                    walkTo(step, stepIdx == #path)
                                 end
                                 walked = true
                                 break
@@ -8166,7 +8313,7 @@ F.games.bms = (function()
                                                 break
                                             end
                                         end
-                                        walkTo(step)
+                                        walkTo(step, stepIdx == #path)
                                     end
                                     walked = true
                                     break
