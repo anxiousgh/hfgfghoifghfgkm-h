@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.8"
+local SCRIPT_VERSION = "v1.20.9"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7655,15 +7655,23 @@ F.games.bms = (function()
         for _, t in ipairs(parts) do
             local s = state[t]
             local label
-            if knownMines[t] then
+            -- FLAGGED tiles are ALWAYS BMS_Safe. The 'flag protects you'
+            -- rule applies regardless of whether deduce thinks the
+            -- underlying tile is a mine - that's the entire point of
+            -- the flag. Previous version checked knownMines[t] first,
+            -- which incorrectly blacklisted any flagged-and-deduced-
+            -- mine tile (i.e. the well-flagged mines), so the bot
+            -- couldn't walk over them. Fixed by checking state first.
+            if s == "flagged" then
+                label = "BMS_Safe"
+            elseif knownMines[t] then
                 label = "BMS_Avoid"
             elseif s == "covered" then
                 -- covered-deduced-safe IS the bot's destination, so
                 -- those need to be reachable. Other covered = avoid.
                 label = knownSafes[t] and "BMS_Safe" or "BMS_Avoid"
             else
-                -- revealed or flagged - safe to traverse
-                label = "BMS_Safe"
+                label = "BMS_Safe"  -- revealed non-mine
             end
             if pfLabels[t] ~= label then
                 local m = ensurePfModifier(t)
@@ -7675,10 +7683,21 @@ F.games.bms = (function()
 
     local function computePfPath(startPos, goalPos)
         local path = PathfindingService:CreatePath({
-            AgentRadius     = 2,
+            -- AgentRadius bumped 2 -> 3.5: hard clearance buffer
+            -- from every BMS_Avoid tile boundary. Default Roblox
+            -- character body is ~1-1.25 stud radius, so 3.5 leaves
+            -- ~2.25 studs of body-to-blacklist gap. No 'pixel
+            -- touching' the covered tile, even with character
+            -- animation overshoot or momentum drift.
+            AgentRadius     = 3.5,
             AgentHeight     = 5,
             AgentCanJump    = false,
-            WaypointSpacing = 2,
+            -- WaypointSpacing bumped down 2 -> 1: denser waypoints
+            -- so the straight-line MoveTo between consecutive
+            -- waypoints follows the navmesh route tightly. With
+            -- 2-stud spacing the straight line could drift off
+            -- the safe route on curves.
+            WaypointSpacing = 1,
             Costs = {
                 BMS_Avoid = math.huge,
                 BMS_Safe  = 1,
@@ -7873,11 +7892,22 @@ F.games.bms = (function()
     end
 
     -- Walk a sequence of PathfindingService waypoints. The path was
-    -- computed with BMS_Avoid = math.huge, so every waypoint is over
-    -- safe ground AND at least AgentRadius (2 studs) clear of any
+    -- computed with BMS_Avoid = math.huge AND AgentRadius=3.5, so
+    -- every waypoint is on safe ground AND ~3.5 studs clear of any
     -- avoid-tile boundary - no body brushing possible.
+    --
+    -- IMPORTANT: no brake at the end. We want the autoplay loop to
+    -- flow directly into the next target without the character ever
+    -- coming to a full stop. MoveTo's natural deceleration handles
+    -- positional precision; explicit Move(0) just inserts a beat of
+    -- idle time the user complained about.
+    --
+    -- Early exit: stop walking the remaining waypoints if we get
+    -- close enough to the FINAL waypoint already (within reach
+    -- threshold). This handles smoothing waypoints that overshoot.
     local function walkPfWaypoints(waypoints)
         if not waypoints or #waypoints < 2 then return false end
+        local finalWp = waypoints[#waypoints]
         for i = 2, #waypoints do
             if not autoActive then return false end
             local wp = waypoints[i]
@@ -7885,6 +7915,10 @@ F.games.bms = (function()
             local hum = c and c:FindFirstChildOfClass("Humanoid")
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             if not hum or not hrp then return false end
+            -- already at the goal area? skip remaining waypoints
+            local fdx = hrp.Position.X - finalWp.Position.X
+            local fdz = hrp.Position.Z - finalWp.Position.Z
+            if (fdx*fdx + fdz*fdz) < 1.0 then return true end
             pcall(function() hum:MoveTo(wp.Position) end)
             local waited = 0
             while waited < autoStepDelay and autoActive do
@@ -7894,16 +7928,6 @@ F.games.bms = (function()
                 RunService.Heartbeat:Wait()
                 waited = waited + (1/60)
             end
-        end
-        -- Brake at the end (same rationale as the cardinal-BFS walk):
-        -- kill leftover momentum so the body doesn't slide past the
-        -- final waypoint into a neighbouring tile.
-        local c   = lplr.Character
-        local hum = c and c:FindFirstChildOfClass("Humanoid")
-        local hrp = c and c:FindFirstChild("HumanoidRootPart")
-        if hum and hrp then
-            pcall(function() hum:Move(Vector3.new(0, 0, 0), false) end)
-            pcall(function() hum:MoveTo(hrp.Position) end)
         end
         return true
     end
@@ -8136,15 +8160,6 @@ F.games.bms = (function()
                                         if mines[step] then break end
                                     end
                                     walkTo(step)
-                                    if stepIdx == lastIdx then
-                                        local c2   = lplr.Character
-                                        local hum2 = c2 and c2:FindFirstChildOfClass("Humanoid")
-                                        local hrp2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-                                        if hum2 and hrp2 then
-                                            pcall(function() hum2:Move(Vector3.new(0, 0, 0), false) end)
-                                            pcall(function() hum2:MoveTo(hrp2.Position) end)
-                                        end
-                                    end
                                 end
                                 walked = true
                             end
