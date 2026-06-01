@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.6.1"
+local SCRIPT_VERSION = "v1.20.6.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7815,12 +7815,56 @@ F.games.bms = (function()
     end
 
     -- Pure MoveTo walk. No CFrame snap.
-    local function walkTo(tile)
+    -- "Wide corner" helper. At pivot tile T with path neighbours
+    -- `prev` (where we came from) and `nextT` (where we're going),
+    -- look at T's OTHER two cardinal neighbours (the ones the path
+    -- isn't using). For each that's "dangerous" (covered-unknown or
+    -- deduced mine), add a unit vector pointing AWAY from it. Scale
+    -- the total to ~35% of tile width so the walk-target sits in
+    -- the SAFE quadrant of the tile rather than its centre.
+    --
+    -- Net effect: at a 90 deg corner where the OUTSIDE of the turn
+    -- borders a covered tile, the character swings WIDE toward the
+    -- inside of the turn, putting extra distance between the body
+    -- and the uncovered tile during the pivot. Same idea works for
+    -- straight tiles where one perpendicular side is dangerous - it
+    -- shifts the walk laterally toward the safe side.
+    local function safeOffset(tile, prev, nextT, state, knownMines, knownSafes)
+        local card = cardinalNeighbors[tile]
+        if not card then return Vector3.new(0, 0, 0) end
+        local sx, sz = 0, 0
+        for _, nb in ipairs(card) do
+            if nb ~= prev and nb ~= nextT then
+                local s = state[nb]
+                local dangerous =
+                    (s == "covered" and not (knownSafes and knownSafes[nb]))
+                    or (knownMines and knownMines[nb])
+                if dangerous then
+                    local dx = nb.Position.X - tile.Position.X
+                    local dz = nb.Position.Z - tile.Position.Z
+                    local d  = math.sqrt(dx*dx + dz*dz)
+                    if d > 0 then
+                        sx = sx - dx / d
+                        sz = sz - dz / d
+                    end
+                end
+            end
+        end
+        local mag = math.sqrt(sx*sx + sz*sz)
+        if mag < 0.01 then return Vector3.new(0, 0, 0) end
+        local scale = (tile.Size.X * 0.35) / mag
+        return Vector3.new(sx * scale, 0, sz * scale)
+    end
+
+    local function walkTo(tile, offset)
         local c = lplr.Character
         local hum = c and c:FindFirstChildOfClass("Humanoid")
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
-        local goalPos = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
+        local ox, oz = 0, 0
+        if offset then ox, oz = offset.X, offset.Z end
+        local goalPos = tile.Position
+            + Vector3.new(ox, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, oz)
         pcall(function() hum:MoveTo(goalPos) end)
         local waited = 0
         while waited < autoStepDelay and autoActive do
@@ -8036,7 +8080,10 @@ F.games.bms = (function()
                                 else
                                     if mines[step] then break end
                                 end
-                                walkTo(step)
+                                local prevT = path[stepIdx - 1] or startTile
+                                local nextT = path[stepIdx + 1]
+                                local off = safeOffset(step, prevT, nextT, state, mines, safes)
+                                walkTo(step, off)
                             end
                             walked = true
                         end
@@ -8082,7 +8129,10 @@ F.games.bms = (function()
                                             break
                                         end
                                     end
-                                    walkTo(step)
+                                    local prevT = path[stepIdx - 1] or startTile
+                                    local nextT = path[stepIdx + 1]
+                                    local off = safeOffset(step, prevT, nextT, state, mines, safes)
+                                    walkTo(step, off)
                                 end
                                 walked = true
                                 break
@@ -8114,7 +8164,10 @@ F.games.bms = (function()
                                                 break
                                             end
                                         end
-                                        walkTo(step)
+                                        local prevT = path[stepIdx - 1] or startTile
+                                        local nextT = path[stepIdx + 1]
+                                        local off = safeOffset(step, prevT, nextT, state, mines, safes)
+                                        walkTo(step, off)
                                     end
                                     walked = true
                                     break
