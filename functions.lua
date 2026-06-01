@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.3"
+local SCRIPT_VERSION = "v1.20.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7716,37 +7716,38 @@ F.games.bms = (function()
     --
     -- The goal tile (final step) is always a covered deduced-safe, so
     -- the walkability filter only applies to intermediate steps.
-    -- strict=true forbids flagged tiles entirely (prefers all-revealed
-    -- paths). Used by the two-tier `findPath` wrapper below: try strict
-    -- first, fall back to non-strict (flagged-OK) only if no path exists.
-    -- This restores cautious behavior - the bot only walks through flags
-    -- when it has no other option.
-    local function bfsPath(startTile, goalTile, state, knownMines, knownFalse, strict)
+    --
+    -- Pathing is now Dijkstra, not BFS. Each intermediate tile has a
+    -- cost of 1 + scariness(tile), where scariness counts how many of
+    -- the tile's 8-neighbors are still 'unknown' (covered, not deduced
+    -- safe, not flagged-known-mine). Walking through a tile that's
+    -- surrounded by unknowns is more expensive than walking through
+    -- the cleared interior. Both flagged AND revealed-safe tiles are
+    -- equally walkable - a flag does NOT count as 'uncovered' or
+    -- 'bomb', it's just a marker, and the bot can step on/through it.
+    --
+    -- Net effect: when two paths reach the same goal, the shorter
+    -- AND safer (further from the unknown frontier) one wins.
+    local function bfsPath(startTile, goalTile, state, knownMines, knownFalse, knownSafes)
         knownFalse = knownFalse or {}
+        knownSafes = knownSafes or {}
         if startTile == goalTile then return {} end
 
-        -- Used for stepping ONTO a tile.
-        --   strict mode  -> only revealed-safe tiles count
-        --   normal mode  -> flagged is OK (flag protects you, even if
-        --                   the underlying tile is a mine)
+        -- Walking ONTO a tile. Flagged and revealed-safe both pass.
         local function isWalkable(t)
             local s = state[t]
-            if s == "flagged" then
-                if strict then return false end
-                return true
-            end
+            if s == "flagged"  then return true end
             if s == "revealed" then return not knownMines[t] end
             return false
         end
-        -- Used for diagonal CORNER tiles - stricter than isWalkable.
-        -- For a diagonal move A->D, the character physically grazes
-        -- the corner tiles between them. Even with the flag-protects
-        -- rule, brushing a flagged corner is less reliable than
-        -- straight-up walking on it - some flag visuals only cover
-        -- part of the tile face. So we require corners to be FULLY
-        -- REVEALED (not just flagged) to allow the diagonal.
+        -- Diagonal corner tiles. Same rule - flagged & revealed-safe
+        -- both qualify, because grazing a flag is no more dangerous
+        -- than grazing a revealed tile.
         local function isCornerSafe(t)
-            return state[t] == "revealed" and not knownMines[t]
+            local s = state[t]
+            if s == "flagged"  then return true end
+            if s == "revealed" then return not knownMines[t] end
+            return false
         end
 
         -- diagonal-corner check: returns {cornerA, cornerB} (or {}) by
@@ -7763,53 +7764,93 @@ F.games.bms = (function()
             return out
         end
 
-        local visited = { [startTile] = true }
-        local parent  = {}
-        local queue   = { startTile }
-        local head    = 1
-        while head <= #queue do
-            local cur = queue[head]; head = head + 1
-            for _, nb in ipairs(neighbors[cur] or {}) do
-                if not visited[nb] then
-                    -- corner-cut prevention: a diagonal move into nb is
-                    -- only allowed if BOTH corner tiles are walkable.
-                    -- Cardinal moves have 0 corner tiles -> always pass.
-                    -- Detect diagonal by position so board-edge cases (where
-                    -- one of the two corner tiles doesn't exist) aren't
-                    -- mistakenly allowed. The old `#corners == 2` check
-                    -- silently passed edge-of-board diagonals through with
-                    -- only 1 corner. That's how some 'unsafe' moves were
-                    -- happening - a missing corner could be an unknown.
-                    local corners = diagonalCorners(cur, nb)
-                    local canStep = true
-                    local dxN = nb.Position.X - cur.Position.X
-                    local dzN = nb.Position.Z - cur.Position.Z
-                    local tsz = math.max(cur.Size.X, cur.Size.Z)
-                    local isDiagMove =
-                        (math.abs(dxN) > tsz * 0.5) and (math.abs(dzN) > tsz * 0.5)
-                    if isDiagMove then
-                        if #corners < 2 then
-                            -- diagonal at board edge - one or both corners
-                            -- don't exist as tiles. Refuse the move.
-                            canStep = false
-                        elseif not (isCornerSafe(corners[1]) and isCornerSafe(corners[2])) then
-                            canStep = false
-                        end
+        -- Per-tile cost = 1 + how exposed the tile is to unknown space.
+        -- 'unknown' = covered + not deduced safe + not a known mine.
+        -- Adjacency to a known mine adds a fixed extra cost (we're
+        -- still safe stepping there, but it's nicer to stay clear).
+        -- Memoized for the duration of one path solve.
+        local scareCache = {}
+        local function scariness(t)
+            local c = scareCache[t]
+            if c then return c end
+            local n = 0
+            for _, nb in ipairs(neighbors[t] or {}) do
+                local s = state[nb]
+                if s == "covered" then
+                    if not knownSafes[nb] and not knownMines[nb] then
+                        n = n + 1  -- truly unknown - the scary kind
                     end
-                    if canStep then
-                        visited[nb] = true
-                        parent[nb] = cur
-                        if nb == goalTile then
-                            local path = {}
-                            local x = goalTile
-                            while x and x ~= startTile do
-                                table.insert(path, 1, x)
-                                x = parent[x]
-                            end
-                            return path
-                        end
-                        if isWalkable(nb) then
-                            table.insert(queue, nb)
+                elseif knownMines[nb] then
+                    n = n + 1  -- deduced mine adjacency
+                end
+            end
+            scareCache[t] = n
+            return n
+        end
+
+        -- Dijkstra with linear-scan frontier. For boards on the order
+        -- of a few hundred tiles, O(V*E) is trivially fast.
+        local INF      = math.huge
+        local dist     = { [startTile] = 0 }
+        local parent   = {}
+        local frontier = { [startTile] = true }
+
+        while true do
+            -- pick min-dist tile in frontier
+            local cur, curD
+            for t in pairs(frontier) do
+                local d = dist[t] or INF
+                if not curD or d < curD then cur, curD = t, d end
+            end
+            if not cur then break end
+            frontier[cur] = nil
+
+            if cur == goalTile then
+                local path = {}
+                local x = goalTile
+                while x and x ~= startTile do
+                    table.insert(path, 1, x)
+                    x = parent[x]
+                end
+                return path
+            end
+
+            for _, nb in ipairs(neighbors[cur] or {}) do
+                -- corner-cut prevention: a diagonal move into nb is
+                -- only allowed if BOTH corner tiles are walkable.
+                -- Cardinal moves have 0 corner tiles -> always pass.
+                -- Detect diagonal by position so board-edge cases
+                -- (where one of the two corner tiles doesn't exist as
+                -- a Part) aren't mistakenly allowed through.
+                local dxN = nb.Position.X - cur.Position.X
+                local dzN = nb.Position.Z - cur.Position.Z
+                local tsz = math.max(cur.Size.X, cur.Size.Z)
+                local isDiagMove =
+                    (math.abs(dxN) > tsz * 0.5) and (math.abs(dzN) > tsz * 0.5)
+                local canStep = true
+                if isDiagMove then
+                    local corners = diagonalCorners(cur, nb)
+                    if #corners < 2 then
+                        canStep = false  -- board-edge diagonal
+                    elseif not (isCornerSafe(corners[1]) and isCornerSafe(corners[2])) then
+                        canStep = false
+                    end
+                end
+                if canStep then
+                    local stepCost
+                    if nb == goalTile then
+                        -- destination: pure step cost, don't price its
+                        -- exposure (we're STOPPING here, not transiting).
+                        stepCost = 1
+                    elseif isWalkable(nb) then
+                        stepCost = 1 + scariness(nb)
+                    end
+                    if stepCost then
+                        local newD = curD + stepCost
+                        if newD < (dist[nb] or INF) then
+                            dist[nb]     = newD
+                            parent[nb]   = cur
+                            frontier[nb] = true
                         end
                     end
                 end
@@ -7818,14 +7859,11 @@ F.games.bms = (function()
         return nil
     end
 
-    -- Two-tier pathing: prefer routes that avoid flagged tiles entirely
-    -- (strict=true). Only fall back to flag-walking when no all-revealed
-    -- path exists. This is what makes the bot 'a bit more careful' - it
-    -- now treats flag-stepping as a last resort, not a free shortcut.
-    local function findPath(startTile, goalTile, state, knownMines, knownFalse)
-        local p = bfsPath(startTile, goalTile, state, knownMines, knownFalse, true)
-        if p and #p > 0 then return p end
-        return bfsPath(startTile, goalTile, state, knownMines, knownFalse, false)
+    -- Thin alias kept for the autoplay call sites. (Earlier two-tier
+    -- 'avoid flagged' behavior is gone - flagged is walkable, see the
+    -- Dijkstra comment above.)
+    local function findPath(startTile, goalTile, state, knownMines, knownFalse, knownSafes)
+        return bfsPath(startTile, goalTile, state, knownMines, knownFalse, knownSafes)
     end
 
     -- Pure MoveTo walk. No CFrame snap.
@@ -8006,7 +8044,7 @@ F.games.bms = (function()
                        and state[_lastWalkTarget] == "covered"
                        and safes[_lastWalkTarget]
                        and not mines[_lastWalkTarget] then
-                        local p = findPath(startTile, _lastWalkTarget, state, mines, falseFlags)
+                        local p = findPath(startTile, _lastWalkTarget, state, mines, falseFlags, safes)
                         if p and #p > 0 then pick = _lastWalkTarget end
                     end
                     -- No locked target (or it became invalid) - pick fresh
@@ -8023,7 +8061,7 @@ F.games.bms = (function()
                         table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
                         for _, c in ipairs(candidates) do
                             if not autoActive then break end
-                            local p = findPath(startTile, c.tile, state, mines, falseFlags)
+                            local p = findPath(startTile, c.tile, state, mines, falseFlags, safes)
                             if p and #p > 0 then
                                 pick = c.tile
                                 _lastWalkTarget   = pick
@@ -8034,7 +8072,7 @@ F.games.bms = (function()
                     end
                     local walked = false
                     if pick then
-                        local path = findPath(startTile, pick, state, mines, falseFlags)
+                        local path = findPath(startTile, pick, state, mines, falseFlags, safes)
                         if path and #path > 0 then
                             drawPathPreview({ startTile, table.unpack(path) })
                             local lastIdx = #path
@@ -8076,8 +8114,8 @@ F.games.bms = (function()
                             local a, b = pair[1], pair[2]
                             if not a.Parent or not b.Parent then continue end
                             if state[a] ~= "covered" or state[b] ~= "covered" then continue end
-                            local pathA = findPath(startTile, a, state, mines, falseFlags)
-                            local pathB = findPath(startTile, b, state, mines, falseFlags)
+                            local pathA = findPath(startTile, a, state, mines, falseFlags, safes)
+                            local pathB = findPath(startTile, b, state, mines, falseFlags, safes)
                             local walkTile, flagTile, path
                             if pathA then walkTile, flagTile, path = a, b, pathA
                             elseif pathB then walkTile, flagTile, path = b, a, pathB
@@ -8115,7 +8153,7 @@ F.games.bms = (function()
                             table.sort(guesses, function(a, b) return a.p < b.p end)
                             for _, g in ipairs(guesses) do
                                 if not autoActive then break end
-                                local path = findPath(startTile, g.tile, state, mines, falseFlags)
+                                local path = findPath(startTile, g.tile, state, mines, falseFlags, safes)
                                 if path and #path > 0 then
                                     drawPathPreview({ startTile, table.unpack(path) })
                                     for stepIdx, step in ipairs(path) do
