@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.14.4"
+local SCRIPT_VERSION = "v1.15.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6765,6 +6765,48 @@ end)()
 --    validates it. We grab it via a __namecall hook on the first
 --    flag the user places manually, then reuse it.
 -- ============================================================
+-- ============================================================
+--  GAMES: BMS BULLETS CHALLENGE DEFENDER
+-- ============================================================
+--  One of Blockerman's Minesweeper's challenges spawns 'Bullet-Part'
+--  parts in workspace that you have to dodge. Easier to just delete
+--  them as they appear.
+-- ============================================================
+F.games.bmsBullets = (function()
+    local active = false
+    local conn
+
+    local function destroyIfBullet(d)
+        if not active then return end
+        if d.Name == "Bullet-Part" then
+            pcall(function() d:Destroy() end)
+        end
+    end
+
+    local function sweepWorkspace()
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d.Name == "Bullet-Part" then
+                pcall(function() d:Destroy() end)
+            end
+        end
+    end
+
+    return {
+        start = function()
+            if active then return end
+            active = true
+            if conn then conn:Disconnect() end
+            conn = workspace.DescendantAdded:Connect(destroyIfBullet)
+            sweepWorkspace()
+        end,
+        stop = function()
+            active = false
+            if conn then conn:Disconnect(); conn = nil end
+        end,
+        isActive = function() return active end,
+    }
+end)()
+
 F.games.bms = (function()
     local RS = game:GetService("ReplicatedStorage")
 
@@ -7194,7 +7236,29 @@ F.games.bms = (function()
         for t in pairs(tileProbs) do
             if knownMines[t] or knownSafes[t] then tileProbs[t] = nil end
         end
-        return knownMines, knownSafes, falseFlags, tileProbs
+        -- Pure 50/50 pairs: constraints with exactly 2 unknowns and 1
+        -- mine. Auto-play in guess mode flags one + walks the other in
+        -- the same tick (both are equally likely, the choice is
+        -- arbitrary; the walked tile reveals safely 50% of the time,
+        -- and the flagged tile is correctly marked the other 50%).
+        local fiftyPairs = {}
+        do
+            local seen = {}
+            for _, c in ipairs(buildConstraints()) do
+                if c.count == 2 and c.remaining == 1 then
+                    -- dedupe by sorted-pair key
+                    local a, b = c.list[1], c.list[2]
+                    local key = (tostring(a) < tostring(b))
+                        and (tostring(a) .. "|" .. tostring(b))
+                        or  (tostring(b) .. "|" .. tostring(a))
+                    if not seen[key] then
+                        seen[key] = true
+                        table.insert(fiftyPairs, { a, b })
+                    end
+                end
+            end
+        end
+        return knownMines, knownSafes, falseFlags, tileProbs, fiftyPairs
     end
 
     -- ---- range filter ----
@@ -7571,9 +7635,10 @@ F.games.bms = (function()
                 ensureNeighbors(all)
                 local state = {}
                 for _, t in ipairs(all) do state[t] = tileState(t) end
-                local mines, safes, falseFlags, probs = deduce(all, state)
+                local mines, safes, falseFlags, probs, fiftyPairs = deduce(all, state)
                 falseFlags = falseFlags or {}
                 probs      = probs or {}
+                fiftyPairs = fiftyPairs or {}
                 local origin  = myPos()
                 -- (a) flag closest unflagged deduced mine if cooldown elapsed
                 local token  = getgenv()._BMS_TOKEN
@@ -7683,17 +7748,29 @@ F.games.bms = (function()
                     -- on (cap at p <= 0.55 so we never deliberately step
                     -- onto worse-than-coinflip).
                     if not walked and autoGuess and startTile then
-                        local guesses = {}
-                        for tile, p in pairs(probs) do
-                            if state[tile] == "covered" and p <= 0.55 then
-                                table.insert(guesses, { tile = tile, p = p })
-                            end
-                        end
-                        table.sort(guesses, function(a, b) return a.p < b.p end)
-                        for _, g in ipairs(guesses) do
+                        -- Priority 1: explicit 50/50 pair handling.
+                        -- For a (a,b) pair with exactly 1 mine between
+                        -- them, flag one + walk the other in the same
+                        -- tick. The walked tile reveals safely if our
+                        -- pick was right; if wrong, we die anyway. Same
+                        -- 50% outcome as just walking one, BUT we also
+                        -- correctly mark the other tile if we live.
+                        for _, pair in ipairs(fiftyPairs) do
                             if not autoActive then break end
-                            local path = bfsPath(startTile, g.tile, state, mines)
-                            if path and #path > 0 then
+                            local a, b = pair[1], pair[2]
+                            if not a.Parent or not b.Parent then continue end
+                            if state[a] ~= "covered" or state[b] ~= "covered" then continue end
+                            local pathA = bfsPath(startTile, a, state, mines)
+                            local pathB = bfsPath(startTile, b, state, mines)
+                            local walkTile, flagTile, path
+                            if pathA then walkTile, flagTile, path = a, b, pathA
+                            elseif pathB then walkTile, flagTile, path = b, a, pathB
+                            end
+                            if walkTile and token and remote then
+                                -- flag the partner first (so if walking
+                                -- onto a mine the flag still happened)
+                                pcall(function() remote:FireServer(flagTile, token, true) end)
+                                lastFlagAt = tick()
                                 for stepIdx, step in ipairs(path) do
                                     if not autoActive then break end
                                     local s = tileState(step)
@@ -7704,6 +7781,34 @@ F.games.bms = (function()
                                 end
                                 walked = true
                                 break
+                            end
+                        end
+                        -- Priority 2: lowest-prob covered tile walk.
+                        -- For tiles outside any 50/50 pair (e.g. 3-tile
+                        -- group with prob ~0.33 each).
+                        if not walked then
+                            local guesses = {}
+                            for tile, p in pairs(probs) do
+                                if state[tile] == "covered" and p <= 0.55 then
+                                    table.insert(guesses, { tile = tile, p = p })
+                                end
+                            end
+                            table.sort(guesses, function(a, b) return a.p < b.p end)
+                            for _, g in ipairs(guesses) do
+                                if not autoActive then break end
+                                local path = bfsPath(startTile, g.tile, state, mines)
+                                if path and #path > 0 then
+                                    for stepIdx, step in ipairs(path) do
+                                        if not autoActive then break end
+                                        local s = tileState(step)
+                                        if stepIdx < #path then
+                                            if s ~= "revealed" or mines[step] then break end
+                                        end
+                                        walkTo(step)
+                                    end
+                                    walked = true
+                                    break
+                                end
                             end
                         end
                     end

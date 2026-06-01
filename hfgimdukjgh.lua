@@ -2345,6 +2345,15 @@ do
          .. "+ Aim cone settings from the Legit auto-flag\n"
          .. "section to the left.",
             true)
+
+        BMSAuto:AddDivider()
+        BMSAuto:AddLabel("Challenges")
+        BMSAuto:AddToggle("BMSBullets", { Text = "Auto-destroy 'Bullet-Part' (bullets challenge)",
+            Default = false,
+            Callback = function(v)
+                if v then F.games.bmsBullets.start() else F.games.bmsBullets.stop() end
+            end,
+        })
         print("[BMS] (8/8) Auto play UI complete")
         end)  -- pcall close
         if not _bmsOk then
