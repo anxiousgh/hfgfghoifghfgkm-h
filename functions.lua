@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.14.3"
+local SCRIPT_VERSION = "v1.14.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7571,8 +7571,9 @@ F.games.bms = (function()
                 ensureNeighbors(all)
                 local state = {}
                 for _, t in ipairs(all) do state[t] = tileState(t) end
-                local mines, safes, _ff, probs = deduce(all, state)
-                probs = probs or {}
+                local mines, safes, falseFlags, probs = deduce(all, state)
+                falseFlags = falseFlags or {}
+                probs      = probs or {}
                 local origin  = myPos()
                 -- (a) flag closest unflagged deduced mine if cooldown elapsed
                 local token  = getgenv()._BMS_TOKEN
@@ -7583,15 +7584,29 @@ F.games.bms = (function()
                     -- map (no rangeSq check). Aim cone still applies if
                     -- it's enabled. Standalone Legit auto-flag still
                     -- respects its range slider.
+                    --
+                    -- Candidates include BOTH:
+                    --   * unflagged deduced mines (PlaceFlag adds the flag)
+                    --   * false-flagged tiles (PlaceFlag on an already-
+                    --     flagged tile removes it - the remote toggles)
+                    -- Picking the closest to player from the combined
+                    -- set means we'll alternate between adding correct
+                    -- flags and yanking wrong ones, whichever is nearest.
                     local best, bestD2 = nil, math.huge
                     for t in pairs(mines) do
                         if state[t] ~= "flagged" and inAimCone(t) then
                             local dx = t.Position.X - origin.X
                             local dz = t.Position.Z - origin.Z
                             local d2 = dx*dx + dz*dz
-                            if d2 < bestD2 then
-                                best, bestD2 = t, d2
-                            end
+                            if d2 < bestD2 then best, bestD2 = t, d2 end
+                        end
+                    end
+                    for t in pairs(falseFlags) do
+                        if inAimCone(t) then
+                            local dx = t.Position.X - origin.X
+                            local dz = t.Position.Z - origin.Z
+                            local d2 = dx*dx + dz*dz
+                            if d2 < bestD2 then best, bestD2 = t, d2 end
                         end
                     end
                     if best then
