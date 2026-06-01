@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.14.2"
+local SCRIPT_VERSION = "v1.14.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7660,28 +7660,14 @@ F.games.bms = (function()
                             walked = true
                         end
                     end
-                    -- GUESS FALLBACK: only fires when NOTHING ELSE is
-                    -- solveable. That means BOTH:
-                    --   (a) no reachable deduced-safe to walk to
-                    --       (already true if we got here without walking)
-                    --   (b) no unflagged deduced mine anywhere on the
-                    --       board (we'd still have flag work otherwise -
-                    --       user might move closer to it later)
-                    --   (c) no DEDUCED SAFE anywhere on the board that
-                    --       might become reachable after more reveals
-                    -- If all three are true, the deduction has reached
-                    -- a stuck point and a guess is genuinely the only
-                    -- way to make progress.
-                    local _hasUnflaggedMine = false
-                    for t in pairs(mines) do
-                        if state[t] ~= "flagged" then _hasUnflaggedMine = true; break end
-                    end
-                    local _hasUncoveredSafe = false
-                    for t in pairs(safes) do
-                        if state[t] == "covered" then _hasUncoveredSafe = true; break end
-                    end
-                    local stuck = (not _hasUnflaggedMine) and (not _hasUncoveredSafe)
-                    if not walked and autoGuess and startTile and stuck then
+                    -- GUESS FALLBACK: we got here without walking a safe
+                    -- AND the flag step above didn't fire (it would have
+                    -- `continue`d the loop). So nothing useful happened
+                    -- this tick - if guess mode is on, walk to the
+                    -- lowest-probability covered tile we have prob info
+                    -- on (cap at p <= 0.55 so we never deliberately step
+                    -- onto worse-than-coinflip).
+                    if not walked and autoGuess and startTile then
                         local guesses = {}
                         for tile, p in pairs(probs) do
                             if state[tile] == "covered" and p <= 0.55 then
