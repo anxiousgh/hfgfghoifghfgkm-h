@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.17.2"
+local SCRIPT_VERSION = "v1.18.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7700,35 +7700,75 @@ F.games.bms = (function()
         return best
     end
 
-    -- BFS through walkable tiles. CARDINAL-only neighbors so the path
-    -- never cuts diagonally between two revealed tiles whose corner
-    -- touches an unknown tile (which is what was clipping edges).
-    -- Walkable = REVEALED only AND not deduced mine. False flags can
-    -- be real mines so flagged tiles are skipped from the path.
-    -- Returns nil if unreachable, else a list of tiles excluding start.
-    local function bfsPath(startTile, goalTile, state, knownMines)
+    -- 8-direction BFS with two safety nets:
+    --   1. Diagonal moves require BOTH corner tiles to be walkable
+    --      (no corner-cutting across unknown tiles into a bomb).
+    --      Corner tiles = the two tiles cardinal-adjacent to BOTH the
+    --      current tile AND the diagonal neighbor.
+    --   2. Walkable = revealed OR flagged (but NOT a deduced mine and
+    --      NOT a deduced false-flag). Flagged tiles are now permitted
+    --      in the path so the bot can step over a correctly-flagged
+    --      mine instead of taking the long way around.
+    --
+    -- The goal tile (final step) is always a covered deduced-safe, so
+    -- the walkability filter only applies to intermediate steps.
+    local function bfsPath(startTile, goalTile, state, knownMines, knownFalse)
+        knownFalse = knownFalse or {}
         if startTile == goalTile then return {} end
+
+        local function isWalkable(t)
+            if knownMines[t] or knownFalse[t] then return false end
+            local s = state[t]
+            return s == "revealed" or s == "flagged"
+        end
+
+        -- diagonal-corner check: returns {cornerA, cornerB} (or {}) by
+        -- intersecting the cardinal-neighbor lists of cur and nb.
+        local function diagonalCorners(cur, nb)
+            local cardCur = cardinalNeighbors[cur]
+            local cardNb  = cardinalNeighbors[nb]
+            if not cardCur or not cardNb then return {} end
+            local set, out = {}, {}
+            for _, n in ipairs(cardNb) do if n ~= cur then set[n] = true end end
+            for _, n in ipairs(cardCur) do
+                if n ~= nb and set[n] then table.insert(out, n) end
+            end
+            return out
+        end
+
         local visited = { [startTile] = true }
         local parent  = {}
         local queue   = { startTile }
         local head    = 1
         while head <= #queue do
             local cur = queue[head]; head = head + 1
-            for _, nb in ipairs(cardinalNeighbors[cur] or {}) do
+            for _, nb in ipairs(neighbors[cur] or {}) do
                 if not visited[nb] then
-                    visited[nb] = true
-                    parent[nb] = cur
-                    if nb == goalTile then
-                        local path = {}
-                        local x = goalTile
-                        while x and x ~= startTile do
-                            table.insert(path, 1, x)
-                            x = parent[x]
+                    -- corner-cut prevention: a diagonal move into nb is
+                    -- only allowed if BOTH corner tiles are walkable.
+                    -- Cardinal moves have 0 corner tiles -> always pass.
+                    local corners = diagonalCorners(cur, nb)
+                    local canStep = true
+                    if #corners == 2 then
+                        if not (isWalkable(corners[1]) and isWalkable(corners[2])) then
+                            canStep = false
                         end
-                        return path
                     end
-                    if state[nb] == "revealed" and not knownMines[nb] then
-                        table.insert(queue, nb)
+                    if canStep then
+                        visited[nb] = true
+                        parent[nb] = cur
+                        if nb == goalTile then
+                            local path = {}
+                            local x = goalTile
+                            while x and x ~= startTile do
+                                table.insert(path, 1, x)
+                                x = parent[x]
+                            end
+                            return path
+                        end
+                        if isWalkable(nb) then
+                            table.insert(queue, nb)
+                        end
                     end
                 end
             end
@@ -7761,28 +7801,43 @@ F.games.bms = (function()
         return true
     end
 
-    -- Save/restore Roblox's Follow camera mode so the camera tracks the
-    -- character as it auto-walks. Without this the camera stays where
-    -- the user pointed it last and the bot can walk off-screen.
-    local _camModeBefore = nil
+    -- Scriptable top-down-ish camera. Locks the camera to a position
+    -- above + slightly behind the character, looking down at a small
+    -- pitch so the user can see the board layout + the bot's path.
+    -- Switches CameraType back to Custom on stop.
+    local _camTypeBefore  = nil
+    local _camHeight      = 22   -- studs above character
+    local _camBehind      = 12   -- studs behind facing direction
+    local _camAimLift     = 3    -- aim point lifted above character so the camera tilts down (not straight down)
+    local _camConn        = nil
+
     local function setFollowCam(enable)
-        local ok, ugs = pcall(function()
-            return UserSettings():GetService("UserGameSettings")
-        end)
-        if not ok or not ugs then return end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
         if enable then
-            if _camModeBefore == nil then
-                _camModeBefore = ugs.ComputerCameraMovementMode
-            end
-            pcall(function()
-                ugs.ComputerCameraMovementMode = Enum.ComputerCameraMovementMode.Follow
+            if _camTypeBefore == nil then _camTypeBefore = cam.CameraType end
+            pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
+            if _camConn then _camConn:Disconnect() end
+            _camConn = RunService.RenderStepped:Connect(function()
+                if not autoActive then return end
+                local c = lplr.Character
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+                local hrpCF  = hrp.CFrame
+                local back   = -hrpCF.LookVector
+                -- horizontal-only "behind" vector so the camera height
+                -- doesn't move with the character's pitch
+                back = Vector3.new(back.X, 0, back.Z)
+                if back.Magnitude < 0.01 then back = Vector3.new(0, 0, 1) else back = back.Unit end
+                local camPos = hrp.Position + back * _camBehind + Vector3.new(0, _camHeight, 0)
+                local aimAt  = hrp.Position + Vector3.new(0, _camAimLift, 0)
+                pcall(function() cam.CFrame = CFrame.new(camPos, aimAt) end)
             end)
         else
-            if _camModeBefore ~= nil then
-                pcall(function()
-                    ugs.ComputerCameraMovementMode = _camModeBefore
-                end)
-                _camModeBefore = nil
+            if _camConn then _camConn:Disconnect(); _camConn = nil end
+            if _camTypeBefore then
+                pcall(function() cam.CameraType = _camTypeBefore end)
+                _camTypeBefore = nil
             end
         end
     end
@@ -7864,7 +7919,7 @@ F.games.bms = (function()
                        and state[_lastWalkTarget] == "covered"
                        and safes[_lastWalkTarget]
                        and not mines[_lastWalkTarget] then
-                        local p = bfsPath(startTile, _lastWalkTarget, state, mines)
+                        local p = bfsPath(startTile, _lastWalkTarget, state, mines, falseFlags)
                         if p and #p > 0 then pick = _lastWalkTarget end
                     end
                     -- No locked target (or it became invalid) - pick fresh
@@ -7881,7 +7936,7 @@ F.games.bms = (function()
                         table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
                         for _, c in ipairs(candidates) do
                             if not autoActive then break end
-                            local p = bfsPath(startTile, c.tile, state, mines)
+                            local p = bfsPath(startTile, c.tile, state, mines, falseFlags)
                             if p and #p > 0 then
                                 pick = c.tile
                                 _lastWalkTarget   = pick
@@ -7892,7 +7947,7 @@ F.games.bms = (function()
                     end
                     local walked = false
                     if pick then
-                        local path = bfsPath(startTile, pick, state, mines)
+                        local path = bfsPath(startTile, pick, state, mines, falseFlags)
                         if path and #path > 0 then
                             -- prepend the current tile so the preview line
                             -- starts at the player's feet, not at the next step
@@ -7902,7 +7957,7 @@ F.games.bms = (function()
                                 if not autoActive then break end
                                 local s = tileState(step)
                                 if stepIdx < lastIdx then
-                                    if s ~= "revealed" or mines[step] then break end
+                                    if (s ~= "revealed" and s ~= "flagged") or mines[step] or falseFlags[step] then break end
                                 else
                                     if mines[step] then break end
                                 end
@@ -7932,8 +7987,8 @@ F.games.bms = (function()
                             local a, b = pair[1], pair[2]
                             if not a.Parent or not b.Parent then continue end
                             if state[a] ~= "covered" or state[b] ~= "covered" then continue end
-                            local pathA = bfsPath(startTile, a, state, mines)
-                            local pathB = bfsPath(startTile, b, state, mines)
+                            local pathA = bfsPath(startTile, a, state, mines, falseFlags)
+                            local pathB = bfsPath(startTile, b, state, mines, falseFlags)
                             local walkTile, flagTile, path
                             if pathA then walkTile, flagTile, path = a, b, pathA
                             elseif pathB then walkTile, flagTile, path = b, a, pathB
@@ -7948,7 +8003,7 @@ F.games.bms = (function()
                                     if not autoActive then break end
                                     local s = tileState(step)
                                     if stepIdx < #path then
-                                        if s ~= "revealed" or mines[step] then break end
+                                        if (s ~= "revealed" and s ~= "flagged") or mines[step] or falseFlags[step] then break end
                                     end
                                     walkTo(step)
                                 end
@@ -7969,14 +8024,14 @@ F.games.bms = (function()
                             table.sort(guesses, function(a, b) return a.p < b.p end)
                             for _, g in ipairs(guesses) do
                                 if not autoActive then break end
-                                local path = bfsPath(startTile, g.tile, state, mines)
+                                local path = bfsPath(startTile, g.tile, state, mines, falseFlags)
                                 if path and #path > 0 then
                                     drawPathPreview({ startTile, table.unpack(path) })
                                     for stepIdx, step in ipairs(path) do
                                         if not autoActive then break end
                                         local s = tileState(step)
                                         if stepIdx < #path then
-                                            if s ~= "revealed" or mines[step] then break end
+                                            if (s ~= "revealed" and s ~= "flagged") or mines[step] or falseFlags[step] then break end
                                         end
                                         walkTo(step)
                                     end
