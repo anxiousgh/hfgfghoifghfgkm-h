@@ -2286,9 +2286,17 @@ do
                 if v then F.games.bms.legitFlag.start() else F.games.bms.legitFlag.stop() end
             end,
         })
-        BMS:AddSlider("BMSFlagDelay", { Text = "Flag delay (one at a time)",
-            Default = 1.0, Min = 0.05, Max = 10, Rounding = 2, Suffix = " s",
-            Callback = function(v) F.games.bms.legitFlag.setDelay(v) end,
+        BMS:AddSlider("BMSFlagDelayMin", { Text = "Flag delay min",
+            Default = 0.6, Min = 0.05, Max = 10, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.bms.legitFlag.setDelayMin(v) end,
+        })
+        BMS:AddSlider("BMSFlagDelayMax", { Text = "Flag delay max",
+            Default = 1.4, Min = 0.05, Max = 10, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.bms.legitFlag.setDelayMax(v) end,
+        })
+        BMS:AddSlider("BMSFlagMissChance", { Text = "Flag miss chance",
+            Default = 0, Min = 0, Max = 100, Rounding = 0, Suffix = " %",
+            Callback = function(v) F.games.bms.legitFlag.setMissChance(v) end,
         })
         BMS:AddSlider("BMSFlagRange", { Text = "Flag range",
             Default = 60, Min = 5, Max = 500, Rounding = 0, Suffix = " studs",

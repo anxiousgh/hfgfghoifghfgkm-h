@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.15.1"
+local SCRIPT_VERSION = "v1.16.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7488,10 +7488,20 @@ F.games.bms = (function()
     end
 
     -- ---- legit auto-flag (queued, one at a time) ----
-    local flagActive = false
-    local flagDelay  = 1.0
-    local flagRange  = 60
+    local flagActive    = false
+    local flagDelayMin  = 0.6
+    local flagDelayMax  = 1.4
+    local flagMissChance = 0   -- 0..100 percent
+    local flagRange     = 60
     local flagThread
+
+    local function flagDelayRoll()
+        if flagDelayMin >= flagDelayMax then return flagDelayMin end
+        return flagDelayMin + math.random() * (flagDelayMax - flagDelayMin)
+    end
+    local function flagMissRoll()
+        return flagMissChance > 0 and (math.random() * 100 < flagMissChance)
+    end
     -- aim-cone filter: only flag tiles within a half-angle from camera
     -- forward. Used by both legit auto-flag and auto-play's flag step.
     local flagAimCone     = false
@@ -7545,8 +7555,11 @@ F.games.bms = (function()
                     end
                 end
                 if best then
-                    pcall(function() remote:FireServer(best, token, true) end)
-                    task.wait(flagDelay)
+                    -- roll for miss chance (makes flagging look less robotic)
+                    if not flagMissRoll() then
+                        pcall(function() remote:FireServer(best, token, true) end)
+                    end
+                    task.wait(flagDelayRoll())
                 else
                     task.wait(0.25)  -- nothing to flag right now, idle
                 end
@@ -7681,7 +7694,7 @@ F.games.bms = (function()
                 local token  = getgenv()._BMS_TOKEN
                 local remote = getPlaceFlag()
                 local now    = tick()
-                if token and remote and (now - lastFlagAt) >= flagDelay then
+                if token and remote and (now - lastFlagAt) >= flagDelayMin then
                     -- Auto-play flagging is UNBOUNDED across the whole
                     -- map (no rangeSq check). Aim cone still applies if
                     -- it's enabled. Standalone Legit auto-flag still
@@ -7712,8 +7725,10 @@ F.games.bms = (function()
                         end
                     end
                     if best then
-                        pcall(function() remote:FireServer(best, token, true) end)
-                        lastFlagAt = now
+                        if not flagMissRoll() then
+                            pcall(function() remote:FireServer(best, token, true) end)
+                        end
+                        lastFlagAt = now + flagDelayRoll() - flagDelayMin
                         task.wait(0.1)
                         continue
                     end
@@ -7884,10 +7899,12 @@ F.games.bms = (function()
             start    = legitFlagStart,
             stop     = legitFlagStop,
             isActive = function() return flagActive end,
-            setDelay = function(n) flagDelay = math.clamp(tonumber(n) or 1, 0.05, 10) end,
-            setRange = function(n) flagRange = math.clamp(tonumber(n) or 60, 5, 500) end,
-            setAimCone     = function(v) flagAimCone = v == true end,
-            setAimHalfDeg  = function(n) flagAimHalfDeg = math.clamp(tonumber(n) or 30, 1, 180) end,
+            setDelayMin   = function(n) flagDelayMin   = math.clamp(tonumber(n) or 0.6, 0.05, 10) end,
+            setDelayMax   = function(n) flagDelayMax   = math.clamp(tonumber(n) or 1.4, 0.05, 10) end,
+            setMissChance = function(n) flagMissChance = math.clamp(tonumber(n) or 0,   0,    100) end,
+            setRange      = function(n) flagRange = math.clamp(tonumber(n) or 60, 5, 500) end,
+            setAimCone    = function(v) flagAimCone = v == true end,
+            setAimHalfDeg = function(n) flagAimHalfDeg = math.clamp(tonumber(n) or 30, 1, 180) end,
         },
         autoPlay = {
             start    = function() legitFlagStop(); autoPlayStart() end,
