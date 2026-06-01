@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.2"
+local SCRIPT_VERSION = "v1.20.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7716,15 +7716,25 @@ F.games.bms = (function()
     --
     -- The goal tile (final step) is always a covered deduced-safe, so
     -- the walkability filter only applies to intermediate steps.
-    local function bfsPath(startTile, goalTile, state, knownMines, knownFalse)
+    -- strict=true forbids flagged tiles entirely (prefers all-revealed
+    -- paths). Used by the two-tier `findPath` wrapper below: try strict
+    -- first, fall back to non-strict (flagged-OK) only if no path exists.
+    -- This restores cautious behavior - the bot only walks through flags
+    -- when it has no other option.
+    local function bfsPath(startTile, goalTile, state, knownMines, knownFalse, strict)
         knownFalse = knownFalse or {}
         if startTile == goalTile then return {} end
 
-        -- Used for stepping ONTO a tile - flagged is OK because the
-        -- flag protects you.
+        -- Used for stepping ONTO a tile.
+        --   strict mode  -> only revealed-safe tiles count
+        --   normal mode  -> flagged is OK (flag protects you, even if
+        --                   the underlying tile is a mine)
         local function isWalkable(t)
             local s = state[t]
-            if s == "flagged" then return true end
+            if s == "flagged" then
+                if strict then return false end
+                return true
+            end
             if s == "revealed" then return not knownMines[t] end
             return false
         end
@@ -7806,6 +7816,16 @@ F.games.bms = (function()
             end
         end
         return nil
+    end
+
+    -- Two-tier pathing: prefer routes that avoid flagged tiles entirely
+    -- (strict=true). Only fall back to flag-walking when no all-revealed
+    -- path exists. This is what makes the bot 'a bit more careful' - it
+    -- now treats flag-stepping as a last resort, not a free shortcut.
+    local function findPath(startTile, goalTile, state, knownMines, knownFalse)
+        local p = bfsPath(startTile, goalTile, state, knownMines, knownFalse, true)
+        if p and #p > 0 then return p end
+        return bfsPath(startTile, goalTile, state, knownMines, knownFalse, false)
     end
 
     -- Pure MoveTo walk. No CFrame snap.
@@ -7986,7 +8006,7 @@ F.games.bms = (function()
                        and state[_lastWalkTarget] == "covered"
                        and safes[_lastWalkTarget]
                        and not mines[_lastWalkTarget] then
-                        local p = bfsPath(startTile, _lastWalkTarget, state, mines, falseFlags)
+                        local p = findPath(startTile, _lastWalkTarget, state, mines, falseFlags)
                         if p and #p > 0 then pick = _lastWalkTarget end
                     end
                     -- No locked target (or it became invalid) - pick fresh
@@ -8003,7 +8023,7 @@ F.games.bms = (function()
                         table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
                         for _, c in ipairs(candidates) do
                             if not autoActive then break end
-                            local p = bfsPath(startTile, c.tile, state, mines, falseFlags)
+                            local p = findPath(startTile, c.tile, state, mines, falseFlags)
                             if p and #p > 0 then
                                 pick = c.tile
                                 _lastWalkTarget   = pick
@@ -8014,7 +8034,7 @@ F.games.bms = (function()
                     end
                     local walked = false
                     if pick then
-                        local path = bfsPath(startTile, pick, state, mines, falseFlags)
+                        local path = findPath(startTile, pick, state, mines, falseFlags)
                         if path and #path > 0 then
                             drawPathPreview({ startTile, table.unpack(path) })
                             local lastIdx = #path
@@ -8056,8 +8076,8 @@ F.games.bms = (function()
                             local a, b = pair[1], pair[2]
                             if not a.Parent or not b.Parent then continue end
                             if state[a] ~= "covered" or state[b] ~= "covered" then continue end
-                            local pathA = bfsPath(startTile, a, state, mines, falseFlags)
-                            local pathB = bfsPath(startTile, b, state, mines, falseFlags)
+                            local pathA = findPath(startTile, a, state, mines, falseFlags)
+                            local pathB = findPath(startTile, b, state, mines, falseFlags)
                             local walkTile, flagTile, path
                             if pathA then walkTile, flagTile, path = a, b, pathA
                             elseif pathB then walkTile, flagTile, path = b, a, pathB
@@ -8095,7 +8115,7 @@ F.games.bms = (function()
                             table.sort(guesses, function(a, b) return a.p < b.p end)
                             for _, g in ipairs(guesses) do
                                 if not autoActive then break end
-                                local path = bfsPath(startTile, g.tile, state, mines, falseFlags)
+                                local path = findPath(startTile, g.tile, state, mines, falseFlags)
                                 if path and #path > 0 then
                                     drawPathPreview({ startTile, table.unpack(path) })
                                     for stepIdx, step in ipairs(path) do
