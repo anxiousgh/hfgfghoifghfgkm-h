@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.18.2"
+local SCRIPT_VERSION = "v1.18.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7716,17 +7716,23 @@ F.games.bms = (function()
         knownFalse = knownFalse or {}
         if startTile == goalTile then return {} end
 
+        -- Used for stepping ONTO a tile - flagged is OK because the
+        -- flag protects you.
         local function isWalkable(t)
             local s = state[t]
-            -- Flagged tiles are ALWAYS walkable. In Blockerman's
-            -- Minesweeper the flag (any Model child of the tile)
-            -- physically protects you - walking on a flagged tile is
-            -- harmless whether the underlying tile is a mine or safe.
-            -- So we ignore knownMines/knownFalse for flagged tiles.
             if s == "flagged" then return true end
-            -- Non-flagged: only revealed-and-not-deduced-mine is safe.
             if s == "revealed" then return not knownMines[t] end
             return false
+        end
+        -- Used for diagonal CORNER tiles - stricter than isWalkable.
+        -- For a diagonal move A->D, the character physically grazes
+        -- the corner tiles between them. Even with the flag-protects
+        -- rule, brushing a flagged corner is less reliable than
+        -- straight-up walking on it - some flag visuals only cover
+        -- part of the tile face. So we require corners to be FULLY
+        -- REVEALED (not just flagged) to allow the diagonal.
+        local function isCornerSafe(t)
+            return state[t] == "revealed" and not knownMines[t]
         end
 
         -- diagonal-corner check: returns {cornerA, cornerB} (or {}) by
@@ -7757,7 +7763,8 @@ F.games.bms = (function()
                     local corners = diagonalCorners(cur, nb)
                     local canStep = true
                     if #corners == 2 then
-                        if not (isWalkable(corners[1]) and isWalkable(corners[2])) then
+                        -- diagonal: stricter corner check (revealed only)
+                        if not (isCornerSafe(corners[1]) and isCornerSafe(corners[2])) then
                             canStep = false
                         end
                     end
