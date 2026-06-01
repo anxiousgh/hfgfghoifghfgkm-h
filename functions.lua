@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.6"
+local SCRIPT_VERSION = "v1.20.7"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7704,118 +7704,59 @@ F.games.bms = (function()
         return best
     end
 
-    -- 8-direction BFS with two safety nets:
-    --   1. Diagonal moves require BOTH corner tiles to be walkable
-    --      (no corner-cutting across unknown tiles into a bomb).
-    --      Corner tiles = the two tiles cardinal-adjacent to BOTH the
-    --      current tile AND the diagonal neighbor.
-    --   2. Walkable = revealed OR flagged (but NOT a deduced mine and
-    --      NOT a deduced false-flag). Flagged tiles are now permitted
-    --      in the path so the bot can step over a correctly-flagged
-    --      mine instead of taking the long way around.
+    -- CARDINAL-ONLY BFS. No diagonal moves at all.
     --
-    -- The goal tile (final step) is always a covered deduced-safe, so
-    -- the walkability filter only applies to intermediate steps.
+    -- Why no diagonals: a diagonal sweep from A to D physically
+    -- passes through the corner-junction where 4 tiles meet (A, the
+    -- two corner tiles B/C, and D). The character body briefly
+    -- overlaps all four at the midpoint. Even with strict corner
+    -- safety checks, body momentum + Roblox character drift can let
+    -- a pixel touch a NEIGHBOUR of one of the corner tiles. If that
+    -- neighbour is an unrevealed bomb, game over.
+    --
+    -- Cardinal-only moves cross exactly ONE tile boundary per step
+    -- (the one between cur and nb). The character body stays inside
+    -- the cur->nb central corridor and never crosses into any other
+    -- tile. As long as both cur and nb are safe (revealed or
+    -- flagged), the walk is provably brush-free.
+    --
+    -- Trade-off: paths are Manhattan-distance instead of Chebyshev,
+    -- so ~40% longer on average. Worth it for the safety guarantee.
     local function bfsPath(startTile, goalTile, state, knownMines, knownFalse)
         knownFalse = knownFalse or {}
         if startTile == goalTile then return {} end
 
-        -- Used for stepping ONTO a tile - flagged is OK because the
-        -- flag protects you.
+        -- Walking ONTO a tile - flagged is OK (flag protects you,
+        -- and a cardinal move into a flagged tile crosses just the
+        -- one boundary, no other tile is touched).
         local function isWalkable(t)
             local s = state[t]
             if s == "flagged"  then return true end
             if s == "revealed" then return not knownMines[t] end
             return false
         end
-        -- Used for diagonal CORNER tiles - stricter than isWalkable.
-        -- For a diagonal move A->D, the character physically grazes
-        -- the corner tiles between them. We require corners to be
-        -- FULLY REVEALED (not just flagged) to allow the diagonal.
-        local function isCornerSafe(t)
-            return state[t] == "revealed" and not knownMines[t]
-        end
 
-        -- diagonal-corner check: returns {cornerA, cornerB} (or {}) by
-        -- intersecting the cardinal-neighbor lists of cur and nb.
-        local function diagonalCorners(cur, nb)
-            local cardCur = cardinalNeighbors[cur]
-            local cardNb  = cardinalNeighbors[nb]
-            if not cardCur or not cardNb then return {} end
-            local set, out = {}, {}
-            for _, n in ipairs(cardNb) do if n ~= cur then set[n] = true end end
-            for _, n in ipairs(cardCur) do
-                if n ~= nb and set[n] then table.insert(out, n) end
-            end
-            return out
-        end
-
-        -- Process one neighbor `nb` against current `cur`. Returns the
-        -- finished path (table) if `nb == goalTile`, otherwise nil.
         local visited = { [startTile] = true }
         local parent  = {}
         local queue   = { startTile }
         local head    = 1
-        local function tryStep(cur, nb)
-            if visited[nb] then return nil end
-            -- corner-cut prevention: diagonal move requires BOTH
-            -- corner tiles to be revealed-safe. Cardinal = 0 corners
-            -- -> always pass. Board-edge diagonal with <2 corners
-            -- -> refuse (one corner doesn't exist as a tile).
-            local dxN = nb.Position.X - cur.Position.X
-            local dzN = nb.Position.Z - cur.Position.Z
-            local tsz = math.max(cur.Size.X, cur.Size.Z)
-            local isDiagMove =
-                (math.abs(dxN) > tsz * 0.5) and (math.abs(dzN) > tsz * 0.5)
-            if isDiagMove then
-                local corners = diagonalCorners(cur, nb)
-                if #corners < 2 then return nil end
-                if not (isCornerSafe(corners[1]) and isCornerSafe(corners[2])) then
-                    return nil
-                end
-            end
-            visited[nb] = true
-            parent[nb]  = cur
-            if nb == goalTile then
-                local path = {}
-                local x = goalTile
-                while x and x ~= startTile do
-                    table.insert(path, 1, x)
-                    x = parent[x]
-                end
-                return path
-            end
-            if isWalkable(nb) then
-                table.insert(queue, nb)
-            end
-            return nil
-        end
-
         while head <= #queue do
             local cur = queue[head]; head = head + 1
-            -- CARDINAL FIRST. When BFS has multiple equal-length paths,
-            -- queue order decides which one wins. Visiting the 4
-            -- cardinal neighbors before the 4 diagonals biases the
-            -- chosen path toward cardinal moves - those don't graze
-            -- corner tiles at all, so they spend less time near covered
-            -- (potentially-bomb) tiles. Diagonals are still allowed,
-            -- they just lose ties to cardinal-equivalent routes.
-            local card = cardinalNeighbors[cur]
-            if card then
-                for _, nb in ipairs(card) do
-                    local done = tryStep(cur, nb)
-                    if done then return done end
-                end
-            end
-            -- diagonals second (= 8-neighbors minus cardinals)
-            local all8 = neighbors[cur]
-            if all8 then
-                local cardSet = {}
-                if card then for _, n in ipairs(card) do cardSet[n] = true end end
-                for _, nb in ipairs(all8) do
-                    if not cardSet[nb] then
-                        local done = tryStep(cur, nb)
-                        if done then return done end
+            for _, nb in ipairs(cardinalNeighbors[cur] or {}) do
+                if not visited[nb] then
+                    visited[nb] = true
+                    parent[nb]  = cur
+                    if nb == goalTile then
+                        local path = {}
+                        local x = goalTile
+                        while x and x ~= startTile do
+                            table.insert(path, 1, x)
+                            x = parent[x]
+                        end
+                        return path
+                    end
+                    if isWalkable(nb) then
+                        table.insert(queue, nb)
                     end
                 end
             end
@@ -8046,6 +7987,21 @@ F.games.bms = (function()
                                     if mines[step] then break end
                                 end
                                 walkTo(step)
+                                -- Brake at the final tile so leftover
+                                -- momentum doesn't carry the character body
+                                -- past the goal center into a neighbouring
+                                -- (possibly covered) tile - the user
+                                -- reported that 'even a pixel touching' an
+                                -- uncovered tile triggers a reveal.
+                                if stepIdx == lastIdx then
+                                    local c   = lplr.Character
+                                    local hum = c and c:FindFirstChildOfClass("Humanoid")
+                                    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                                    if hum and hrp then
+                                        pcall(function() hum:Move(Vector3.new(0, 0, 0), false) end)
+                                        pcall(function() hum:MoveTo(hrp.Position) end)
+                                    end
+                                end
                             end
                             walked = true
                         end
