@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.14.1"
+local SCRIPT_VERSION = "v1.14.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7574,19 +7574,22 @@ F.games.bms = (function()
                 local mines, safes, _ff, probs = deduce(all, state)
                 probs = probs or {}
                 local origin  = myPos()
-                local rangeSq = flagRange * flagRange
                 -- (a) flag closest unflagged deduced mine if cooldown elapsed
                 local token  = getgenv()._BMS_TOKEN
                 local remote = getPlaceFlag()
                 local now    = tick()
                 if token and remote and (now - lastFlagAt) >= flagDelay then
+                    -- Auto-play flagging is UNBOUNDED across the whole
+                    -- map (no rangeSq check). Aim cone still applies if
+                    -- it's enabled. Standalone Legit auto-flag still
+                    -- respects its range slider.
                     local best, bestD2 = nil, math.huge
                     for t in pairs(mines) do
                         if state[t] ~= "flagged" and inAimCone(t) then
                             local dx = t.Position.X - origin.X
                             local dz = t.Position.Z - origin.Z
                             local d2 = dx*dx + dz*dz
-                            if d2 < rangeSq and d2 < bestD2 then
+                            if d2 < bestD2 then
                                 best, bestD2 = t, d2
                             end
                         end
