@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.1"
+local SCRIPT_VERSION = "v1.20.6.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7622,92 +7622,6 @@ F.games.bms = (function()
     local autoStepDelay = 0.4   -- per-tile MoveTo cap
     local autoGuess     = false -- when stuck, walk to a 50/50 tile
 
-    -- ---- PathfindingService blacklist ----
-    -- Each tile gets a PathfindingModifier child. Its Label is one of:
-    --   "BMS_Safe"  - revealed (non-mine), flagged (any), or deduced
-    --                 covered-safe destination
-    --   "BMS_Avoid" - covered+unknown, OR deduced mine
-    -- The path is computed with Costs.BMS_Avoid = math.huge, so the
-    -- navmesh REFUSES to route over any avoid tile. Better: the path
-    -- automatically stays AgentRadius (2 studs) away from any avoid
-    -- tile's boundary - that's a hard clearance guarantee, no more
-    -- 'pixel touched the covered tile' deaths.
-    local PathfindingService = game:GetService("PathfindingService")
-    local pfModifiers = {}  -- tile -> modifier instance (cached so we
-                            -- don't re-find or re-create per tick)
-    local pfLabels    = {}  -- tile -> last-applied label (skip
-                            -- redundant property writes)
-
-    local function ensurePfModifier(tile)
-        local m = pfModifiers[tile]
-        if m and m.Parent == tile then return m end
-        m = tile:FindFirstChild("_BMS_PFM")
-        if not m then
-            m = Instance.new("PathfindingModifier")
-            m.Name = "_BMS_PFM"
-            m.Parent = tile
-        end
-        pfModifiers[tile] = m
-        return m
-    end
-
-    local function updatePfModifiers(parts, state, knownMines, knownSafes)
-        for _, t in ipairs(parts) do
-            local s = state[t]
-            local label
-            -- FLAGGED tiles are ALWAYS BMS_Safe. The 'flag protects you'
-            -- rule applies regardless of whether deduce thinks the
-            -- underlying tile is a mine - that's the entire point of
-            -- the flag. Previous version checked knownMines[t] first,
-            -- which incorrectly blacklisted any flagged-and-deduced-
-            -- mine tile (i.e. the well-flagged mines), so the bot
-            -- couldn't walk over them. Fixed by checking state first.
-            if s == "flagged" then
-                label = "BMS_Safe"
-            elseif knownMines[t] then
-                label = "BMS_Avoid"
-            elseif s == "covered" then
-                -- covered-deduced-safe IS the bot's destination, so
-                -- those need to be reachable. Other covered = avoid.
-                label = knownSafes[t] and "BMS_Safe" or "BMS_Avoid"
-            else
-                label = "BMS_Safe"  -- revealed non-mine
-            end
-            if pfLabels[t] ~= label then
-                local m = ensurePfModifier(t)
-                m.Label = label
-                pfLabels[t] = label
-            end
-        end
-    end
-
-    local function computePfPath(startPos, goalPos)
-        local path = PathfindingService:CreatePath({
-            -- AgentRadius bumped 2 -> 3.5: hard clearance buffer
-            -- from every BMS_Avoid tile boundary. Default Roblox
-            -- character body is ~1-1.25 stud radius, so 3.5 leaves
-            -- ~2.25 studs of body-to-blacklist gap. No 'pixel
-            -- touching' the covered tile, even with character
-            -- animation overshoot or momentum drift.
-            AgentRadius     = 3.5,
-            AgentHeight     = 5,
-            AgentCanJump    = false,
-            -- WaypointSpacing 2.5: not so dense the character is
-            -- constantly retargeting (looks robotic), but tight
-            -- enough that straight-line MoveTo segments don't
-            -- drift off the safe navmesh on curves.
-            WaypointSpacing = 2.5,
-            Costs = {
-                BMS_Avoid = math.huge,
-                BMS_Safe  = 1,
-            },
-        })
-        local ok = pcall(function() path:ComputeAsync(startPos, goalPos) end)
-        if not ok then return nil end
-        if path.Status ~= Enum.PathStatus.Success then return nil end
-        return path:GetWaypoints()
-    end
-
     -- ---- path preview ----
     -- Glowing neon segments between consecutive tiles on the path the
     -- bot is about to walk. Parts are pooled (reused across ticks) so
@@ -7744,27 +7658,6 @@ F.games.bms = (function()
         end
         pathSegments = {}
     end
-    -- Draw segments between raw world positions (for PathfindingService
-    -- waypoints, which are Vector3s, not tile parts).
-    local function drawPathPreviewPositions(positions)
-        if not pathPreview or not positions or #positions < 2 then
-            hidePathSegments(); return
-        end
-        for i = 1, #positions - 1 do
-            local a, b = positions[i], positions[i + 1]
-            local mid  = (a + b) * 0.5
-            local diff = b - a
-            local len  = diff.Magnitude
-            if len < 0.05 then continue end
-            local seg = ensurePathSeg(i)
-            seg.Color        = pathPreviewColor
-            seg.Size         = Vector3.new(0.4, 0.4, len)
-            seg.CFrame       = CFrame.new(mid, b)
-            seg.Transparency = 0
-        end
-        hidePathSegments(#positions)
-    end
-
     local function drawPathPreview(tiles)
         if not pathPreview or not tiles or #tiles < 2 then
             hidePathSegments(); return
@@ -7811,60 +7704,110 @@ F.games.bms = (function()
         return best
     end
 
-    -- CARDINAL-ONLY BFS. No diagonal moves at all.
+    -- 8-direction BFS with two safety nets:
+    --   1. Diagonal moves require BOTH corner tiles to be walkable
+    --      (no corner-cutting across unknown tiles into a bomb).
+    --      Corner tiles = the two tiles cardinal-adjacent to BOTH the
+    --      current tile AND the diagonal neighbor.
+    --   2. Walkable = revealed OR flagged (but NOT a deduced mine and
+    --      NOT a deduced false-flag). Flagged tiles are now permitted
+    --      in the path so the bot can step over a correctly-flagged
+    --      mine instead of taking the long way around.
     --
-    -- Why no diagonals: a diagonal sweep from A to D physically
-    -- passes through the corner-junction where 4 tiles meet (A, the
-    -- two corner tiles B/C, and D). The character body briefly
-    -- overlaps all four at the midpoint. Even with strict corner
-    -- safety checks, body momentum + Roblox character drift can let
-    -- a pixel touch a NEIGHBOUR of one of the corner tiles. If that
-    -- neighbour is an unrevealed bomb, game over.
-    --
-    -- Cardinal-only moves cross exactly ONE tile boundary per step
-    -- (the one between cur and nb). The character body stays inside
-    -- the cur->nb central corridor and never crosses into any other
-    -- tile. As long as both cur and nb are safe (revealed or
-    -- flagged), the walk is provably brush-free.
-    --
-    -- Trade-off: paths are Manhattan-distance instead of Chebyshev,
-    -- so ~40% longer on average. Worth it for the safety guarantee.
+    -- The goal tile (final step) is always a covered deduced-safe, so
+    -- the walkability filter only applies to intermediate steps.
     local function bfsPath(startTile, goalTile, state, knownMines, knownFalse)
         knownFalse = knownFalse or {}
         if startTile == goalTile then return {} end
 
-        -- Walking ONTO a tile - flagged is OK (flag protects you,
-        -- and a cardinal move into a flagged tile crosses just the
-        -- one boundary, no other tile is touched).
+        -- Used for stepping ONTO a tile - flagged is OK because the
+        -- flag protects you.
         local function isWalkable(t)
             local s = state[t]
             if s == "flagged"  then return true end
             if s == "revealed" then return not knownMines[t] end
             return false
         end
+        -- Used for diagonal CORNER tiles - stricter than isWalkable.
+        -- For a diagonal move A->D, the character physically grazes
+        -- the corner tiles between them. We require corners to be
+        -- FULLY REVEALED (not just flagged) to allow the diagonal.
+        local function isCornerSafe(t)
+            return state[t] == "revealed" and not knownMines[t]
+        end
 
+        -- diagonal-corner check: returns {cornerA, cornerB} (or {}) by
+        -- intersecting the cardinal-neighbor lists of cur and nb.
+        local function diagonalCorners(cur, nb)
+            local cardCur = cardinalNeighbors[cur]
+            local cardNb  = cardinalNeighbors[nb]
+            if not cardCur or not cardNb then return {} end
+            local set, out = {}, {}
+            for _, n in ipairs(cardNb) do if n ~= cur then set[n] = true end end
+            for _, n in ipairs(cardCur) do
+                if n ~= nb and set[n] then table.insert(out, n) end
+            end
+            return out
+        end
+
+        -- Process one neighbor `nb` against current `cur`. Returns the
+        -- finished path (table) if `nb == goalTile`, otherwise nil.
         local visited = { [startTile] = true }
         local parent  = {}
         local queue   = { startTile }
         local head    = 1
+        local function tryStep(cur, nb)
+            if visited[nb] then return nil end
+            -- corner-cut prevention: diagonal move requires BOTH
+            -- corner tiles to be revealed-safe. Cardinal = 0 corners
+            -- -> always pass. Board-edge diagonal with <2 corners
+            -- -> refuse (one corner doesn't exist as a tile).
+            local dxN = nb.Position.X - cur.Position.X
+            local dzN = nb.Position.Z - cur.Position.Z
+            local tsz = math.max(cur.Size.X, cur.Size.Z)
+            local isDiagMove =
+                (math.abs(dxN) > tsz * 0.5) and (math.abs(dzN) > tsz * 0.5)
+            if isDiagMove then
+                local corners = diagonalCorners(cur, nb)
+                if #corners < 2 then return nil end
+                if not (isCornerSafe(corners[1]) and isCornerSafe(corners[2])) then
+                    return nil
+                end
+            end
+            visited[nb] = true
+            parent[nb]  = cur
+            if nb == goalTile then
+                local path = {}
+                local x = goalTile
+                while x and x ~= startTile do
+                    table.insert(path, 1, x)
+                    x = parent[x]
+                end
+                return path
+            end
+            if isWalkable(nb) then
+                table.insert(queue, nb)
+            end
+            return nil
+        end
+
         while head <= #queue do
             local cur = queue[head]; head = head + 1
-            for _, nb in ipairs(cardinalNeighbors[cur] or {}) do
-                if not visited[nb] then
-                    visited[nb] = true
-                    parent[nb]  = cur
-                    if nb == goalTile then
-                        local path = {}
-                        local x = goalTile
-                        while x and x ~= startTile do
-                            table.insert(path, 1, x)
-                            x = parent[x]
-                        end
-                        return path
-                    end
-                    if isWalkable(nb) then
-                        table.insert(queue, nb)
-                    end
+            -- CARDINAL ONLY. Diagonal moves sweep through the 4-tile
+            -- corner junction (cur, two corner tiles, target). Even
+            -- with revealed-only corner safety, momentum + character
+            -- drift can let a pixel touch a NEIGHBOUR of one of the
+            -- corner tiles - if that neighbour is an unrevealed bomb,
+            -- it reveals and game over. Cardinal moves cross exactly
+            -- ONE tile boundary (between cur and nb); body stays in
+            -- the cur->nb central corridor and provably never enters
+            -- any other tile. Trade-off: paths are Manhattan instead
+            -- of Chebyshev, ~40% longer on average.
+            local card = cardinalNeighbors[cur]
+            if card then
+                for _, nb in ipairs(card) do
+                    local done = tryStep(cur, nb)
+                    if done then return done end
                 end
             end
         end
@@ -7872,121 +7815,20 @@ F.games.bms = (function()
     end
 
     -- Pure MoveTo walk. No CFrame snap.
-    --
-    -- nextTile (optional) - the tile after this one in the path. Used
-    -- to widen the reach threshold on straight runs (cardinal BFS
-    -- often has multiple cardinal-aligned tiles in a row), so the
-    -- character keeps moving instead of decelerating to tile-center.
-    local function walkTo(tile, nextTile)
+    local function walkTo(tile)
         local c = lplr.Character
         local hum = c and c:FindFirstChildOfClass("Humanoid")
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
         local goalPos = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
         pcall(function() hum:MoveTo(goalPos) end)
-
-        local reachR
-        if not nextTile then
-            reachR = 0.6  -- final tile: precise
-        else
-            local v1x = tile.Position.X - hrp.Position.X
-            local v1z = tile.Position.Z - hrp.Position.Z
-            local v2x = nextTile.Position.X - tile.Position.X
-            local v2z = nextTile.Position.Z - tile.Position.Z
-            local m1  = math.sqrt(v1x*v1x + v1z*v1z)
-            local m2  = math.sqrt(v2x*v2x + v2z*v2z)
-            if m1 > 0.01 and m2 > 0.01 then
-                local cosA = (v1x*v2x + v1z*v2z) / (m1 * m2)
-                if cosA > 0.85 then
-                    -- straight continuation: glide through at ~40%
-                    -- of tile width away from center
-                    reachR = math.max(1.5, tile.Size.X * 0.4)
-                elseif cosA > 0.5 then
-                    reachR = math.max(1.2, tile.Size.X * 0.3)
-                else
-                    reachR = 0.6  -- 90deg cardinal turn: stop close
-                end
-            else
-                reachR = 1.0
-            end
-        end
-        local reachR2 = reachR * reachR
         local waited = 0
         while waited < autoStepDelay and autoActive do
             local dx = hrp.Position.X - goalPos.X
             local dz = hrp.Position.Z - goalPos.Z
-            if (dx*dx + dz*dz) < reachR2 then return true end
+            if (dx*dx + dz*dz) < 0.36 then return true end
             RunService.Heartbeat:Wait()
             waited = waited + (1/60)
-        end
-        return true
-    end
-
-    -- Walk a sequence of PathfindingService waypoints. The path was
-    -- computed with BMS_Avoid=math.huge AND AgentRadius=3.5, so every
-    -- waypoint is on safe ground AND >=3.5 studs clear of any
-    -- avoid-tile boundary.
-    --
-    -- Human-feel: the reach threshold for each waypoint depends on
-    -- the angle to the NEXT waypoint:
-    --   nearly-straight continuation -> wide threshold (~2.5 studs)
-    --     so the character GLIDES through without slowing down. This
-    --     was the "robotic" symptom - the old fixed 1-stud threshold
-    --     meant the humanoid decelerated to a precise stop at every
-    --     1-stud waypoint, even on dead-straight stretches.
-    --   moderate turn -> medium threshold so the pivot is smooth
-    --   sharp turn / final waypoint -> tight threshold so the corner
-    --     is crisp and the character actually arrives at the goal
-    local function walkPfWaypoints(waypoints)
-        if not waypoints or #waypoints < 2 then return false end
-        local finalWp = waypoints[#waypoints]
-        for i = 2, #waypoints do
-            if not autoActive then return false end
-            local wp = waypoints[i]
-            local c = lplr.Character
-            local hum = c and c:FindFirstChildOfClass("Humanoid")
-            local hrp = c and c:FindFirstChild("HumanoidRootPart")
-            if not hum or not hrp then return false end
-            -- already at the goal area? skip remaining waypoints
-            local fdx = hrp.Position.X - finalWp.Position.X
-            local fdz = hrp.Position.Z - finalWp.Position.Z
-            if (fdx*fdx + fdz*fdz) < 1.5 then return true end
-            pcall(function() hum:MoveTo(wp.Position) end)
-
-            -- compute reach threshold based on turn angle to next wp
-            local reachR
-            if i == #waypoints then
-                reachR = 1.0  -- final: precise landing
-            else
-                local nextWp = waypoints[i + 1]
-                local v1x = wp.Position.X - hrp.Position.X
-                local v1z = wp.Position.Z - hrp.Position.Z
-                local v2x = nextWp.Position.X - wp.Position.X
-                local v2z = nextWp.Position.Z - wp.Position.Z
-                local m1  = math.sqrt(v1x*v1x + v1z*v1z)
-                local m2  = math.sqrt(v2x*v2x + v2z*v2z)
-                if m1 > 0.01 and m2 > 0.01 then
-                    local cosA = (v1x*v2x + v1z*v2z) / (m1 * m2)
-                    if cosA > 0.85 then
-                        reachR = 2.5      -- nearly straight: glide
-                    elseif cosA > 0.5 then
-                        reachR = 1.7      -- gentle turn
-                    else
-                        reachR = 1.0      -- sharp turn: be crisp
-                    end
-                else
-                    reachR = 1.5
-                end
-            end
-            local reachR2 = reachR * reachR
-            local waited = 0
-            while waited < autoStepDelay and autoActive do
-                local dx = hrp.Position.X - wp.Position.X
-                local dz = hrp.Position.Z - wp.Position.Z
-                if (dx*dx + dz*dz) < reachR2 then break end
-                RunService.Heartbeat:Wait()
-                waited = waited + (1/60)
-            end
         end
         return true
     end
@@ -8073,249 +7915,220 @@ F.games.bms = (function()
         end
     end
 
-    -- ====================================================================
-    -- makePlan() - one synchronous tick of "what should the bot do next?".
-    -- Handles flag-firing AND target picking AND PF compute. Returns a
-    -- job (a table describing one walk) or nil if nothing to do.
-    --
-    -- Pick rule: ALWAYS the nearest covered-deduced-safe tile by
-    -- Euclidean distance to the player. If the nearest isn't reachable
-    -- via BFS, try the next nearest, etc. No locked-target debounce -
-    -- user explicitly asked for "always nearest".
-    --
-    -- This is called both synchronously (when there's no pre-planned
-    -- job ready) and from inside a coroutine spawned in parallel with
-    -- the current walk (so the next plan is ready before the current
-    -- walk ends - the source of the "no stops" behaviour).
-    -- ====================================================================
-    local function makePlan()
-        local parts = getParts()
-        if not parts then return nil end
-        local all = parts:GetChildren()
-        ensureNeighbors(all)
-        local state = {}
-        for _, t in ipairs(all) do state[t] = tileState(t) end
-        local mines, safes, falseFlags, probs, fiftyPairs = deduce(all, state)
-        falseFlags = falseFlags or {}
-        probs      = probs or {}
-        fiftyPairs = fiftyPairs or {}
-
-        local origin = myPos()
-        local token  = getgenv()._BMS_TOKEN
-        local remote = getPlaceFlag()
-        local now    = tick()
-
-        -- FLAG: closest unflagged deduced mine (or false-flag to remove)
-        -- if the cooldown has elapsed. Non-blocking - we just FireServer
-        -- and move on, no wait. The walk happens regardless.
-        if token and remote and (now - lastFlagAt) >= flagDelayMin then
-            local fb, fbD2 = nil, math.huge
-            for t in pairs(mines) do
-                if state[t] ~= "flagged" and inAimCone(t) then
-                    local dx = t.Position.X - origin.X
-                    local dz = t.Position.Z - origin.Z
-                    local d2 = dx*dx + dz*dz
-                    if d2 < fbD2 then fb, fbD2 = t, d2 end
-                end
-            end
-            for t in pairs(falseFlags) do
-                if inAimCone(t) then
-                    local dx = t.Position.X - origin.X
-                    local dz = t.Position.Z - origin.Z
-                    local d2 = dx*dx + dz*dz
-                    if d2 < fbD2 then fb, fbD2 = t, d2 end
-                end
-            end
-            if fb then
-                if not flagMissRoll() then
-                    pcall(function() remote:FireServer(fb, token, true) end)
-                end
-                lastFlagAt = now + flagDelayRoll() - flagDelayMin
-            end
-        end
-
-        local startTile = findCurrentTile(all, origin)
-        if not startTile then return nil end
-
-        -- PICK: nearest covered-deduced-safe that's BFS-reachable.
-        -- Sort candidates by raw Euclidean d^2 to player, then walk
-        -- the list trying BFS reach in order. First reachable wins.
-        local candidates = {}
-        for s in pairs(safes) do
-            if state[s] == "covered" then
-                local dx = s.Position.X - origin.X
-                local dz = s.Position.Z - origin.Z
-                table.insert(candidates, { tile = s, d2 = dx*dx + dz*dz })
-            end
-        end
-        table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
-
-        local pick, bfsTiles
-        for _, c in ipairs(candidates) do
-            if not autoActive then return nil end
-            local p = bfsPath(startTile, c.tile, state, mines, falseFlags)
-            if p and #p > 0 then
-                pick     = c.tile
-                bfsTiles = p
-                break
-            end
-        end
-
-        -- GUESS FALLBACK: no certain safes. If autoGuess is on, try
-        -- a 50/50 pair or lowest-prob covered tile.
-        if not pick and autoGuess then
-            for _, pair in ipairs(fiftyPairs) do
-                local a, b = pair[1], pair[2]
-                if a.Parent and b.Parent
-                   and state[a] == "covered" and state[b] == "covered" then
-                    local pA = bfsPath(startTile, a, state, mines, falseFlags)
-                    local pB = bfsPath(startTile, b, state, mines, falseFlags)
-                    local walkT, flagT, ptiles
-                    if pA then walkT, flagT, ptiles = a, b, pA
-                    elseif pB then walkT, flagT, ptiles = b, a, pB end
-                    if walkT and token and remote then
-                        pcall(function() remote:FireServer(flagT, token, true) end)
-                        lastFlagAt = tick()
-                        pick     = walkT
-                        bfsTiles = ptiles
-                        break
-                    end
-                end
-            end
-            if not pick then
-                local guesses = {}
-                for tile, p in pairs(probs) do
-                    if state[tile] == "covered" and p <= 0.55 then
-                        table.insert(guesses, { tile = tile, p = p })
-                    end
-                end
-                table.sort(guesses, function(a, b) return a.p < b.p end)
-                for _, g in ipairs(guesses) do
-                    local p = bfsPath(startTile, g.tile, state, mines, falseFlags)
-                    if p and #p > 0 then
-                        pick     = g.tile
-                        bfsTiles = p
-                        break
-                    end
-                end
-            end
-        end
-
-        if not pick then return nil end
-
-        -- COMPUTE PF PATH. Update the modifier labels first (cheap -
-        -- only changed tiles get rewritten), then ComputeAsync.
-        updatePfModifiers(all, state, mines, safes)
-        local hrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
-        local startPos = hrp and hrp.Position or origin
-        local goalPos  = pick.Position + Vector3.new(0, pick.Size.Y * 0.5 + 3, 0)
-        local pfWp = computePfPath(startPos, goalPos)
-        if pfWp and #pfWp >= 2 then
-            return { kind = "pf", waypoints = pfWp, tile = pick, mines = mines }
-        end
-        -- PF failed - fall back to BFS waypoints (less precise but still
-        -- safe via the cardinal-only rule).
-        return {
-            kind      = "bfs",
-            tiles     = bfsTiles,
-            tile      = pick,
-            startTile = startTile,
-            mines     = mines,
-        }
-    end
-
-    -- Walk one job. Synchronous - returns when the walk finishes (or is
-    -- aborted by autoActive going false).
-    local function walkJob(job)
-        if not job then return end
-        if job.kind == "pf" then
-            local poss = {}
-            for _, w in ipairs(job.waypoints) do
-                table.insert(poss, w.Position + Vector3.new(0, 0.6, 0))
-            end
-            drawPathPreviewPositions(poss)
-            walkPfWaypoints(job.waypoints)
-        elseif job.kind == "bfs" then
-            local seq = job.tiles
-            drawPathPreview({ job.startTile, table.unpack(seq) })
-            local lastIdx = #seq
-            for stepIdx, step in ipairs(seq) do
-                if not autoActive then return end
-                local s = tileState(step)
-                if stepIdx < lastIdx then
-                    if s == "flagged" then
-                        -- ok, flag protects
-                    elseif s ~= "revealed" or (job.mines and job.mines[step]) then
-                        return
-                    end
-                else
-                    if job.mines and job.mines[step] then return end
-                end
-                walkTo(step, seq[stepIdx + 1])
-            end
-        end
-    end
-
     local function autoPlayStart()
         if autoActive then return end
         autoActive = true
         setFollowCam(true)
         if autoThread then pcall(task.cancel, autoThread) end
         lastFlagAt = 0  -- reset cooldown so a fresh autoplay session starts immediately
-
         autoThread = task.spawn(function()
-            -- The continuous-motion architecture:
-            --   currentJob - the job we're walking RIGHT NOW
-            --   plannedJob - the NEXT job, computed in parallel by a
-            --                spawned coroutine while we walk currentJob
-            -- When the current walk finishes, we swap plannedJob into
-            -- currentJob immediately and start walking - no
-            -- deduce/ComputeAsync delay between targets, no stops.
-            local currentJob = nil
-            local plannedJob = nil
-
             while autoActive do
-                -- ensure we have a job to walk
-                if not currentJob then
-                    if plannedJob then
-                        currentJob = plannedJob
-                        plannedJob = nil
-                    else
-                        currentJob = makePlan()
+                local parts = getParts()
+                if not parts then task.wait(0.3); continue end
+                local all = parts:GetChildren()
+                ensureNeighbors(all)
+                local state = {}
+                for _, t in ipairs(all) do state[t] = tileState(t) end
+                local mines, safes, falseFlags, probs, fiftyPairs = deduce(all, state)
+                falseFlags = falseFlags or {}
+                probs      = probs or {}
+                fiftyPairs = fiftyPairs or {}
+                local origin  = myPos()
+                -- (a) flag closest unflagged deduced mine if cooldown elapsed
+                local token  = getgenv()._BMS_TOKEN
+                local remote = getPlaceFlag()
+                local now    = tick()
+                if token and remote and (now - lastFlagAt) >= flagDelayMin then
+                    -- Auto-play flagging is UNBOUNDED across the whole
+                    -- map (no rangeSq check). Aim cone still applies if
+                    -- it's enabled. Standalone Legit auto-flag still
+                    -- respects its range slider.
+                    --
+                    -- Candidates include BOTH:
+                    --   * unflagged deduced mines (PlaceFlag adds the flag)
+                    --   * false-flagged tiles (PlaceFlag on an already-
+                    --     flagged tile removes it - the remote toggles)
+                    -- Picking the closest to player from the combined
+                    -- set means we'll alternate between adding correct
+                    -- flags and yanking wrong ones, whichever is nearest.
+                    local best, bestD2 = nil, math.huge
+                    for t in pairs(mines) do
+                        if state[t] ~= "flagged" and inAimCone(t) then
+                            local dx = t.Position.X - origin.X
+                            local dz = t.Position.Z - origin.Z
+                            local d2 = dx*dx + dz*dz
+                            if d2 < bestD2 then best, bestD2 = t, d2 end
+                        end
                     end
-                    if not currentJob then
-                        task.wait(0.1)  -- nothing to do this tick
+                    for t in pairs(falseFlags) do
+                        if inAimCone(t) then
+                            local dx = t.Position.X - origin.X
+                            local dz = t.Position.Z - origin.Z
+                            local d2 = dx*dx + dz*dz
+                            if d2 < bestD2 then best, bestD2 = t, d2 end
+                        end
+                    end
+                    if best then
+                        if not flagMissRoll() then
+                            pcall(function() remote:FireServer(best, token, true) end)
+                        end
+                        lastFlagAt = now + flagDelayRoll() - flagDelayMin
+                        task.wait(0.1)
                         continue
                     end
                 end
-
-                -- start the planner for the NEXT job, in parallel
-                -- with the upcoming walk. Wait for the current goal to
-                -- reveal (so the next deduce sees the new state) then
-                -- call makePlan. By the time the current walk ends,
-                -- plannedJob should be ready.
-                plannedJob = nil
-                local plannerGoal = currentJob.tile
-                task.spawn(function()
-                    local waited = 0
-                    while autoActive and waited < 5 do
-                        if not plannerGoal.Parent then break end
-                        if tileState(plannerGoal) ~= "covered" then break end
-                        task.wait(0.05)
-                        waited = waited + 0.05
+                -- (b) walk to nearest REACHABLE deduced-safe tile
+                local startTile = findCurrentTile(all, origin)
+                if startTile then
+                    -- Pick the tile to walk to. If we just chose a target
+                    -- recently (within autoTargetDebounce) AND it's still
+                    -- a valid covered deduced-safe AND still reachable,
+                    -- STICK with it - prevents target jitter when new
+                    -- deductions shuffle the candidate list mid-walk.
+                    local nowTick = tick()
+                    local pick    = nil
+                    if _lastWalkTarget and _lastWalkTarget.Parent
+                       and (nowTick - _lastWalkTargetAt) < autoTargetDebounce
+                       and state[_lastWalkTarget] == "covered"
+                       and safes[_lastWalkTarget]
+                       and not mines[_lastWalkTarget] then
+                        local p = bfsPath(startTile, _lastWalkTarget, state, mines, falseFlags)
+                        if p and #p > 0 then pick = _lastWalkTarget end
                     end
-                    if autoActive then
-                        plannedJob = makePlan()
+                    -- No locked target (or it became invalid) - pick fresh
+                    -- from the full board, sorted by distance.
+                    if not pick then
+                        local candidates = {}
+                        for s in pairs(safes) do
+                            if state[s] == "covered" then
+                                local dx = s.Position.X - origin.X
+                                local dz = s.Position.Z - origin.Z
+                                table.insert(candidates, { tile = s, d2 = dx*dx + dz*dz })
+                            end
+                        end
+                        table.sort(candidates, function(a, b) return a.d2 < b.d2 end)
+                        for _, c in ipairs(candidates) do
+                            if not autoActive then break end
+                            local p = bfsPath(startTile, c.tile, state, mines, falseFlags)
+                            if p and #p > 0 then
+                                pick = c.tile
+                                _lastWalkTarget   = pick
+                                _lastWalkTargetAt = nowTick
+                                break
+                            end
+                        end
                     end
-                end)
-
-                walkJob(currentJob)
-                currentJob = nil
-                -- loop iterates: plannedJob is (usually) ready already
+                    local walked = false
+                    if pick then
+                        local path = bfsPath(startTile, pick, state, mines, falseFlags)
+                        if path and #path > 0 then
+                            drawPathPreview({ startTile, table.unpack(path) })
+                            local lastIdx = #path
+                            for stepIdx, step in ipairs(path) do
+                                if not autoActive then break end
+                                local s = tileState(step)
+                                if stepIdx < lastIdx then
+                                    if s == "flagged" then
+                                        -- ok, flag protects
+                                    elseif s ~= "revealed" or mines[step] then
+                                        break
+                                    end
+                                else
+                                    if mines[step] then break end
+                                end
+                                walkTo(step)
+                            end
+                            walked = true
+                        end
+                    end
+                    if not walked then hidePathSegments() end
+                    -- GUESS FALLBACK: we got here without walking a safe
+                    -- AND the flag step above didn't fire (it would have
+                    -- `continue`d the loop). So nothing useful happened
+                    -- this tick - if guess mode is on, walk to the
+                    -- lowest-probability covered tile we have prob info
+                    -- on (cap at p <= 0.55 so we never deliberately step
+                    -- onto worse-than-coinflip).
+                    if not walked and autoGuess and startTile then
+                        -- Priority 1: explicit 50/50 pair handling.
+                        -- For a (a,b) pair with exactly 1 mine between
+                        -- them, flag one + walk the other in the same
+                        -- tick. The walked tile reveals safely if our
+                        -- pick was right; if wrong, we die anyway. Same
+                        -- 50% outcome as just walking one, BUT we also
+                        -- correctly mark the other tile if we live.
+                        for _, pair in ipairs(fiftyPairs) do
+                            if not autoActive then break end
+                            local a, b = pair[1], pair[2]
+                            if not a.Parent or not b.Parent then continue end
+                            if state[a] ~= "covered" or state[b] ~= "covered" then continue end
+                            local pathA = bfsPath(startTile, a, state, mines, falseFlags)
+                            local pathB = bfsPath(startTile, b, state, mines, falseFlags)
+                            local walkTile, flagTile, path
+                            if pathA then walkTile, flagTile, path = a, b, pathA
+                            elseif pathB then walkTile, flagTile, path = b, a, pathB
+                            end
+                            if walkTile and token and remote then
+                                pcall(function() remote:FireServer(flagTile, token, true) end)
+                                lastFlagAt = tick()
+                                drawPathPreview({ startTile, table.unpack(path) })
+                                for stepIdx, step in ipairs(path) do
+                                    if not autoActive then break end
+                                    local s = tileState(step)
+                                    if stepIdx < #path then
+                                        if s == "flagged" then
+                                            -- ok
+                                        elseif s ~= "revealed" or mines[step] then
+                                            break
+                                        end
+                                    end
+                                    walkTo(step)
+                                end
+                                walked = true
+                                break
+                            end
+                        end
+                        -- Priority 2: lowest-prob covered tile walk.
+                        -- For tiles outside any 50/50 pair (e.g. 3-tile
+                        -- group with prob ~0.33 each).
+                        if not walked then
+                            local guesses = {}
+                            for tile, p in pairs(probs) do
+                                if state[tile] == "covered" and p <= 0.55 then
+                                    table.insert(guesses, { tile = tile, p = p })
+                                end
+                            end
+                            table.sort(guesses, function(a, b) return a.p < b.p end)
+                            for _, g in ipairs(guesses) do
+                                if not autoActive then break end
+                                local path = bfsPath(startTile, g.tile, state, mines, falseFlags)
+                                if path and #path > 0 then
+                                    drawPathPreview({ startTile, table.unpack(path) })
+                                    for stepIdx, step in ipairs(path) do
+                                        if not autoActive then break end
+                                        local s = tileState(step)
+                                        if stepIdx < #path then
+                                            if s == "flagged" then
+                                                -- ok
+                                            elseif s ~= "revealed" or mines[step] then
+                                                break
+                                            end
+                                        end
+                                        walkTo(step)
+                                    end
+                                    walked = true
+                                    break
+                                end
+                            end
+                        end
+                    end
+                    if not walked then task.wait(0.3) end
+                else
+                    task.wait(0.3)
+                end
             end
         end)
     end
-
 
     local function autoPlayStop()
         autoActive = false
