@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.19.0"
+local SCRIPT_VERSION = "v1.19.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7520,6 +7520,10 @@ F.games.bms = (function()
     local flagMissChance = 0   -- 0..100 percent
     local flagRange     = 60
     local flagThread
+    -- module-scope so the setters can RESET it. Setting a new delay
+    -- value now takes effect immediately instead of waiting for the
+    -- OLD cooldown to elapse first.
+    local lastFlagAt = 0
 
     local function flagDelayRoll()
         if flagDelayMin >= flagDelayMax then return flagDelayMin end
@@ -7887,8 +7891,8 @@ F.games.bms = (function()
         autoActive = true
         setFollowCam(true)
         if autoThread then pcall(task.cancel, autoThread) end
+        lastFlagAt = 0  -- reset cooldown so a fresh autoplay session starts immediately
         autoThread = task.spawn(function()
-            local lastFlagAt = 0
             while autoActive do
                 local parts = getParts()
                 if not parts then task.wait(0.3); continue end
@@ -8133,8 +8137,11 @@ F.games.bms = (function()
             start    = legitFlagStart,
             stop     = legitFlagStop,
             isActive = function() return flagActive end,
-            setDelayMin   = function(n) flagDelayMin   = math.clamp(tonumber(n) or 0.6, 0.05, 10) end,
-            setDelayMax   = function(n) flagDelayMax   = math.clamp(tonumber(n) or 1.4, 0.05, 10) end,
+            -- Setters reset lastFlagAt so the new value takes effect on
+            -- the very next tick instead of waiting for the OLD cooldown
+            -- to elapse. That was the 'settings don't feel live' issue.
+            setDelayMin   = function(n) flagDelayMin   = math.clamp(tonumber(n) or 0.6, 0.05, 10); lastFlagAt = 0 end,
+            setDelayMax   = function(n) flagDelayMax   = math.clamp(tonumber(n) or 1.4, 0.05, 10); lastFlagAt = 0 end,
             setMissChance = function(n) flagMissChance = math.clamp(tonumber(n) or 0,   0,    100) end,
             setRange      = function(n) flagRange = math.clamp(tonumber(n) or 60, 5, 500) end,
             setAimCone    = function(v) flagAimCone = v == true end,
