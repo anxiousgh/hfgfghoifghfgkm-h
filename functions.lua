@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.18.0"
+local SCRIPT_VERSION = "v1.18.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7801,43 +7801,27 @@ F.games.bms = (function()
         return true
     end
 
-    -- Scriptable top-down-ish camera. Locks the camera to a position
-    -- above + slightly behind the character, looking down at a small
-    -- pitch so the user can see the board layout + the bot's path.
-    -- Switches CameraType back to Custom on stop.
-    local _camTypeBefore  = nil
-    local _camHeight      = 22   -- studs above character
-    local _camBehind      = 12   -- studs behind facing direction
-    local _camAimLift     = 3    -- aim point lifted above character so the camera tilts down (not straight down)
-    local _camConn        = nil
-
+    -- Switch Roblox's Computer camera movement mode to Follow while
+    -- auto-play is active. Follow makes the camera rotate to follow
+    -- the character's facing direction; the user can still freely
+    -- pan/tilt with the mouse. Restored on stop.
+    local _camModeBefore = nil
     local function setFollowCam(enable)
-        local cam = workspace.CurrentCamera
-        if not cam then return end
+        local ok, ugs = pcall(function()
+            return UserSettings():GetService("UserGameSettings")
+        end)
+        if not ok or not ugs then return end
         if enable then
-            if _camTypeBefore == nil then _camTypeBefore = cam.CameraType end
-            pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
-            if _camConn then _camConn:Disconnect() end
-            _camConn = RunService.RenderStepped:Connect(function()
-                if not autoActive then return end
-                local c = lplr.Character
-                local hrp = c and c:FindFirstChild("HumanoidRootPart")
-                if not hrp then return end
-                local hrpCF  = hrp.CFrame
-                local back   = -hrpCF.LookVector
-                -- horizontal-only "behind" vector so the camera height
-                -- doesn't move with the character's pitch
-                back = Vector3.new(back.X, 0, back.Z)
-                if back.Magnitude < 0.01 then back = Vector3.new(0, 0, 1) else back = back.Unit end
-                local camPos = hrp.Position + back * _camBehind + Vector3.new(0, _camHeight, 0)
-                local aimAt  = hrp.Position + Vector3.new(0, _camAimLift, 0)
-                pcall(function() cam.CFrame = CFrame.new(camPos, aimAt) end)
+            if _camModeBefore == nil then
+                _camModeBefore = ugs.ComputerCameraMovementMode
+            end
+            pcall(function()
+                ugs.ComputerCameraMovementMode = Enum.ComputerCameraMovementMode.Follow
             end)
         else
-            if _camConn then _camConn:Disconnect(); _camConn = nil end
-            if _camTypeBefore then
-                pcall(function() cam.CameraType = _camTypeBefore end)
-                _camTypeBefore = nil
+            if _camModeBefore ~= nil then
+                pcall(function() ugs.ComputerCameraMovementMode = _camModeBefore end)
+                _camModeBefore = nil
             end
         end
     end
