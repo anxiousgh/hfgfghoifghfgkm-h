@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.17.1"
+local SCRIPT_VERSION = "v1.17.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7761,9 +7761,36 @@ F.games.bms = (function()
         return true
     end
 
+    -- Save/restore Roblox's Follow camera mode so the camera tracks the
+    -- character as it auto-walks. Without this the camera stays where
+    -- the user pointed it last and the bot can walk off-screen.
+    local _camModeBefore = nil
+    local function setFollowCam(enable)
+        local ok, ugs = pcall(function()
+            return UserSettings():GetService("UserGameSettings")
+        end)
+        if not ok or not ugs then return end
+        if enable then
+            if _camModeBefore == nil then
+                _camModeBefore = ugs.ComputerCameraMovementMode
+            end
+            pcall(function()
+                ugs.ComputerCameraMovementMode = Enum.ComputerCameraMovementMode.Follow
+            end)
+        else
+            if _camModeBefore ~= nil then
+                pcall(function()
+                    ugs.ComputerCameraMovementMode = _camModeBefore
+                end)
+                _camModeBefore = nil
+            end
+        end
+    end
+
     local function autoPlayStart()
         if autoActive then return end
         autoActive = true
+        setFollowCam(true)
         if autoThread then pcall(task.cancel, autoThread) end
         autoThread = task.spawn(function()
             local lastFlagAt = 0
@@ -7971,6 +7998,7 @@ F.games.bms = (function()
         autoActive = false
         if autoThread then pcall(task.cancel, autoThread); autoThread = nil end
         clearPathPreview()
+        setFollowCam(false)
     end
 
     return {
