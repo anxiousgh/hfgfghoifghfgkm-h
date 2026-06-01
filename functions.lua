@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.16.0"
+local SCRIPT_VERSION = "v1.16.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7376,6 +7376,18 @@ F.games.bms = (function()
     local WARN_COLOR  = Color3.fromRGB(255, 220, 0)
     local FIFTY_COLOR = Color3.fromRGB(60,  140, 255)
     local espShowFifties = true
+    local espHeatmap     = false  -- color every covered tile by mine probability
+
+    -- gradient 0% -> 50% -> 100% maps to green -> yellow -> red
+    local function probToColor(p)
+        if p <= 0.5 then
+            local t = p / 0.5  -- 0..1
+            return Color3.new(t, 1, 0)  -- green (0,1,0) -> yellow (1,1,0)
+        else
+            local t = (p - 0.5) / 0.5  -- 0..1
+            return Color3.new(1, 1 - t, 0)  -- yellow (1,1,0) -> red (1,0,0)
+        end
+    end
 
     -- Per-tick cache so we only re-deduce when state actually changed.
     -- Cheap signature: count of covered/revealed/flagged. If counts
@@ -7460,6 +7472,20 @@ F.games.bms = (function()
                         seen[t] = true
                         setColor(t, FIFTY_COLOR)
                     end
+                end
+            end
+        end
+        -- Heatmap: paint every uncertain covered tile by its mine prob
+        -- (0% green -> 50% yellow -> 100% red). Tank solver only knows
+        -- prob for tiles in small (<=14 unknowns) connected components;
+        -- larger components don't get heatmapped. Definitely-mine and
+        -- definitely-safe tiles are NOT in probs (deduce prunes them)
+        -- so they keep their solid red/green from above.
+        if espHeatmap and probs then
+            for t, p in pairs(probs) do
+                if not seen[t] and inRange(t, origin, rangeSq) then
+                    seen[t] = true
+                    setColor(t, probToColor(p))
                 end
             end
         end
@@ -7886,6 +7912,7 @@ F.games.bms = (function()
             setShowSafes     = function(v) espShowSafes     = v == true end,
             setShowWarnings  = function(v) espShowWarnings  = v == true end,
             setShowFifties   = function(v) espShowFifties   = v == true end,
+            setHeatmap       = function(v) espHeatmap       = v == true end,
             setMineColor     = function(c) if typeof(c) == "Color3" then MINE_COLOR  = c end end,
             setSafeColor     = function(c) if typeof(c) == "Color3" then SAFE_COLOR  = c end end,
             setWarnColor     = function(c) if typeof(c) == "Color3" then WARN_COLOR  = c end end,

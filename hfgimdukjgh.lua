@@ -2259,6 +2259,10 @@ do
             Default = true,
             Callback = function(v) F.games.bms.esp.setShowFifties(v) end,
         })
+        BMS:AddToggle("BMSEspHeatmap", { Text = "Heatmap (probability gradient)",
+            Default = false,
+            Callback = function(v) F.games.bms.esp.setHeatmap(v) end,
+        })
         BMS:AddLabel("Mine color"):AddColorPicker("BMSEspMineColor", {
             Default = F.games.bms.esp.getMineColor(), Title = "Mine color",
             Callback = F.games.bms.esp.setMineColor,
