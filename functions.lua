@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.0"
+local SCRIPT_VERSION = "v1.21.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7692,12 +7692,11 @@ F.games.bms = (function()
             AgentRadius     = 3.5,
             AgentHeight     = 5,
             AgentCanJump    = false,
-            -- WaypointSpacing bumped down 2 -> 1: denser waypoints
-            -- so the straight-line MoveTo between consecutive
-            -- waypoints follows the navmesh route tightly. With
-            -- 2-stud spacing the straight line could drift off
-            -- the safe route on curves.
-            WaypointSpacing = 1,
+            -- WaypointSpacing 2.5: not so dense the character is
+            -- constantly retargeting (looks robotic), but tight
+            -- enough that straight-line MoveTo segments don't
+            -- drift off the safe navmesh on curves.
+            WaypointSpacing = 2.5,
             Costs = {
                 BMS_Avoid = math.huge,
                 BMS_Safe  = 1,
@@ -7873,18 +7872,50 @@ F.games.bms = (function()
     end
 
     -- Pure MoveTo walk. No CFrame snap.
-    local function walkTo(tile)
+    --
+    -- nextTile (optional) - the tile after this one in the path. Used
+    -- to widen the reach threshold on straight runs (cardinal BFS
+    -- often has multiple cardinal-aligned tiles in a row), so the
+    -- character keeps moving instead of decelerating to tile-center.
+    local function walkTo(tile, nextTile)
         local c = lplr.Character
         local hum = c and c:FindFirstChildOfClass("Humanoid")
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
         local goalPos = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
         pcall(function() hum:MoveTo(goalPos) end)
+
+        local reachR
+        if not nextTile then
+            reachR = 0.6  -- final tile: precise
+        else
+            local v1x = tile.Position.X - hrp.Position.X
+            local v1z = tile.Position.Z - hrp.Position.Z
+            local v2x = nextTile.Position.X - tile.Position.X
+            local v2z = nextTile.Position.Z - tile.Position.Z
+            local m1  = math.sqrt(v1x*v1x + v1z*v1z)
+            local m2  = math.sqrt(v2x*v2x + v2z*v2z)
+            if m1 > 0.01 and m2 > 0.01 then
+                local cosA = (v1x*v2x + v1z*v2z) / (m1 * m2)
+                if cosA > 0.85 then
+                    -- straight continuation: glide through at ~40%
+                    -- of tile width away from center
+                    reachR = math.max(1.5, tile.Size.X * 0.4)
+                elseif cosA > 0.5 then
+                    reachR = math.max(1.2, tile.Size.X * 0.3)
+                else
+                    reachR = 0.6  -- 90deg cardinal turn: stop close
+                end
+            else
+                reachR = 1.0
+            end
+        end
+        local reachR2 = reachR * reachR
         local waited = 0
         while waited < autoStepDelay and autoActive do
             local dx = hrp.Position.X - goalPos.X
             local dz = hrp.Position.Z - goalPos.Z
-            if (dx*dx + dz*dz) < 0.36 then return true end
+            if (dx*dx + dz*dz) < reachR2 then return true end
             RunService.Heartbeat:Wait()
             waited = waited + (1/60)
         end
@@ -7892,19 +7923,20 @@ F.games.bms = (function()
     end
 
     -- Walk a sequence of PathfindingService waypoints. The path was
-    -- computed with BMS_Avoid = math.huge AND AgentRadius=3.5, so
-    -- every waypoint is on safe ground AND ~3.5 studs clear of any
-    -- avoid-tile boundary - no body brushing possible.
+    -- computed with BMS_Avoid=math.huge AND AgentRadius=3.5, so every
+    -- waypoint is on safe ground AND >=3.5 studs clear of any
+    -- avoid-tile boundary.
     --
-    -- IMPORTANT: no brake at the end. We want the autoplay loop to
-    -- flow directly into the next target without the character ever
-    -- coming to a full stop. MoveTo's natural deceleration handles
-    -- positional precision; explicit Move(0) just inserts a beat of
-    -- idle time the user complained about.
-    --
-    -- Early exit: stop walking the remaining waypoints if we get
-    -- close enough to the FINAL waypoint already (within reach
-    -- threshold). This handles smoothing waypoints that overshoot.
+    -- Human-feel: the reach threshold for each waypoint depends on
+    -- the angle to the NEXT waypoint:
+    --   nearly-straight continuation -> wide threshold (~2.5 studs)
+    --     so the character GLIDES through without slowing down. This
+    --     was the "robotic" symptom - the old fixed 1-stud threshold
+    --     meant the humanoid decelerated to a precise stop at every
+    --     1-stud waypoint, even on dead-straight stretches.
+    --   moderate turn -> medium threshold so the pivot is smooth
+    --   sharp turn / final waypoint -> tight threshold so the corner
+    --     is crisp and the character actually arrives at the goal
     local function walkPfWaypoints(waypoints)
         if not waypoints or #waypoints < 2 then return false end
         local finalWp = waypoints[#waypoints]
@@ -7918,13 +7950,40 @@ F.games.bms = (function()
             -- already at the goal area? skip remaining waypoints
             local fdx = hrp.Position.X - finalWp.Position.X
             local fdz = hrp.Position.Z - finalWp.Position.Z
-            if (fdx*fdx + fdz*fdz) < 1.0 then return true end
+            if (fdx*fdx + fdz*fdz) < 1.5 then return true end
             pcall(function() hum:MoveTo(wp.Position) end)
+
+            -- compute reach threshold based on turn angle to next wp
+            local reachR
+            if i == #waypoints then
+                reachR = 1.0  -- final: precise landing
+            else
+                local nextWp = waypoints[i + 1]
+                local v1x = wp.Position.X - hrp.Position.X
+                local v1z = wp.Position.Z - hrp.Position.Z
+                local v2x = nextWp.Position.X - wp.Position.X
+                local v2z = nextWp.Position.Z - wp.Position.Z
+                local m1  = math.sqrt(v1x*v1x + v1z*v1z)
+                local m2  = math.sqrt(v2x*v2x + v2z*v2z)
+                if m1 > 0.01 and m2 > 0.01 then
+                    local cosA = (v1x*v2x + v1z*v2z) / (m1 * m2)
+                    if cosA > 0.85 then
+                        reachR = 2.5      -- nearly straight: glide
+                    elseif cosA > 0.5 then
+                        reachR = 1.7      -- gentle turn
+                    else
+                        reachR = 1.0      -- sharp turn: be crisp
+                    end
+                else
+                    reachR = 1.5
+                end
+            end
+            local reachR2 = reachR * reachR
             local waited = 0
             while waited < autoStepDelay and autoActive do
                 local dx = hrp.Position.X - wp.Position.X
                 local dz = hrp.Position.Z - wp.Position.Z
-                if (dx*dx + dz*dz) < 1.0 then break end
+                if (dx*dx + dz*dz) < reachR2 then break end
                 RunService.Heartbeat:Wait()
                 waited = waited + (1/60)
             end
@@ -8192,7 +8251,7 @@ F.games.bms = (function()
                 else
                     if job.mines and job.mines[step] then return end
                 end
-                walkTo(step)
+                walkTo(step, seq[stepIdx + 1])
             end
         end
     end
