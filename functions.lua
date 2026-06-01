@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.19.3"
+local SCRIPT_VERSION = "v1.20.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7808,13 +7808,8 @@ F.games.bms = (function()
         return nil
     end
 
-    -- Pure MoveTo walk. No CFrame snap (that's what felt teleporty).
-    -- Tighter arrival check than v1.13.4: instead of MoveToFinished
-    -- (which fires even when the humanoid gave up off-center), poll
-    -- XZ distance to the tile center and only proceed to the next
-    -- step when we're actually centered within 0.6 studs. This stops
-    -- drift from compounding across multi-step paths without any
-    -- teleport-like correction.
+    -- walkTo single tile: MoveTo + poll-until-close timeout. Used for
+    -- the FINAL step of a path (last tile, often a covered safe).
     local function walkTo(tile)
         local c = lplr.Character
         local hum = c and c:FindFirstChildOfClass("Humanoid")
@@ -7826,11 +7821,74 @@ F.games.bms = (function()
         while waited < autoStepDelay and autoActive do
             local dx = hrp.Position.X - goalPos.X
             local dz = hrp.Position.Z - goalPos.Z
-            if (dx*dx + dz*dz) < 0.36 then return true end  -- within 0.6 studs of center
+            if (dx*dx + dz*dz) < 0.36 then return true end
             RunService.Heartbeat:Wait()
             waited = waited + (1/60)
         end
         return true
+    end
+
+    -- walkPath: smooth-walk a list of tiles by batching consecutive
+    -- same-direction tiles into one MoveTo so straight runs DON'T
+    -- pause at each tile center (which was the robot-feeling stop-
+    -- and-go). Only stops at direction changes + the final tile.
+    --
+    -- safeCheck(stepIdx, tile) -> bool. Per-step safety re-check; if
+    -- it returns false the walk aborts and the caller's outer loop
+    -- recomputes the path on the next tick.
+    local function walkPath(startTile, path, safeCheck)
+        if #path == 0 then return end
+        local prev = startTile
+        local i = 1
+        while i <= #path and autoActive do
+            -- find the furthest tile in the path that's still in the
+            -- same cardinal/diagonal direction as path[i] from prev
+            local segEnd = i
+            while segEnd < #path do
+                local a = (segEnd == i) and prev or path[segEnd - 1]
+                local b = path[segEnd]
+                local c = path[segEnd + 1]
+                local d1x = b.Position.X - a.Position.X
+                local d1z = b.Position.Z - a.Position.Z
+                local d2x = c.Position.X - b.Position.X
+                local d2z = c.Position.Z - b.Position.Z
+                -- same direction iff signed dx and dz match
+                if math.sign(d1x) ~= math.sign(d2x) or math.sign(d1z) ~= math.sign(d2z) then
+                    break
+                end
+                segEnd = segEnd + 1
+            end
+            -- safety re-check every tile in the segment
+            local segOk = true
+            for k = i, segEnd do
+                if not safeCheck(k, path[k]) then segOk = false; break end
+            end
+            if not segOk then return end
+            -- MoveTo the segment's end tile in one go - character
+            -- walks continuously through all intermediate tiles
+            local tile = path[segEnd]
+            local c    = lplr.Character
+            local hum  = c and c:FindFirstChildOfClass("Humanoid")
+            local hrp  = c and c:FindFirstChild("HumanoidRootPart")
+            if not hum or not hrp then return end
+            local goal = tile.Position
+                + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
+            pcall(function() hum:MoveTo(goal) end)
+            -- timeout scales with segment length: ~16 studs/sec walkspeed +
+            -- per-step buffer
+            local segLen  = (goal - hrp.Position).Magnitude
+            local maxWait = math.max(autoStepDelay, segLen / 12 + 0.3)
+            local waited  = 0
+            while waited < maxWait and autoActive do
+                local dx = hrp.Position.X - goal.X
+                local dz = hrp.Position.Z - goal.Z
+                if (dx*dx + dz*dz) < 0.5 then break end
+                RunService.Heartbeat:Wait()
+                waited = waited + (1/60)
+            end
+            prev = tile
+            i = segEnd + 1
+        end
     end
 
     -- Camera setup while auto-play is active:
@@ -7993,26 +8051,17 @@ F.games.bms = (function()
                     if pick then
                         local path = bfsPath(startTile, pick, state, mines, falseFlags)
                         if path and #path > 0 then
-                            -- prepend the current tile so the preview line
-                            -- starts at the player's feet, not at the next step
                             drawPathPreview({ startTile, table.unpack(path) })
                             local lastIdx = #path
-                            for stepIdx, step in ipairs(path) do
-                                if not autoActive then break end
+                            walkPath(startTile, path, function(stepIdx, step)
                                 local s = tileState(step)
                                 if stepIdx < lastIdx then
-                                    -- intermediate steps: flagged OR revealed (and not a deduced mine)
-                                    if s == "flagged" then
-                                        -- ok, flag protects
-                                    elseif s ~= "revealed" or mines[step] then
-                                        break
-                                    end
+                                    if s == "flagged" then return true end
+                                    return s == "revealed" and not mines[step]
                                 else
-                                    -- final step (the deduced-safe goal). Should still be covered.
-                                    if mines[step] then break end
+                                    return not mines[step]
                                 end
-                                walkTo(step)
-                            end
+                            end)
                             walked = true
                         end
                     end
@@ -8044,23 +8093,17 @@ F.games.bms = (function()
                             elseif pathB then walkTile, flagTile, path = b, a, pathB
                             end
                             if walkTile and token and remote then
-                                -- flag the partner first (so if walking
-                                -- onto a mine the flag still happened)
                                 pcall(function() remote:FireServer(flagTile, token, true) end)
                                 lastFlagAt = tick()
                                 drawPathPreview({ startTile, table.unpack(path) })
-                                for stepIdx, step in ipairs(path) do
-                                    if not autoActive then break end
+                                walkPath(startTile, path, function(stepIdx, step)
                                     local s = tileState(step)
                                     if stepIdx < #path then
-                                        if s == "flagged" then
-                                            -- ok
-                                        elseif s ~= "revealed" or mines[step] then
-                                            break
-                                        end
+                                        if s == "flagged" then return true end
+                                        return s == "revealed" and not mines[step]
                                     end
-                                    walkTo(step)
-                                end
+                                    return true
+                                end)
                                 walked = true
                                 break
                             end
@@ -8081,18 +8124,14 @@ F.games.bms = (function()
                                 local path = bfsPath(startTile, g.tile, state, mines, falseFlags)
                                 if path and #path > 0 then
                                     drawPathPreview({ startTile, table.unpack(path) })
-                                    for stepIdx, step in ipairs(path) do
-                                        if not autoActive then break end
+                                    walkPath(startTile, path, function(stepIdx, step)
                                         local s = tileState(step)
                                         if stepIdx < #path then
-                                            if s == "flagged" then
-                                                -- ok
-                                            elseif s ~= "revealed" or mines[step] then
-                                                break
-                                            end
+                                            if s == "flagged" then return true end
+                                            return s == "revealed" and not mines[step]
                                         end
-                                        walkTo(step)
-                                    end
+                                        return true
+                                    end)
                                     walked = true
                                     break
                                 end
