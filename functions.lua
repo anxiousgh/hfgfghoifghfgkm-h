@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.16.1"
+local SCRIPT_VERSION = "v1.16.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7373,7 +7373,7 @@ F.games.bms = (function()
     -- All ESP colors are user-settable via F.games.bms.esp.set*Color
     local MINE_COLOR  = Color3.fromRGB(255, 40,  40)
     local SAFE_COLOR  = Color3.fromRGB(40,  220, 80)
-    local WARN_COLOR  = Color3.fromRGB(255, 220, 0)
+    local WARN_COLOR  = Color3.fromRGB(255, 0,   200)  -- magenta: doesn't clash with heatmap green->yellow->red
     local FIFTY_COLOR = Color3.fromRGB(60,  140, 255)
     local espShowFifties = true
     local espHeatmap     = false  -- color every covered tile by mine probability
