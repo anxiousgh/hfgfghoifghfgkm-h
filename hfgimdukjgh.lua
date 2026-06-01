@@ -2355,6 +2355,15 @@ do
             Default = false,
             Callback = function(v) F.games.bms.autoPlay.setPathPreview(v) end,
         })
+        BMSAuto:AddToggle("BMSAutoCamTilt", { Text = "Camera tilt",
+            Default = true,
+            Callback = function(v) F.games.bms.autoPlay.setCamTilt(v) end,
+        })
+        BMSAuto:AddSlider("BMSAutoCamTiltAngle", {
+            Text = "Camera tilt angle",
+            Default = 60, Min = 0, Max = 90, Rounding = 0, Suffix = " deg",
+            Callback = function(v) F.games.bms.autoPlay.setCamTiltAngle(v) end,
+        })
         BMSAuto:AddLabel("Path color"):AddColorPicker("BMSAutoPathColor", {
             Default = F.games.bms.autoPlay.getPathPreviewColor(),
             Title = "Path preview color",

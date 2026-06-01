@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.1"
+local SCRIPT_VERSION = "v1.20.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7837,7 +7837,9 @@ F.games.bms = (function()
     --      state. The user can still mouse-look freely in between.
     local _camModeBefore = nil
     local _camTiltThread = nil
-    local _camTiltAngle  = math.rad(-60)  -- 60 degrees down (near top-down)
+    local _camCharConn   = nil
+    local _camTiltAngle  = math.rad(-60)  -- 60 degrees down (default)
+    local _camTiltOn     = true  -- whether the periodic tilt is enabled
 
     local function setFollowCam(enable)
         local ok, ugs = pcall(function()
@@ -7854,28 +7856,55 @@ F.games.bms = (function()
             if _camTiltThread then pcall(task.cancel, _camTiltThread) end
             _camTiltThread = task.spawn(function()
                 while autoActive do
-                    local cam = workspace.CurrentCamera
-                    if cam then
-                        local pos   = cam.CFrame.Position
-                        local lookV = cam.CFrame.LookVector
-                        local yaw   = math.atan2(-lookV.X, -lookV.Z)
-                        pcall(function()
-                            local prev = cam.CameraType
-                            cam.CameraType = Enum.CameraType.Scriptable
-                            cam.CFrame = CFrame.new(pos)
-                                * CFrame.fromOrientation(_camTiltAngle, yaw, 0)
-                            task.wait()
-                            cam.CameraType = prev
-                        end)
+                    if _camTiltOn then
+                        local cam = workspace.CurrentCamera
+                        if cam then
+                            local pos   = cam.CFrame.Position
+                            local lookV = cam.CFrame.LookVector
+                            local yaw   = math.atan2(-lookV.X, -lookV.Z)
+                            pcall(function()
+                                local prev = cam.CameraType
+                                cam.CameraType = Enum.CameraType.Scriptable
+                                cam.CFrame = CFrame.new(pos)
+                                    * CFrame.fromOrientation(_camTiltAngle, yaw, 0)
+                                task.wait()
+                                cam.CameraType = prev
+                            end)
+                        end
                     end
                     task.wait(1)
                 end
             end)
+
+            -- Recover from death: the brief Scriptable flip during tilt
+            -- can leave the camera detached if the character respawns
+            -- mid-flip. On CharacterAdded, force CameraType back to Custom
+            -- + re-bind CameraSubject to the new humanoid.
+            if _camCharConn then _camCharConn:Disconnect() end
+            _camCharConn = lplr.CharacterAdded:Connect(function(c)
+                if not autoActive then return end
+                task.wait(0.3)  -- let the new character settle
+                local cam = workspace.CurrentCamera
+                local hum = c:FindFirstChildOfClass("Humanoid")
+                if cam then
+                    pcall(function() cam.CameraType = Enum.CameraType.Custom end)
+                    if hum then pcall(function() cam.CameraSubject = hum end) end
+                end
+            end)
         else
             if _camTiltThread then pcall(task.cancel, _camTiltThread); _camTiltThread = nil end
+            if _camCharConn   then _camCharConn:Disconnect(); _camCharConn = nil end
             if _camModeBefore ~= nil then
                 pcall(function() ugs.ComputerCameraMovementMode = _camModeBefore end)
                 _camModeBefore = nil
+            end
+            -- safety: in case the tilt thread left the camera detached
+            local cam = workspace.CurrentCamera
+            if cam and cam.CameraType == Enum.CameraType.Scriptable then
+                pcall(function() cam.CameraType = Enum.CameraType.Custom end)
+                local c = lplr.Character
+                local hum = c and c:FindFirstChildOfClass("Humanoid")
+                if hum then pcall(function() cam.CameraSubject = hum end) end
             end
         end
     end
@@ -8145,6 +8174,12 @@ F.games.bms = (function()
             setPathPreview    = function(v) pathPreview = v == true; if not v then hidePathSegments() end end,
             setPathPreviewColor = function(c) if typeof(c) == "Color3" then pathPreviewColor = c end end,
             getPathPreviewColor = function() return pathPreviewColor end,
+            -- camera tilt
+            setCamTilt        = function(v) _camTiltOn = v == true end,
+            setCamTiltAngle   = function(n)
+                local deg = math.clamp(tonumber(n) or 60, 0, 90)
+                _camTiltAngle = math.rad(-deg)
+            end,
         },
         hasToken      = function() return getgenv()._BMS_TOKEN ~= nil end,
         setToken      = setManualToken,
