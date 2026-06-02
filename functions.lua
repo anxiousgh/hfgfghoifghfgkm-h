@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.6.3"
+local SCRIPT_VERSION = "v1.20.6.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8083,24 +8083,13 @@ F.games.bms = (function()
                 -- (b) walk to nearest REACHABLE deduced-safe tile
                 local startTile = findCurrentTile(all, origin)
                 if startTile then
-                    -- Pick the tile to walk to. If we just chose a target
-                    -- recently (within autoTargetDebounce) AND it's still
-                    -- a valid covered deduced-safe AND still reachable,
-                    -- STICK with it - prevents target jitter when new
-                    -- deductions shuffle the candidate list mid-walk.
-                    local nowTick = tick()
-                    local pick    = nil
-                    if _lastWalkTarget and _lastWalkTarget.Parent
-                       and (nowTick - _lastWalkTargetAt) < autoTargetDebounce
-                       and state[_lastWalkTarget] == "covered"
-                       and safes[_lastWalkTarget]
-                       and not mines[_lastWalkTarget] then
-                        local p = bfsPath(startTile, _lastWalkTarget, state, mines, falseFlags, safes)
-                        if p and #p > 0 then pick = _lastWalkTarget end
-                    end
-                    -- No locked target (or it became invalid) - pick fresh
-                    -- from the full board, sorted by distance.
-                    if not pick then
+                    -- ALWAYS pick the nearest reachable safe by Euclidean
+                    -- distance. No locked-target debounce - every tick
+                    -- picks fresh, so if a closer safe appears (cascade
+                    -- reveal, new flag) the bot pivots to it immediately
+                    -- instead of finishing a stale long walk first.
+                    local pick = nil
+                    do
                         local candidates = {}
                         for s in pairs(safes) do
                             if state[s] == "covered" then
@@ -8115,8 +8104,6 @@ F.games.bms = (function()
                             local p = bfsPath(startTile, c.tile, state, mines, falseFlags, safes)
                             if p and #p > 0 then
                                 pick = c.tile
-                                _lastWalkTarget   = pick
-                                _lastWalkTargetAt = nowTick
                                 break
                             end
                         end
