@@ -2355,6 +2355,20 @@ do
             Default = false,
             Callback = function(v) F.games.bms.autoPlay.setPathPreview(v) end,
         })
+        BMSAuto:AddSlider("BMSAutoSmoothness", {
+            Text = "Walk smoothness",
+            Default = 0.6, Min = 0, Max = 1.5, Rounding = 2, Suffix = " studs",
+            Callback = function(v) F.games.bms.autoPlay.setSmoothness(v) end,
+        })
+        BMSAuto:AddToggle("BMSAutoLegit", { Text = "Legit walk (humanlike jitter)",
+            Default = true,
+            Callback = function(v) F.games.bms.autoPlay.setLegit(v) end,
+        })
+        BMSAuto:AddSlider("BMSAutoLegitJitter", {
+            Text = "Legit walk jitter",
+            Default = 0.6, Min = 0, Max = 2, Rounding = 2, Suffix = " studs",
+            Callback = function(v) F.games.bms.autoPlay.setLegitJitter(v) end,
+        })
         BMSAuto:AddToggle("BMSAutoCamTilt", { Text = "Camera tilt",
             Default = true,
             Callback = function(v) F.games.bms.autoPlay.setCamTilt(v) end,

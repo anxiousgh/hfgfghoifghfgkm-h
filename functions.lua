@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.6.8"
+local SCRIPT_VERSION = "v1.21.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7622,6 +7622,20 @@ F.games.bms = (function()
     local autoStepDelay = 0.4   -- per-tile MoveTo cap
     local autoGuess     = false -- when stuck, walk to a 50/50 tile
 
+    -- ---- walk feel ----
+    -- walkSmoothness: how loose the per-tile reach radius is.
+    --   0.0 = strict (~0.6 stud reach) - lands on every tile centre
+    --   0.6 = mild  (~1.2 stud)        - small corner smoothing
+    --   1.5 = loose (~2.1 stud)        - aggressive glide-through
+    -- Larger values = the next MoveTo fires while character is still
+    -- well in-motion, so the path looks rounded instead of stepwise.
+    local walkSmoothness = 0.6
+    -- walkLegit: when true, add small random lateral offsets to each
+    -- tile's walk target so the bot doesn't hit every centre dead-on.
+    -- Mimics human imprecision; less robotic-looking.
+    local walkLegit       = true
+    local walkLegitJitter = 0.6  -- max ±studs of XZ offset per step
+
     -- ---- path preview ----
     -- Glowing neon segments between consecutive tiles on the path the
     -- bot is about to walk. Parts are pooled (reused across ticks) so
@@ -7793,21 +7807,30 @@ F.games.bms = (function()
 
         while head <= #queue do
             local cur = queue[head]; head = head + 1
-            -- CARDINAL ONLY. Diagonal moves sweep through the 4-tile
-            -- corner junction (cur, two corner tiles, target). Even
-            -- with revealed-only corner safety, momentum + character
-            -- drift can let a pixel touch a NEIGHBOUR of one of the
-            -- corner tiles - if that neighbour is an unrevealed bomb,
-            -- it reveals and game over. Cardinal moves cross exactly
-            -- ONE tile boundary (between cur and nb); body stays in
-            -- the cur->nb central corridor and provably never enters
-            -- any other tile. Trade-off: paths are Manhattan instead
-            -- of Chebyshev, ~40% longer on average.
+            -- CARDINAL FIRST. Visiting cardinals before diagonals
+            -- biases BFS tie-breaks toward cardinal-heavy routes,
+            -- which are inherently safer (no corner grazing).
             local card = cardinalNeighbors[cur]
             if card then
                 for _, nb in ipairs(card) do
                     local done = tryStep(cur, nb)
                     if done then return done end
+                end
+            end
+            -- DIAGONALS SECOND (= 8-neighbors minus cardinals).
+            -- tryStep's diagonalCorners check already enforces that
+            -- BOTH corner tiles between cur and nb are revealed-safe
+            -- before allowing the diagonal step, so corner-cutting
+            -- across covered tiles is refused.
+            local all8 = neighbors[cur]
+            if all8 then
+                local cardSet = {}
+                if card then for _, n in ipairs(card) do cardSet[n] = true end end
+                for _, nb in ipairs(all8) do
+                    if not cardSet[nb] then
+                        local done = tryStep(cur, nb)
+                        if done then return done end
+                    end
                 end
             end
         end
@@ -7820,28 +7843,39 @@ F.games.bms = (function()
         local hum = c and c:FindFirstChildOfClass("Humanoid")
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return false end
-        local goalPos = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
+
+        -- Legit jitter: small random XZ offset so the bot doesn't
+        -- hit every tile centre dead-on. Bounded so it stays well
+        -- inside the tile. Helps the motion look human rather than
+        -- locked to a grid.
+        local jx, jz = 0, 0
+        if walkLegit and walkLegitJitter > 0 then
+            local maxOff = math.min(walkLegitJitter, tile.Size.X * 0.3)
+            jx = (math.random() * 2 - 1) * maxOff
+            jz = (math.random() * 2 - 1) * maxOff
+        end
+        local goalPos = tile.Position + Vector3.new(
+            jx,
+            hrp.Size.Y * 0.5 + tile.Size.Y * 0.5,
+            jz
+        )
         pcall(function() hum:MoveTo(goalPos) end)
-        -- Wait until close to target. Generous timeout (2.5s floor)
-        -- so the character actually REACHES each tile before the
-        -- outer loop iterates. The old 0.4s autoStepDelay timeout
-        -- was firing BEFORE arrival on long cardinal steps - the
-        -- outer loop would then MoveTo the next tile, making the
-        -- character cut the corner straight across the unfinished
-        -- step's tile (sometimes through an uncovered bomb). Now
-        -- we wait up to max(autoStepDelay, 2.5) seconds.
-        --
-        -- Reach radius is ~1 stud (squared = 1.0) - slightly looser
-        -- than tile-centre precision so we exit walkTo while the
-        -- character is still gliding into the tile, and the next
-        -- MoveTo blends in without a full stop. That gives "follow
-        -- the path a little" feel - close enough that it stays on
-        -- the safe tiles, loose enough to not look robotic.
+
+        -- Reach radius scales with walkSmoothness. 0 -> ~0.6 stud
+        -- (strict, lands on tile centre), 1.5 -> ~2.1 stud (loose,
+        -- glides through). Exit walkTo as soon as we're within the
+        -- radius, so the next MoveTo blends in without a full stop.
+        local reachR  = 0.6 + walkSmoothness
+        local reachR2 = reachR * reachR
+
+        -- Generous deadline so the character actually arrives even
+        -- on long steps; the old short timeout was making the bot
+        -- cut corners across covered tiles.
         local deadline = tick() + math.max(autoStepDelay, 2.5)
         while autoActive do
             local dx = hrp.Position.X - goalPos.X
             local dz = hrp.Position.Z - goalPos.Z
-            if (dx*dx + dz*dz) < 1.0 then return true end
+            if (dx*dx + dz*dz) < reachR2 then return true end
             if tick() > deadline then return true end
             RunService.Heartbeat:Wait()
         end
@@ -8235,6 +8269,9 @@ F.games.bms = (function()
             setStepDelay      = function(n) autoStepDelay = math.clamp(tonumber(n) or 0.4, 0.05, 3) end,
             setGuess          = function(v) autoGuess = v == true end,
             setTargetDebounce = function(n) autoTargetDebounce = math.clamp(tonumber(n) or 0.2, 0, 5) end,
+            setSmoothness     = function(n) walkSmoothness = math.clamp(tonumber(n) or 0.6, 0, 1.5) end,
+            setLegit          = function(v) walkLegit = v == true end,
+            setLegitJitter    = function(n) walkLegitJitter = math.clamp(tonumber(n) or 0.6, 0, 2) end,
             setPathPreview    = function(v) pathPreview = v == true; if not v then hidePathSegments() end end,
             setPathPreviewColor = function(c) if typeof(c) == "Color3" then pathPreviewColor = c end end,
             getPathPreviewColor = function() return pathPreviewColor end,
