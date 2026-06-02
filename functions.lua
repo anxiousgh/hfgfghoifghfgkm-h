@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.6.7"
+local SCRIPT_VERSION = "v1.20.6.8"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7822,13 +7822,28 @@ F.games.bms = (function()
         if not hum or not hrp then return false end
         local goalPos = tile.Position + Vector3.new(0, hrp.Size.Y * 0.5 + tile.Size.Y * 0.5, 0)
         pcall(function() hum:MoveTo(goalPos) end)
-        local waited = 0
-        while waited < autoStepDelay and autoActive do
+        -- Wait until close to target. Generous timeout (2.5s floor)
+        -- so the character actually REACHES each tile before the
+        -- outer loop iterates. The old 0.4s autoStepDelay timeout
+        -- was firing BEFORE arrival on long cardinal steps - the
+        -- outer loop would then MoveTo the next tile, making the
+        -- character cut the corner straight across the unfinished
+        -- step's tile (sometimes through an uncovered bomb). Now
+        -- we wait up to max(autoStepDelay, 2.5) seconds.
+        --
+        -- Reach radius is ~1 stud (squared = 1.0) - slightly looser
+        -- than tile-centre precision so we exit walkTo while the
+        -- character is still gliding into the tile, and the next
+        -- MoveTo blends in without a full stop. That gives "follow
+        -- the path a little" feel - close enough that it stays on
+        -- the safe tiles, loose enough to not look robotic.
+        local deadline = tick() + math.max(autoStepDelay, 2.5)
+        while autoActive do
             local dx = hrp.Position.X - goalPos.X
             local dz = hrp.Position.Z - goalPos.Z
-            if (dx*dx + dz*dz) < 0.36 then return true end
+            if (dx*dx + dz*dz) < 1.0 then return true end
+            if tick() > deadline then return true end
             RunService.Heartbeat:Wait()
-            waited = waited + (1/60)
         end
         return true
     end
