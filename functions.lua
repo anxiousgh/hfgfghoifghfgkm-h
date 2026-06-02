@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.6.4"
+local SCRIPT_VERSION = "v1.20.6.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8132,6 +8132,64 @@ F.games.bms = (function()
                                 walkTo(step, off)
                             end
                             walked = true
+
+                            -- CHAIN: after revealing `pick`, if any of
+                            -- its cardinal neighbours is ALSO a deduced
+                            -- safe (still covered) AND the cardinal
+                            -- step to it has clear perpendiculars, walk
+                            -- to it directly. Repeat until the chain
+                            -- breaks. This is the "uncover them in a
+                            -- row" behaviour - no deduce/BFS overhead
+                            -- between adjacent reveals.
+                            --
+                            -- isSafeNow refetches tileState so cascade-
+                            -- revealed sides are recognized as safe.
+                            local function isSafeNow(t)
+                                local ss = tileState(t)
+                                if ss == "flagged"  then return true end
+                                if ss == "revealed" then return not mines[t] end
+                                if ss == "covered"  then return safes[t] == true end
+                                return false
+                            end
+                            local function perpClearNow(cur, nb)
+                                local dx = nb.Position.X - cur.Position.X
+                                local dz = nb.Position.Z - cur.Position.Z
+                                local card = cardinalNeighbors[nb]
+                                if not card then return true end
+                                for _, side in ipairs(card) do
+                                    if side ~= cur then
+                                        local sdx = side.Position.X - nb.Position.X
+                                        local sdz = side.Position.Z - nb.Position.Z
+                                        if math.abs(dx*sdx + dz*sdz) < 0.001 then
+                                            if not isSafeNow(side) then return false end
+                                        end
+                                    end
+                                end
+                                return true
+                            end
+                            local current = pick
+                            while autoActive do
+                                local card = cardinalNeighbors[current]
+                                if not card then break end
+                                local nextTile, nextD2 = nil, math.huge
+                                local pos = myPos()
+                                for _, nb in ipairs(card) do
+                                    if safes[nb] and not mines[nb] then
+                                        local ss = tileState(nb)
+                                        if ss == "covered" and perpClearNow(current, nb) then
+                                            local dx = nb.Position.X - pos.X
+                                            local dz = nb.Position.Z - pos.Z
+                                            local d2 = dx*dx + dz*dz
+                                            if d2 < nextD2 then
+                                                nextTile, nextD2 = nb, d2
+                                            end
+                                        end
+                                    end
+                                end
+                                if not nextTile then break end
+                                walkTo(nextTile)
+                                current = nextTile
+                            end
                         end
                     end
                     if not walked then hidePathSegments() end
