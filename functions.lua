@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.20.6.6"
+local SCRIPT_VERSION = "v1.20.6.7"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8041,23 +8041,35 @@ F.games.bms = (function()
                             walked = true
 
                             -- CHAIN: after revealing `pick`, look at
-                            -- its 4 cardinal neighbours. If any of them
-                            -- is also a deduced safe (in the start-of-
-                            -- tick `safes` table) AND still covered
-                            -- (cascade hasn't already revealed it),
-                            -- walk to it directly. Then repeat. This
-                            -- is the "uncover them in a row" pass -
-                            -- adjacent safes get swept through with no
-                            -- deduce/BFS overhead between them.
+                            -- its 4 cardinal neighbours. If any is
+                            -- still covered AND deduced safe NOW (we
+                            -- re-deduce each chain step so cascade-
+                            -- revealed numbers can unlock new safes
+                            -- that weren't in the start-of-tick set),
+                            -- walk to it. Repeat from the new tile.
+                            -- The chain handles two adjacent safes the
+                            -- same as a longer row - one chain step
+                            -- still counts.
                             local current = pick
                             while autoActive do
                                 local card = cardinalNeighbors[current]
                                 if not card then break end
+                                -- live state + deduction. deduce() is
+                                -- state-hash-cached so re-running here
+                                -- is cheap when nothing changed.
+                                local liveState = {}
+                                for _, t in ipairs(all) do
+                                    liveState[t] = tileState(t)
+                                end
+                                local liveMines, liveSafes = deduce(all, liveState)
+                                liveMines = liveMines or {}
+                                liveSafes = liveSafes or {}
                                 local nextTile, nextD2 = nil, math.huge
                                 local pos = myPos()
                                 for _, nb in ipairs(card) do
-                                    if safes[nb] and not mines[nb]
-                                       and tileState(nb) == "covered" then
+                                    if liveState[nb] == "covered"
+                                       and liveSafes[nb]
+                                       and not liveMines[nb] then
                                         local dx = nb.Position.X - pos.X
                                         local dz = nb.Position.Z - pos.Z
                                         local d2 = dx*dx + dz*dz
