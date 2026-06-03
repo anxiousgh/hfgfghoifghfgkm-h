@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.4"
+local SCRIPT_VERSION = "v1.21.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8539,7 +8539,7 @@ F.games.bms = (function()
             setAimHalfDeg = function(n) flagAimHalfDeg = math.clamp(tonumber(n) or 30, 1, 180) end,
         },
         autoPlay = {
-            start    = function() legitFlagStop(); autoPlayStart() end,
+            start    = autoPlayStart,
             stop     = autoPlayStop,
             isActive = function() return autoActive end,
             setStepDelay      = function(n) autoStepDelay = math.clamp(tonumber(n) or 0.4, 0.05, 3) end,
