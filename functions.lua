@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.3"
+local SCRIPT_VERSION = "v1.21.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8225,6 +8225,20 @@ F.games.bms = (function()
         lastFlagAt = 0  -- reset cooldown so a fresh autoplay session starts immediately
         autoThread = task.spawn(function()
             while autoActive do
+                -- Guard: skip the whole tick when the character is
+                -- dead / mid-respawn. Otherwise findCurrentTile picks
+                -- whatever tile is closest to (0,0,0) and the loop
+                -- spins through deduce/BFS on every frame of the
+                -- respawn animation - that compounded with the game's
+                -- bomb-death scripts is what stalls hard after a
+                -- 50/50 guess.
+                local char = lplr.Character
+                local hum  = char and char:FindFirstChildOfClass("Humanoid")
+                if not hum or hum.Health <= 0 then
+                    task.wait(0.4)
+                    continue
+                end
+
                 local parts = getParts()
                 if not parts then task.wait(0.3); continue end
                 local all = parts:GetChildren()
@@ -8430,6 +8444,13 @@ F.games.bms = (function()
                                     walkTo(step)
                                 end
                                 walked = true
+                                -- After the guess step lands, give
+                                -- the game ~0.5s to process the
+                                -- reveal (cascade or bomb death)
+                                -- before the loop re-iterates. Stops
+                                -- our 10Hz spin from compounding on
+                                -- top of the game's bomb scripts.
+                                task.wait(0.5)
                                 break
                             end
                         end
@@ -8462,6 +8483,8 @@ F.games.bms = (function()
                                         walkTo(step)
                                     end
                                     walked = true
+                                    -- settle (same reason as the 50/50 path)
+                                    task.wait(0.5)
                                     break
                                 end
                             end
