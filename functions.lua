@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.1"
+local SCRIPT_VERSION = "v1.21.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6947,16 +6947,28 @@ F.games.bms = (function()
         if parts then
             parts.DescendantAdded:Connect(function(d)
                 local p = d.Parent
-                if p and p.Parent == parts then _stateCache[p] = nil end
+                if p and p.Parent == parts then
+                    _stateCache[p]  = nil
+                    _numberCache[p] = nil
+                end
             end)
             parts.DescendantRemoving:Connect(function(d)
                 local p = d.Parent
-                if p and p.Parent == parts then _stateCache[p] = nil end
+                if p and p.Parent == parts then
+                    _stateCache[p]  = nil
+                    _numberCache[p] = nil
+                end
             end)
             -- direct tile add/remove also clears (tile won't be in the
             -- cache yet for adds, but for removes we want it gone)
-            parts.ChildAdded:Connect(function(t) _stateCache[t] = nil end)
-            parts.ChildRemoved:Connect(function(t) _stateCache[t] = nil end)
+            parts.ChildAdded:Connect(function(t)
+                _stateCache[t]  = nil
+                _numberCache[t] = nil
+            end)
+            parts.ChildRemoved:Connect(function(t)
+                _stateCache[t]  = nil
+                _numberCache[t] = nil
+            end)
         end
     end
 
@@ -6969,6 +6981,19 @@ F.games.bms = (function()
                 if n then return n end
             end
         end
+    end
+
+    -- Cache for tileNumber. A tile's number doesn't change after the
+    -- reveal that placed it, so once we compute it we can keep it
+    -- forever. Cleared per-tile when the NumberGui is removed
+    -- (handled by the same listeners as _stateCache below).
+    local _numberCache = {}
+    local function tileNumberCached(tile)
+        local n = _numberCache[tile]
+        if n ~= nil then return n end
+        n = tileNumber(tile)
+        _numberCache[tile] = n or false  -- nil means "no NumberGui"; false caches that fact
+        return n
     end
 
     -- ---- neighbor caches ----
@@ -7186,7 +7211,7 @@ F.games.bms = (function()
             local out = {}
             for _, t in ipairs(parts) do
                 if state[t] == "revealed" then
-                    local n = tileNumber(t)
+                    local n = tileNumberCached(t)
                     if n then
                         local nbrs = neighbors[t]
                         if nbrs then
@@ -7238,36 +7263,65 @@ F.games.bms = (function()
             return changed
         end
 
+        -- Variable-index-based subsetPass. Old version was O(C^2) - for
+        -- each constraint pair (A, B) it always tested subset relation.
+        -- On 1000+ constraints (a 1.2k-tile board late game) that's a
+        -- million-iteration spike every time deduce re-runs.
+        --
+        -- Key insight: A can only be a subset of B if A and B share at
+        -- least one variable. So we build a variable -> constraint
+        -- index, and for each A we only consider candidate Bs that
+        -- share at least one of A's variables. Constraints in BMS are
+        -- spatially LOCAL (each reveal touches 8 neighbours), so the
+        -- candidate count per A is O(constraints_in_neighbourhood)
+        -- which is bounded by a small constant - net effective work
+        -- becomes O(C) not O(C^2).
         local function subsetPass(constraints)
             local changed = false
+            if #constraints < 2 then return false end
+
+            -- build var -> {constraint-index, ...} map
+            local varToCs = {}
+            for i, c in ipairs(constraints) do
+                for u in pairs(c.set) do
+                    local list = varToCs[u]
+                    if not list then list = {}; varToCs[u] = list end
+                    table.insert(list, i)
+                end
+            end
+
             for i = 1, #constraints do
                 local A = constraints[i]
-                for j = 1, #constraints do
-                    if i ~= j then
-                        local B = constraints[j]
-                        -- check A.set strictly subset of B.set, A smaller
-                        if A.count < B.count then
-                            local subset = true
-                            for u in pairs(A.set) do
-                                if not B.set[u] then subset = false; break end
+                -- collect candidate Bs: any constraint sharing >=1 var
+                local candidates = {}
+                for u in pairs(A.set) do
+                    for _, j in ipairs(varToCs[u] or {}) do
+                        if j ~= i then candidates[j] = true end
+                    end
+                end
+                for j in pairs(candidates) do
+                    local B = constraints[j]
+                    if A.count < B.count then
+                        local subset = true
+                        for u in pairs(A.set) do
+                            if not B.set[u] then subset = false; break end
+                        end
+                        if subset then
+                            local extras = {}
+                            for u in pairs(B.set) do
+                                if not A.set[u] then table.insert(extras, u) end
                             end
-                            if subset then
-                                local extras = {}
-                                for u in pairs(B.set) do
-                                    if not A.set[u] then table.insert(extras, u) end
-                                end
-                                local extraMines = B.remaining - A.remaining
-                                if extraMines == #extras and extraMines > 0 then
-                                    for _, u in ipairs(extras) do
-                                        if not knownMines[u] then
-                                            knownMines[u] = true; changed = true
-                                        end
+                            local extraMines = B.remaining - A.remaining
+                            if extraMines == #extras and extraMines > 0 then
+                                for _, u in ipairs(extras) do
+                                    if not knownMines[u] then
+                                        knownMines[u] = true; changed = true
                                     end
-                                elseif extraMines == 0 then
-                                    for _, u in ipairs(extras) do
-                                        if not knownSafes[u] then
-                                            knownSafes[u] = true; changed = true
-                                        end
+                                end
+                            elseif extraMines == 0 then
+                                for _, u in ipairs(extras) do
+                                    if not knownSafes[u] then
+                                        knownSafes[u] = true; changed = true
                                     end
                                 end
                             end
