@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.6"
+local SCRIPT_VERSION = "v1.21.7"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7187,32 +7187,58 @@ F.games.bms = (function()
     -- to insert eagerly (so the next deduce/ESP pass already sees
     -- the new tile in its neighbour map without paying a rebuild
     -- cost), and ChildRemoved to evict immediately.
+    --
+    -- Initial sync: ChildAdded only fires for FUTURE additions.
+    -- Tiles already present when this script loaded would have
+    -- been missed, leaving tileList empty (ESP shows nothing).
+    -- We do one explicit GetChildren() pass at startup to seed
+    -- everything, retrying every 0.5s until the parts folder is
+    -- available (game may still be loading).
+    local function _adoptTile(t)
+        if not t:IsA("BasePart") then return end
+        if not tileSize then
+            tileSize = math.max(t.Size.X, t.Size.Z)
+            diagR2 = (tileSize * 1.6) ^ 2
+            cardR2 = (tileSize * 1.1) ^ 2
+        end
+        if not knownTiles[t] then
+            _gridAdd(t)
+            _buildOne(t)
+            _injectIntoExisting(t)
+            _listAdd(t)
+            knownTiles[t] = true
+        end
+    end
+    local function _releaseTile(t)
+        if not knownTiles[t] then return end
+        _evictFromExisting(t)
+        _gridRemove(t)
+        _listRemove(t)
+        neighbors[t]         = nil
+        cardinalNeighbors[t] = nil
+        knownTiles[t]        = nil
+    end
     do
+        local _connected = false
+        local function _connect(parts)
+            if _connected then return end
+            _connected = true
+            parts.ChildAdded:Connect(_adoptTile)
+            parts.ChildRemoved:Connect(_releaseTile)
+            for _, t in ipairs(parts:GetChildren()) do
+                _adoptTile(t)
+            end
+        end
+
         local parts = getParts()
         if parts then
-            parts.ChildAdded:Connect(function(t)
-                if not t:IsA("BasePart") then return end
-                if not tileSize then
-                    tileSize = math.max(t.Size.X, t.Size.Z)
-                    diagR2 = (tileSize * 1.6) ^ 2
-                    cardR2 = (tileSize * 1.1) ^ 2
-                end
-                if not knownTiles[t] then
-                    _gridAdd(t)
-                    _buildOne(t)
-                    _injectIntoExisting(t)
-                    _listAdd(t)
-                    knownTiles[t] = true
-                end
-            end)
-            parts.ChildRemoved:Connect(function(t)
-                if knownTiles[t] then
-                    _evictFromExisting(t)
-                    _gridRemove(t)
-                    _listRemove(t)
-                    neighbors[t]         = nil
-                    cardinalNeighbors[t] = nil
-                    knownTiles[t]        = nil
+            _connect(parts)
+        else
+            task.spawn(function()
+                while not _connected do
+                    local p = getParts()
+                    if p then _connect(p); return end
+                    task.wait(0.5)
                 end
             end)
         end
