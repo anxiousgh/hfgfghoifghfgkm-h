@@ -2279,6 +2279,15 @@ do
             Default = F.games.bms.esp.getFiftyColor(), Title = "50/50 tile color",
             Callback = F.games.bms.esp.setFiftyColor,
         })
+        BMS:AddToggle("BMSScanRadiusViz", { Text = "Show ESP scan radius",
+            Default = false,
+            Callback = function(v) F.games.bms.esp.setScanRadiusViz(v) end,
+        })
+        BMS:AddLabel("Scan radius color"):AddColorPicker("BMSScanRadiusColor", {
+            Default = F.games.bms.esp.getScanRadiusColor(),
+            Title = "ESP scan radius color",
+            Callback = F.games.bms.esp.setScanRadiusColor,
+        })
         print("[BMS] (3/8) mine ESP widgets ok")
 
         BMS:AddDivider()
@@ -2316,6 +2325,15 @@ do
         BMS:AddSlider("BMSFlagAimAngle", { Text = "Aim cone half-angle",
             Default = 30, Min = 5, Max = 90, Rounding = 0, Suffix = " degrees",
             Callback = function(v) F.games.bms.legitFlag.setAimHalfDeg(v) end,
+        })
+        BMS:AddToggle("BMSAimConeViz", { Text = "Show aim cone",
+            Default = false,
+            Callback = function(v) F.games.bms.legitFlag.setAimConeViz(v) end,
+        })
+        BMS:AddLabel("Aim cone color"):AddColorPicker("BMSAimConeColor", {
+            Default = F.games.bms.legitFlag.getAimConeColor(),
+            Title = "Aim cone visualizer color",
+            Callback = F.games.bms.legitFlag.setAimConeColor,
         })
         print("[BMS] (4/8) legit auto-flag + aim cone widgets ok")
 

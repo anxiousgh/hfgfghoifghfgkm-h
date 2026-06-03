@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.8"
+local SCRIPT_VERSION = "v1.21.9"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7938,6 +7938,161 @@ F.games.bms = (function()
         return dot >= math.cos(math.rad(flagAimHalfDeg))
     end
 
+    -- ============================================================
+    -- VISUALIZERS - scan-radius cylinder + aim-cone wedge
+    -- ============================================================
+    -- Both are independently toggleable + colorable. They share a
+    -- single Heartbeat thread that's only spun up while at least one
+    -- viz is enabled; toggling all of them off lets the thread exit.
+    local scanVizOn        = false
+    local scanVizColor     = Color3.fromRGB(0, 200, 255)
+    local aimConeVizOn     = false
+    local aimConeVizColor  = Color3.fromRGB(255, 150, 0)
+
+    local _scanVizPart, _aimConePart, _aimConeAdorn
+    local _vizThread
+
+    -- Clean up any stale viz parts from a previous script run.
+    for _, p in ipairs(workspace:GetChildren()) do
+        if p.Name == "_BMS_ScanViz" or p.Name == "_BMS_AimConeViz" then
+            pcall(function() p:Destroy() end)
+        end
+    end
+
+    local function _killScanViz()
+        if _scanVizPart then
+            pcall(function() _scanVizPart:Destroy() end)
+            _scanVizPart = nil
+        end
+    end
+    local function _killAimViz()
+        if _aimConePart then
+            pcall(function() _aimConePart:Destroy() end)
+            _aimConePart  = nil
+            _aimConeAdorn = nil
+        end
+    end
+
+    local function _ensureScanViz()
+        if _scanVizPart and _scanVizPart.Parent then return end
+        local p = Instance.new("Part")
+        p.Name         = "_BMS_ScanViz"
+        p.Anchored     = true
+        p.CanCollide   = false
+        p.CanQuery     = false
+        p.CanTouch     = false
+        p.CastShadow   = false
+        p.Material     = Enum.Material.ForceField
+        p.Color        = scanVizColor
+        p.Transparency = 0.7
+        p.Shape        = Enum.PartType.Cylinder
+        p.Parent       = workspace
+        _scanVizPart   = p
+    end
+
+    local function _ensureAimViz()
+        if _aimConePart and _aimConePart.Parent then return end
+        local p = Instance.new("Part")
+        p.Name         = "_BMS_AimConeViz"
+        p.Anchored     = true
+        p.CanCollide   = false
+        p.CanQuery     = false
+        p.CanTouch     = false
+        p.Transparency = 1
+        p.Size         = Vector3.new(0.1, 0.1, 0.1)
+        p.Parent       = workspace
+        local adorn = Instance.new("ConeHandleAdornment")
+        adorn.Adornee      = p
+        adorn.AlwaysOnTop  = true
+        adorn.ZIndex       = 1
+        adorn.Color3       = aimConeVizColor
+        adorn.Transparency = 0.55
+        adorn.Parent       = p
+        _aimConePart  = p
+        _aimConeAdorn = adorn
+    end
+
+    local function _vizUpdate()
+        -- Scan radius: only render while ESP is on (the scan radius
+        -- IS the ESP scan window). Disable visual without nuking
+        -- toggle state if ESP turned itself off.
+        if scanVizOn and espActive then
+            _ensureScanViz()
+            local r = espScanRadius
+            if tileSize then r = math.max(r, 15 * tileSize) end
+            local pos = myPos()
+            -- Cylinder PartType's long axis is X. Rotate 90deg around
+            -- Z so the flat circular faces are top/bottom. Diameter on
+            -- the Y/Z axes = 2*r.
+            _scanVizPart.Color  = scanVizColor
+            _scanVizPart.Size   = Vector3.new(0.2, r * 2, r * 2)
+            _scanVizPart.CFrame = CFrame.new(pos.X, pos.Y - 2.5, pos.Z)
+                * CFrame.Angles(0, 0, math.rad(90))
+        else
+            _killScanViz()
+        end
+
+        -- Aim cone: only render while the aim-cone filter is actually
+        -- active (otherwise it's misleading - the cone wouldn't be
+        -- doing anything).
+        if aimConeVizOn and flagAimCone then
+            _ensureAimViz()
+            local cam = workspace.CurrentCamera
+            if cam then
+                local len     = 50
+                local halfRad = math.rad(flagAimHalfDeg)
+                _aimConeAdorn.Color3 = aimConeVizColor
+                _aimConeAdorn.Height = len
+                _aimConeAdorn.Radius = math.tan(halfRad) * len
+                -- Orient adornee so its +Y axis points along the
+                -- camera's look vector (ConeHandleAdornment draws
+                -- along the adornee's +Y).
+                local look = cam.CFrame.LookVector
+                local right = look:Cross(Vector3.new(0, 1, 0))
+                if right.Magnitude < 0.001 then right = Vector3.new(1, 0, 0) end
+                _aimConePart.CFrame = CFrame.fromMatrix(
+                    cam.CFrame.Position, right.Unit, look
+                )
+            end
+        else
+            _killAimViz()
+        end
+    end
+
+    local function _vizStart()
+        if _vizThread then return end
+        _vizThread = task.spawn(function()
+            while scanVizOn or aimConeVizOn do
+                pcall(_vizUpdate)
+                RunService.Heartbeat:Wait()
+            end
+            _vizThread = nil
+            _killScanViz()
+            _killAimViz()
+        end)
+    end
+
+    local function setScanRadiusViz(v)
+        scanVizOn = v == true
+        if scanVizOn then _vizStart() else _killScanViz() end
+    end
+    local function setScanRadiusColor(c)
+        if typeof(c) == "Color3" then
+            scanVizColor = c
+            if _scanVizPart then _scanVizPart.Color = c end
+        end
+    end
+    local function setAimConeViz(v)
+        aimConeVizOn = v == true
+        if aimConeVizOn then _vizStart() else _killAimViz() end
+    end
+    local function setAimConeColor(c)
+        if typeof(c) == "Color3" then
+            aimConeVizColor = c
+            if _aimConeAdorn then _aimConeAdorn.Color3 = c end
+        end
+    end
+
     local function legitFlagStart()
         if flagActive then return end
         flagActive = true
@@ -8666,6 +8821,12 @@ F.games.bms = (function()
             getSafeColor     = function() return SAFE_COLOR end,
             getWarnColor     = function() return WARN_COLOR end,
             getFiftyColor    = function() return FIFTY_COLOR end,
+            -- Scan-radius visualizer: a flat translucent cylinder on
+            -- the ground centred on the player, showing exactly which
+            -- area ESP is currently scanning each tick.
+            setScanRadiusViz   = setScanRadiusViz,
+            setScanRadiusColor = setScanRadiusColor,
+            getScanRadiusColor = function() return scanVizColor end,
         },
         legitFlag = {
             start    = legitFlagStart,
@@ -8680,6 +8841,12 @@ F.games.bms = (function()
             setRange      = function(n) flagRange = math.clamp(tonumber(n) or 60, 5, 500) end,
             setAimCone    = function(v) flagAimCone = v == true end,
             setAimHalfDeg = function(n) flagAimHalfDeg = math.clamp(tonumber(n) or 30, 1, 180) end,
+            -- Aim-cone visualizer: a translucent ConeHandleAdornment
+            -- anchored to the camera, showing the actual filter
+            -- region. Only renders when the aim-cone filter is on.
+            setAimConeViz   = setAimConeViz,
+            setAimConeColor = setAimConeColor,
+            getAimConeColor = function() return aimConeVizColor end,
         },
         autoPlay = {
             start    = autoPlayStart,
