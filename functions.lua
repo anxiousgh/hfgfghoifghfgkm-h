@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.5"
+local SCRIPT_VERSION = "v1.21.6"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6853,9 +6853,16 @@ F.games.bms = (function()
         return fe and fe:FindFirstChild("PlaceFlag")
     end
 
+    -- Cached parts-folder reference. The folder rarely (never?)
+    -- changes during a game, so paying a workspace.FindFirstChild
+    -- traversal on EVERY tick was pure overhead. We re-resolve only
+    -- if the cached ref's Parent is gone.
+    local _partsRef = nil
     local function getParts()
+        if _partsRef and _partsRef.Parent then return _partsRef end
         local f = workspace:FindFirstChild("Flag")
-        return f and f:FindFirstChild("Parts")
+        _partsRef = f and f:FindFirstChild("Parts")
+        return _partsRef
     end
 
     -- Token capture. Resolve the remote ref once (try immediate, fall
@@ -7020,42 +7027,74 @@ F.games.bms = (function()
     -- diffs against the known-tile set and applies just the
     -- delta - effectively free when nothing changed.
     local knownTiles  = {}   -- set of tiles whose neighbour list is built
-    local spatialGrid = {}   -- "cx,cz" -> {tile, tile, ...}
-    local tileCell    = {}   -- tile -> "cx,cz" (for removal)
+    -- Spatial grid: NESTED tables grid[cx][cz] = {tile, ...}. Old
+    -- version concatenated "cx,cz" -> string on every cell lookup
+    -- which allocated a fresh string per access (~18/tile add). At
+    -- infinite-mode reveal rates that's a lot of GC churn.
+    local spatialGrid = {}
+    local tileCellX   = {}   -- tile -> integer cellX (for removal)
+    local tileCellZ   = {}   -- tile -> integer cellZ
+    -- Ordered tile list, maintained incrementally. Used in place of
+    -- parts:GetChildren() which alloc'd a fresh N-element table on
+    -- every autoplay / ESP tick.
+    local tileList    = {}
+    local tileIndex   = {}   -- tile -> 1-based index in tileList
     local tileSize    = nil  -- derived from first tile seen
     local diagR2, cardR2
 
-    local function _cellKey(px, pz)
-        return math.floor(px / tileSize) .. "," .. math.floor(pz / tileSize)
+    local function _listAdd(t)
+        table.insert(tileList, t)
+        tileIndex[t] = #tileList
     end
+    local function _listRemove(t)
+        local i = tileIndex[t]; if not i then return end
+        local n = #tileList
+        if i ~= n then
+            local last = tileList[n]
+            tileList[i] = last
+            tileIndex[last] = i
+        end
+        tileList[n] = nil
+        tileIndex[t] = nil
+    end
+
     local function _gridAdd(t)
-        local key = _cellKey(t.Position.X, t.Position.Z)
-        local cell = spatialGrid[key]
-        if not cell then cell = {}; spatialGrid[key] = cell end
+        local cx = math.floor(t.Position.X / tileSize)
+        local cz = math.floor(t.Position.Z / tileSize)
+        local row = spatialGrid[cx]
+        if not row then row = {}; spatialGrid[cx] = row end
+        local cell = row[cz]
+        if not cell then cell = {}; row[cz] = cell end
         table.insert(cell, t)
-        tileCell[t] = key
+        tileCellX[t] = cx
+        tileCellZ[t] = cz
     end
     local function _gridRemove(t)
-        local key = tileCell[t]; if not key then return end
-        local cell = spatialGrid[key]
+        local cx, cz = tileCellX[t], tileCellZ[t]
+        if not cx then return end
+        local row = spatialGrid[cx]
+        local cell = row and row[cz]
         if cell then
             for i, x in ipairs(cell) do
                 if x == t then table.remove(cell, i); break end
             end
         end
-        tileCell[t] = nil
+        tileCellX[t] = nil
+        tileCellZ[t] = nil
     end
     -- iterate tiles in the 3x3 cell window around `t` (excluding `t`)
     local function _nearby(t, fn)
-        local px, pz = t.Position.X, t.Position.Z
-        local cx = math.floor(px / tileSize)
-        local cz = math.floor(pz / tileSize)
+        local cx = math.floor(t.Position.X / tileSize)
+        local cz = math.floor(t.Position.Z / tileSize)
         for dx = -1, 1 do
-            for dz = -1, 1 do
-                local cell = spatialGrid[(cx + dx) .. "," .. (cz + dz)]
-                if cell then
-                    for _, o in ipairs(cell) do
-                        if o ~= t then fn(o) end
+            local row = spatialGrid[cx + dx]
+            if row then
+                for dz = -1, 1 do
+                    local cell = row[cz + dz]
+                    if cell then
+                        for _, o in ipairs(cell) do
+                            if o ~= t then fn(o) end
+                        end
                     end
                 end
             end
@@ -7122,20 +7161,20 @@ F.games.bms = (function()
             incoming[t] = true
             if not knownTiles[t] then
                 _gridAdd(t)
-                _buildOne(t)         -- build the new tile's own lists
-                _injectIntoExisting(t) -- append it to nearby tiles' lists
+                _buildOne(t)
+                _injectIntoExisting(t)
+                _listAdd(t)
                 knownTiles[t] = true
             end
         end
 
-        -- Pass 2: drop tiles that are gone (ChildRemoved or unparented).
-        -- O(known) which is unavoidable, but only does work on actual
-        -- removals; for steady-state infinite mode (only additions) it
-        -- short-circuits per tile via the `incoming` check.
+        -- Pass 2: drop tiles that are gone. O(known) but skipped via
+        -- `incoming` lookup for the steady-state add-only case.
         for t in pairs(knownTiles) do
             if not incoming[t] or not t.Parent then
                 _evictFromExisting(t)
                 _gridRemove(t)
+                _listRemove(t)
                 neighbors[t]         = nil
                 cardinalNeighbors[t] = nil
                 knownTiles[t]        = nil
@@ -7162,6 +7201,7 @@ F.games.bms = (function()
                     _gridAdd(t)
                     _buildOne(t)
                     _injectIntoExisting(t)
+                    _listAdd(t)
                     knownTiles[t] = true
                 end
             end)
@@ -7169,6 +7209,7 @@ F.games.bms = (function()
                 if knownTiles[t] then
                     _evictFromExisting(t)
                     _gridRemove(t)
+                    _listRemove(t)
                     neighbors[t]         = nil
                     cardinalNeighbors[t] = nil
                     knownTiles[t]        = nil
@@ -7653,8 +7694,8 @@ F.games.bms = (function()
     local function espTick()
         local parts = getParts()
         if not parts then clearAllHl(); return end
-        local all = parts:GetChildren()
-        ensureNeighbors(all)
+        ensureNeighbors(tileList)
+        local all = tileList
         local state = {}
         local cov, rev, flg = 0, 0, 0
         for _, t in ipairs(all) do
@@ -7814,8 +7855,8 @@ F.games.bms = (function()
                 end
                 local parts = getParts()
                 if not parts then task.wait(0.5); continue end
-                local all = parts:GetChildren()
-                ensureNeighbors(all)
+                ensureNeighbors(tileList)
+                local all = tileList
                 local state = {}
                 for _, t in ipairs(all) do state[t] = tileStateCached(t) end
                 local mines = deduce(all, state)
@@ -8241,8 +8282,14 @@ F.games.bms = (function()
 
                 local parts = getParts()
                 if not parts then task.wait(0.3); continue end
-                local all = parts:GetChildren()
-                ensureNeighbors(all)
+                -- Use the incrementally-maintained tileList instead of
+                -- parts:GetChildren(). On infinite-mode boards with
+                -- thousands of tiles, GetChildren() allocated a fresh
+                -- N-element array every tick at 10Hz = significant GC.
+                -- ensureNeighbors() reconciles any drift if events were
+                -- missed; for steady state it short-circuits.
+                ensureNeighbors(tileList)
+                local all = tileList
                 local state = {}
                 for _, t in ipairs(all) do state[t] = tileStateCached(t) end
                 local mines, safes, falseFlags, probs, fiftyPairs = deduce(all, state)
