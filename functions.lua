@@ -6925,6 +6925,41 @@ F.games.bms = (function()
         return "covered"
     end
 
+    -- Per-tile state cache. The state-build loop runs O(N) every
+    -- autoplay/ESP/deduce tick - with thousands of tiles in infinite
+    -- mode each tick spent thousands of GetChildren scans. We
+    -- invalidate a tile's cached state via DescendantAdded /
+    -- DescendantRemoving on the parts folder: when a direct child of
+    -- a tile (Model = flag, NumberGui = reveal) is added or removed,
+    -- only that tile's cache entry is dropped. Loops then use
+    -- tileStateCached() which is a table lookup for the unchanged
+    -- 99% of tiles.
+    local _stateCache = {}
+    local function tileStateCached(t)
+        local s = _stateCache[t]
+        if s then return s end
+        s = tileState(t)
+        _stateCache[t] = s
+        return s
+    end
+    do
+        local parts = getParts()
+        if parts then
+            parts.DescendantAdded:Connect(function(d)
+                local p = d.Parent
+                if p and p.Parent == parts then _stateCache[p] = nil end
+            end)
+            parts.DescendantRemoving:Connect(function(d)
+                local p = d.Parent
+                if p and p.Parent == parts then _stateCache[p] = nil end
+            end)
+            -- direct tile add/remove also clears (tile won't be in the
+            -- cache yet for adds, but for removes we want it gone)
+            parts.ChildAdded:Connect(function(t) _stateCache[t] = nil end)
+            parts.ChildRemoved:Connect(function(t) _stateCache[t] = nil end)
+        end
+    end
+
     local function tileNumber(tile)
         local g = tile:FindFirstChild("NumberGui")
         if not g then return nil end
@@ -6946,39 +6981,174 @@ F.games.bms = (function()
     --                         an unknown tile's corner and falls in.
     local neighbors         = {}
     local cardinalNeighbors = {}
-    local neighborsDirty = true
-    local cachedPartsCount = 0
-    local function ensureNeighbors(allParts)
-        if not neighborsDirty and #allParts == cachedPartsCount then return end
-        neighborsDirty = false
-        cachedPartsCount = #allParts
-        neighbors         = {}
-        cardinalNeighbors = {}
-        if not allParts[1] then return end
-        local size = math.max(allParts[1].Size.X, allParts[1].Size.Z)
-        local diagR2 = (size * 1.6) ^ 2   -- includes diagonals
-        local cardR2 = (size * 1.1) ^ 2   -- 4-direction only
-        for _, t in ipairs(allParts) do
-            local list8, list4, px, pz = {}, {}, t.Position.X, t.Position.Z
-            for _, o in ipairs(allParts) do
-                if o ~= t then
-                    local dx, dz = o.Position.X - px, o.Position.Z - pz
-                    local d2 = dx*dx + dz*dz
-                    if d2 < diagR2 then table.insert(list8, o) end
-                    if d2 < cardR2 then table.insert(list4, o) end
+    -- INCREMENTAL neighbor graph with a spatial grid hash. The
+    -- old implementation did a full O(N^2) rebuild every time a
+    -- tile was added or removed. In infinite mode every reveal
+    -- spawns new tiles -> full rescan of every existing tile -
+    -- with ~1000 tiles that's a million distance checks per
+    -- reveal. Pure lag spike.
+    --
+    -- New scheme: bucket tiles into grid cells of cellSize =
+    -- tileSize, so any neighbor lookup only touches a 3x3 cell
+    -- window (~9 candidates). Tile add/remove is O(neighbour
+    -- count) ~ O(1) instead of O(N). One ensureNeighbors() call
+    -- diffs against the known-tile set and applies just the
+    -- delta - effectively free when nothing changed.
+    local knownTiles  = {}   -- set of tiles whose neighbour list is built
+    local spatialGrid = {}   -- "cx,cz" -> {tile, tile, ...}
+    local tileCell    = {}   -- tile -> "cx,cz" (for removal)
+    local tileSize    = nil  -- derived from first tile seen
+    local diagR2, cardR2
+
+    local function _cellKey(px, pz)
+        return math.floor(px / tileSize) .. "," .. math.floor(pz / tileSize)
+    end
+    local function _gridAdd(t)
+        local key = _cellKey(t.Position.X, t.Position.Z)
+        local cell = spatialGrid[key]
+        if not cell then cell = {}; spatialGrid[key] = cell end
+        table.insert(cell, t)
+        tileCell[t] = key
+    end
+    local function _gridRemove(t)
+        local key = tileCell[t]; if not key then return end
+        local cell = spatialGrid[key]
+        if cell then
+            for i, x in ipairs(cell) do
+                if x == t then table.remove(cell, i); break end
+            end
+        end
+        tileCell[t] = nil
+    end
+    -- iterate tiles in the 3x3 cell window around `t` (excluding `t`)
+    local function _nearby(t, fn)
+        local px, pz = t.Position.X, t.Position.Z
+        local cx = math.floor(px / tileSize)
+        local cz = math.floor(pz / tileSize)
+        for dx = -1, 1 do
+            for dz = -1, 1 do
+                local cell = spatialGrid[(cx + dx) .. "," .. (cz + dz)]
+                if cell then
+                    for _, o in ipairs(cell) do
+                        if o ~= t then fn(o) end
+                    end
                 end
             end
-            neighbors[t]         = list8
-            cardinalNeighbors[t] = list4
+        end
+    end
+    -- build neighbour lists for tile `t` (uses current grid which
+    -- already has `t` inserted; _nearby filters self out)
+    local function _buildOne(t)
+        local list8, list4 = {}, {}
+        local px, pz = t.Position.X, t.Position.Z
+        _nearby(t, function(o)
+            local dx = o.Position.X - px
+            local dz = o.Position.Z - pz
+            local d2 = dx*dx + dz*dz
+            if d2 < diagR2 then table.insert(list8, o) end
+            if d2 < cardR2 then table.insert(list4, o) end
+        end)
+        neighbors[t]         = list8
+        cardinalNeighbors[t] = list4
+    end
+    -- after `t` is added: also insert `t` into the neighbour lists
+    -- of every existing nearby tile (within range)
+    local function _injectIntoExisting(t)
+        local px, pz = t.Position.X, t.Position.Z
+        _nearby(t, function(o)
+            local dx = o.Position.X - px
+            local dz = o.Position.Z - pz
+            local d2 = dx*dx + dz*dz
+            local n8 = neighbors[o]
+            if d2 < diagR2 and n8 then table.insert(n8, t) end
+            local n4 = cardinalNeighbors[o]
+            if d2 < cardR2 and n4 then table.insert(n4, t) end
+        end)
+    end
+    -- strip `t` from every nearby tile's neighbour lists
+    local function _evictFromExisting(t)
+        _nearby(t, function(o)
+            local n8 = neighbors[o]
+            if n8 then
+                for i, x in ipairs(n8) do
+                    if x == t then table.remove(n8, i); break end
+                end
+            end
+            local n4 = cardinalNeighbors[o]
+            if n4 then
+                for i, x in ipairs(n4) do
+                    if x == t then table.remove(n4, i); break end
+                end
+            end
+        end)
+    end
+
+    local function ensureNeighbors(allParts)
+        if not tileSize and allParts[1] then
+            tileSize = math.max(allParts[1].Size.X, allParts[1].Size.Z)
+            diagR2 = (tileSize * 1.6) ^ 2
+            cardR2 = (tileSize * 1.1) ^ 2
+        end
+        if not tileSize then return end
+
+        -- Pass 1: incoming set + add new tiles.
+        local incoming = {}
+        for _, t in ipairs(allParts) do
+            incoming[t] = true
+            if not knownTiles[t] then
+                _gridAdd(t)
+                _buildOne(t)         -- build the new tile's own lists
+                _injectIntoExisting(t) -- append it to nearby tiles' lists
+                knownTiles[t] = true
+            end
+        end
+
+        -- Pass 2: drop tiles that are gone (ChildRemoved or unparented).
+        -- O(known) which is unavoidable, but only does work on actual
+        -- removals; for steady-state infinite mode (only additions) it
+        -- short-circuits per tile via the `incoming` check.
+        for t in pairs(knownTiles) do
+            if not incoming[t] or not t.Parent then
+                _evictFromExisting(t)
+                _gridRemove(t)
+                neighbors[t]         = nil
+                cardinalNeighbors[t] = nil
+                knownTiles[t]        = nil
+            end
         end
     end
 
-    -- watch for new tiles in infinite mode
+    -- Watch the live folder so add/remove events keep our grid in
+    -- sync even between ensureNeighbors() calls. We use ChildAdded
+    -- to insert eagerly (so the next deduce/ESP pass already sees
+    -- the new tile in its neighbour map without paying a rebuild
+    -- cost), and ChildRemoved to evict immediately.
     do
         local parts = getParts()
         if parts then
-            parts.ChildAdded:Connect(function() neighborsDirty = true end)
-            parts.ChildRemoved:Connect(function() neighborsDirty = true end)
+            parts.ChildAdded:Connect(function(t)
+                if not t:IsA("BasePart") then return end
+                if not tileSize then
+                    tileSize = math.max(t.Size.X, t.Size.Z)
+                    diagR2 = (tileSize * 1.6) ^ 2
+                    cardR2 = (tileSize * 1.1) ^ 2
+                end
+                if not knownTiles[t] then
+                    _gridAdd(t)
+                    _buildOne(t)
+                    _injectIntoExisting(t)
+                    knownTiles[t] = true
+                end
+            end)
+            parts.ChildRemoved:Connect(function(t)
+                if knownTiles[t] then
+                    _evictFromExisting(t)
+                    _gridRemove(t)
+                    neighbors[t]         = nil
+                    cardinalNeighbors[t] = nil
+                    knownTiles[t]        = nil
+                end
+            end)
         end
     end
 
@@ -7405,7 +7575,7 @@ F.games.bms = (function()
         local state = {}
         local cov, rev, flg = 0, 0, 0
         for _, t in ipairs(all) do
-            local s = tileState(t)
+            local s = tileStateCached(t)
             state[t] = s
             if     s == "covered"  then cov = cov + 1
             elseif s == "revealed" then rev = rev + 1
@@ -7564,7 +7734,7 @@ F.games.bms = (function()
                 local all = parts:GetChildren()
                 ensureNeighbors(all)
                 local state = {}
-                for _, t in ipairs(all) do state[t] = tileState(t) end
+                for _, t in ipairs(all) do state[t] = tileStateCached(t) end
                 local mines = deduce(all, state)
                 -- pick the closest unflagged deduced mine within range
                 local origin  = myPos()
@@ -7977,7 +8147,7 @@ F.games.bms = (function()
                 local all = parts:GetChildren()
                 ensureNeighbors(all)
                 local state = {}
-                for _, t in ipairs(all) do state[t] = tileState(t) end
+                for _, t in ipairs(all) do state[t] = tileStateCached(t) end
                 local mines, safes, falseFlags, probs, fiftyPairs = deduce(all, state)
                 falseFlags = falseFlags or {}
                 probs      = probs or {}
@@ -8108,7 +8278,7 @@ F.games.bms = (function()
                                 -- is cheap when nothing changed.
                                 local liveState = {}
                                 for _, t in ipairs(all) do
-                                    liveState[t] = tileState(t)
+                                    liveState[t] = tileStateCached(t)
                                 end
                                 local liveMines, liveSafes = deduce(all, liveState)
                                 liveMines = liveMines or {}
