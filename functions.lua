@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.9"
+local SCRIPT_VERSION = "v1.21.10"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8654,23 +8654,32 @@ F.games.bms = (function()
                             end
                             walked = true
 
-                            -- CHAIN: after revealing `pick`, look at
-                            -- its 4 cardinal neighbours. If any is
-                            -- still covered AND deduced safe NOW (we
-                            -- re-deduce each chain step so cascade-
-                            -- revealed numbers can unlock new safes
-                            -- that weren't in the start-of-tick set),
-                            -- walk to it. Repeat from the new tile.
-                            -- The chain handles two adjacent safes the
-                            -- same as a longer row - one chain step
-                            -- still counts.
+                            -- CONTINUOUS WALK LOOP. After revealing
+                            -- `pick`, keep going without returning to
+                            -- the outer autoplay tick:
+                            --   1. Re-deduce live state.
+                            --   2. If a cardinal neighbour is still
+                            --      covered + deduced-safe, step into
+                            --      it directly (this is the original
+                            --      "chain" - cheap, no BFS).
+                            --   3. Otherwise BFS to the nearest
+                            --      non-adjacent reachable safe and
+                            --      walk that path inline.
+                            --   4. Loop until there's no reachable
+                            --      safe left.
+                            --
+                            -- The user complained about a ~ms stall
+                            -- when switching targets. That stall was
+                            -- the outer loop's getParts / O(N) state
+                            -- build / candidate sort / new BFS work
+                            -- that ran between the chain ending and
+                            -- the next walk starting. By keeping the
+                            -- planning loop here on the live state
+                            -- maps we already computed, the character
+                            -- can re-issue MoveTo without ever fully
+                            -- decelerating to a stop.
                             local current = pick
                             while autoActive do
-                                local card = cardinalNeighbors[current]
-                                if not card then break end
-                                -- live state + deduction. deduce() is
-                                -- state-hash-cached so re-running here
-                                -- is cheap when nothing changed.
                                 local liveState = {}
                                 for _, t in ipairs(all) do
                                     liveState[t] = tileStateCached(t)
@@ -8678,23 +8687,77 @@ F.games.bms = (function()
                                 local liveMines, liveSafes = deduce(all, liveState)
                                 liveMines = liveMines or {}
                                 liveSafes = liveSafes or {}
+
+                                -- ADJACENT chain step (cheapest path)
+                                local card = cardinalNeighbors[current]
+                                local pos  = myPos()
                                 local nextTile, nextD2 = nil, math.huge
-                                local pos = myPos()
-                                for _, nb in ipairs(card) do
-                                    if liveState[nb] == "covered"
-                                       and liveSafes[nb]
-                                       and not liveMines[nb] then
-                                        local dx = nb.Position.X - pos.X
-                                        local dz = nb.Position.Z - pos.Z
-                                        local d2 = dx*dx + dz*dz
-                                        if d2 < nextD2 then
-                                            nextTile, nextD2 = nb, d2
+                                if card then
+                                    for _, nb in ipairs(card) do
+                                        if liveState[nb] == "covered"
+                                           and liveSafes[nb]
+                                           and not liveMines[nb] then
+                                            local dx = nb.Position.X - pos.X
+                                            local dz = nb.Position.Z - pos.Z
+                                            local d2 = dx*dx + dz*dz
+                                            if d2 < nextD2 then
+                                                nextTile, nextD2 = nb, d2
+                                            end
                                         end
                                     end
                                 end
-                                if not nextTile then break end
-                                walkTo(nextTile)
-                                current = nextTile
+                                if nextTile then
+                                    walkTo(nextTile)
+                                    current = nextTile
+                                else
+                                    -- NO adjacent safe. Find the
+                                    -- nearest non-adjacent reachable.
+                                    local candidates = {}
+                                    for s in pairs(liveSafes) do
+                                        if liveState[s] == "covered" then
+                                            local dx = s.Position.X - pos.X
+                                            local dz = s.Position.Z - pos.Z
+                                            table.insert(candidates,
+                                                { tile = s, d2 = dx*dx + dz*dz })
+                                        end
+                                    end
+                                    if #candidates == 0 then break end
+                                    table.sort(candidates,
+                                        function(a, b) return a.d2 < b.d2 end)
+
+                                    local startTile2 = findCurrentTile(all, pos)
+                                    if not startTile2 then break end
+                                    local newPick, newPath = nil, nil
+                                    for _, c in ipairs(candidates) do
+                                        if not autoActive then break end
+                                        local p = bfsPath(startTile2, c.tile,
+                                            liveState, liveMines, falseFlags)
+                                        if p and #p > 0 then
+                                            newPick, newPath = c.tile, p
+                                            break
+                                        end
+                                    end
+                                    if not newPick or not newPath then break end
+
+                                    drawPathPreview(
+                                        { startTile2, table.unpack(newPath) })
+                                    local lastIdx2 = #newPath
+                                    for stepIdx, step in ipairs(newPath) do
+                                        if not autoActive then break end
+                                        local s = tileState(step)
+                                        if stepIdx < lastIdx2 then
+                                            if s == "flagged" then
+                                                -- ok
+                                            elseif s ~= "revealed" or liveMines[step] then
+                                                break
+                                            end
+                                        else
+                                            if liveMines[step] then break end
+                                        end
+                                        walkTo(step)
+                                    end
+                                    current = newPick
+                                end
                             end
                         end
                     end
