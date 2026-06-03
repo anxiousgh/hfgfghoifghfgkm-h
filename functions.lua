@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.2"
+local SCRIPT_VERSION = "v1.21.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7198,7 +7198,34 @@ F.games.bms = (function()
     -- Both rules + subset reduction are re-applied to fixed point so
     -- newly-discovered mines/safes propagate into the next iteration.
     -- ============================================================
+    --
+    -- Module-level signature cache. autoplay, ESP, and the chain
+    -- loop all call deduce(); without a shared cache they each pay
+    -- the full constraint+subset+tank cost every tick (e.g. autoplay
+    -- runs at ~10Hz so deduce was firing 10x/sec even when the board
+    -- hadn't changed). After a 50/50 guess dies the autoplay loop
+    -- spins on respawn frames, hammering this - that was the
+    -- "freezes and crashes on 50/50" symptom.
+    --
+    -- Sig = covered*1e6 + revealed*1000 + flagged. Collisions are
+    -- harmless because they only happen on equivalent boards.
+    local _deduceLastSig    = nil
+    local _deduceLastResult = nil
+
     local function deduce(parts, state)
+        local cov, rev, flg = 0, 0, 0
+        for _, t in ipairs(parts) do
+            local s = state[t]
+            if s == "covered"  then cov = cov + 1
+            elseif s == "revealed" then rev = rev + 1
+            elseif s == "flagged"  then flg = flg + 1 end
+        end
+        local sig = cov * 1e6 + rev * 1000 + flg
+        if sig == _deduceLastSig and _deduceLastResult then
+            local r = _deduceLastResult
+            return r[1], r[2], r[3], r[4], r[5]
+        end
+
         local knownMines = {}
         local knownSafes = {}
         local tileProbs  = {}  -- [tile] = mine probability (only filled by tank solver for tiles in small components)
@@ -7519,6 +7546,8 @@ F.games.bms = (function()
                 end
             end
         end
+        _deduceLastSig    = sig
+        _deduceLastResult = { knownMines, knownSafes, falseFlags, tileProbs, fiftyPairs }
         return knownMines, knownSafes, falseFlags, tileProbs, fiftyPairs
     end
 
