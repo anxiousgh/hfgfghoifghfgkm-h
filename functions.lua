@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.21.7"
+local SCRIPT_VERSION = "v1.21.8"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -7279,20 +7279,11 @@ F.games.bms = (function()
     local _deduceLastSig    = nil
     local _deduceLastResult = nil
 
-    local function deduce(parts, state)
-        local cov, rev, flg = 0, 0, 0
-        for _, t in ipairs(parts) do
-            local s = state[t]
-            if s == "covered"  then cov = cov + 1
-            elseif s == "revealed" then rev = rev + 1
-            elseif s == "flagged"  then flg = flg + 1 end
-        end
-        local sig = cov * 1e6 + rev * 1000 + flg
-        if sig == _deduceLastSig and _deduceLastResult then
-            local r = _deduceLastResult
-            return r[1], r[2], r[3], r[4], r[5]
-        end
-
+    -- _deduceImpl: the uncached computation. ESP calls this directly
+    -- with a SUBSET of tiles (near-player culling) so its subset
+    -- result doesn't thrash the autoplay-shared global cache.
+    -- The cached wrapper `deduce` lives below.
+    local function _deduceImpl(parts, state)
         local knownMines = {}
         local knownSafes = {}
         local tileProbs  = {}  -- [tile] = mine probability (only filled by tank solver for tiles in small components)
@@ -7613,9 +7604,62 @@ F.games.bms = (function()
                 end
             end
         end
-        _deduceLastSig    = sig
-        _deduceLastResult = { knownMines, knownSafes, falseFlags, tileProbs, fiftyPairs }
         return knownMines, knownSafes, falseFlags, tileProbs, fiftyPairs
+    end
+
+    -- Cached wrapper. autoplay + chain use this so a steady-state
+    -- (no reveal between ticks) returns instantly. ESP intentionally
+    -- bypasses by calling _deduceImpl directly with a culled subset.
+    local function deduce(parts, state)
+        local cov, rev, flg = 0, 0, 0
+        for _, t in ipairs(parts) do
+            local s = state[t]
+            if s == "covered"  then cov = cov + 1
+            elseif s == "revealed" then rev = rev + 1
+            elseif s == "flagged"  then flg = flg + 1 end
+        end
+        local sig = cov * 1e6 + rev * 1000 + flg
+        if sig == _deduceLastSig and _deduceLastResult then
+            local r = _deduceLastResult
+            return r[1], r[2], r[3], r[4], r[5]
+        end
+        local m, s, ff, pr, fp = _deduceImpl(parts, state)
+        _deduceLastSig    = sig
+        _deduceLastResult = { m, s, ff, pr, fp }
+        return m, s, ff, pr, fp
+    end
+
+    -- Spatial query: all known tiles within `radius` studs of
+    -- `origin`. Uses the spatial grid so the cost is ~O(K) where K
+    -- is the count of tiles inside the radius, not O(N) total.
+    -- Used by ESP to limit per-tick work to a window around the
+    -- player (currently a ~30-tile-wide square, configurable via
+    -- espScanRadius). Autowalk still operates on the full tileList.
+    local function _nearbyTiles(origin, radius)
+        local out = {}
+        if not tileSize then return out end
+        local r  = math.ceil(radius / tileSize)
+        local cx = math.floor(origin.X / tileSize)
+        local cz = math.floor(origin.Z / tileSize)
+        local r2 = radius * radius
+        for dx = -r, r do
+            local row = spatialGrid[cx + dx]
+            if row then
+                for dz = -r, r do
+                    local cell = row[cz + dz]
+                    if cell then
+                        for _, t in ipairs(cell) do
+                            local ex = t.Position.X - origin.X
+                            local ez = t.Position.Z - origin.Z
+                            if ex*ex + ez*ez < r2 then
+                                table.insert(out, t)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return out
     end
 
     -- ---- range filter ----
@@ -7645,6 +7689,14 @@ F.games.bms = (function()
     local espShowSafes = false
     local espShowWarnings = true
     local espThread
+
+    -- Near-player scan radius for ESP. Default 30-tile-wide window
+    -- (15 tiles * tileSize each side). In infinite mode the board
+    -- can hold thousands of tiles - iterating them all every tick
+    -- was the dominant cost even with caches. Limiting to a window
+    -- around the player makes ESP O(window) instead of O(board).
+    local espScanRadius = 60  -- studs; recomputed once tileSize is known
+    local _espLastSeen  = nil -- last tick's `seen` set (visible surfaces)
 
     local function ensureSurface(tile)
         local sg = surfaces[tile]
@@ -7721,7 +7773,13 @@ F.games.bms = (function()
         local parts = getParts()
         if not parts then clearAllHl(); return end
         ensureNeighbors(tileList)
-        local all = tileList
+        -- ESP only scans tiles near the player. The global neighbour
+        -- graph (tileList) stays maintained for autowalk; ESP just
+        -- pulls a window via the spatial grid.
+        local origin0 = myPos()
+        local scanR   = espScanRadius
+        if tileSize then scanR = math.max(scanR, 15 * tileSize) end
+        local all = _nearbyTiles(origin0, scanR)
         local state = {}
         local cov, rev, flg = 0, 0, 0
         for _, t in ipairs(all) do
@@ -7737,7 +7795,10 @@ F.games.bms = (function()
         if _lastSig == sig and _lastResult then
             mines, safes, falseFlags, probs = _lastResult[1], _lastResult[2], _lastResult[3], _lastResult[4]
         else
-            local ok, m, s2, ff, pr = pcall(deduce, all, state)
+            -- _deduceImpl: skip the global cache so ESP's culled
+            -- subset doesn't thrash the autoplay-shared cache.
+            -- ESP keeps its own outer sig cache (_lastSig / _lastResult).
+            local ok, m, s2, ff, pr = pcall(_deduceImpl, all, state)
             if not ok then
                 warn("[BMS] deduce error:", m)
                 mines, safes, falseFlags, probs = {}, {}, {}, {}
@@ -7809,10 +7870,19 @@ F.games.bms = (function()
                 end
             end
         end
-        -- hide surfaces not in the visible set
-        for tile, sg in pairs(surfaces) do
-            if not seen[tile] then sg.Enabled = false end
+        -- Hide surfaces that were visible last tick but aren't now.
+        -- Iterating ALL surfaces (could be 5000+ in infinite mode)
+        -- just to flip Enabled=false was a steady CPU cost; tracking
+        -- the previous-tick visible set scales with the scan window.
+        if _espLastSeen then
+            for tile in pairs(_espLastSeen) do
+                if not seen[tile] then
+                    local sg = surfaces[tile]
+                    if sg then sg.Enabled = false end
+                end
+            end
         end
+        _espLastSeen = seen
     end
 
     local function espStart()
