@@ -3099,7 +3099,7 @@ F.toolMaterial = (function()
     local color      = Color3.fromRGB(255, 60, 60)
     local transp     = 0.0
     local material   = Enum.Material.Neon
-    local equipConn, unequipConn, charConn
+    local equipConn, unequipConn, charConn, descConn, pushLoopThread
 
     -- Per-instance snapshot. Keyed by Instance ref (weak), value is a
     -- table of the original property values we touched.
@@ -3174,24 +3174,56 @@ F.toolMaterial = (function()
     end
 
     -- Re-push the current material/colour/transparency onto every
-    -- snapped part (live colour-picker / slider / dropdown updates).
+    -- snapped instance. Game scripts (HC's gun handlers etc.) often
+    -- re-set Material / Color / TextureID on equip or on a tick to
+    -- restore the 'intended' look - this loop fires every ~0.4s to
+    -- defeat those overwrites. Now also re-strips meshes + decals so
+    -- a re-shown face / texture goes back to hidden.
     local function pushLiveValues()
         for inst, s in pairs(snap) do
-            if inst and inst.Parent and s.kind == "part" then
+            if inst and inst.Parent then
                 pcall(function()
-                    inst.Material     = material
-                    inst.Color        = color
-                    inst.Transparency = transp
+                    if s.kind == "part" then
+                        inst.Material     = material
+                        inst.Color        = color
+                        inst.Transparency = transp
+                        if inst:IsA("MeshPart") then inst.TextureID = "" end
+                    elseif s.kind == "mesh" then
+                        inst.TextureId   = ""
+                        inst.VertexColor = Vector3.new(1, 1, 1)
+                    elseif s.kind == "deco" then
+                        inst.Transparency = 1
+                    end
                 end)
             end
         end
+    end
+
+    -- Catch descendants added AFTER the initial walk - tools spawn
+    -- their accessory meshes / decals asynchronously, so the
+    -- single-shot walkTool on equip misses anything that loads later.
+    local function bindDescAdded(tool)
+        if descConn then descConn:Disconnect() end
+        if not tool then return end
+        descConn = tool.DescendantAdded:Connect(function(inst)
+            if not active then return end
+            if inst:IsA("BasePart") then recolourPart(inst)
+            elseif inst:IsA("SpecialMesh") then stripMesh(inst)
+            elseif inst:IsA("Texture") or inst:IsA("Decal") then hideDeco(inst)
+            end
+        end)
     end
 
     local function attachToCurrent()
         if not active then return end
         local c = lplr.Character; if not c then return end
         local tool = c:FindFirstChildOfClass("Tool")
-        if tool then walkTool(tool) end
+        if tool then
+            walkTool(tool)
+            bindDescAdded(tool)
+        else
+            if descConn then descConn:Disconnect(); descConn = nil end
+        end
     end
 
     local function wireChar(c)
@@ -3221,10 +3253,21 @@ F.toolMaterial = (function()
             if active then task.wait(0.3); wireChar(c) end
         end)
         wireChar(lplr.Character)
+        -- periodic re-push to defeat game-script overrides
+        if pushLoopThread then pcall(task.cancel, pushLoopThread) end
+        pushLoopThread = task.spawn(function()
+            while active do
+                task.wait(0.4)
+                pushLiveValues()
+            end
+            pushLoopThread = nil
+        end)
     end
 
     local function stop()
         active = false
+        if pushLoopThread then pcall(task.cancel, pushLoopThread); pushLoopThread = nil end
+        if descConn       then descConn:Disconnect();              descConn       = nil end
         restoreAll()
         if equipConn   then equipConn:Disconnect();   equipConn   = nil end
         if unequipConn then unequipConn:Disconnect(); unequipConn = nil end
@@ -3304,7 +3347,7 @@ F.bodyMaterial = (function()
     local color      = Color3.fromRGB(255, 60, 60)
     local transp     = 0.0
     local material   = Enum.Material.Neon
-    local charConn
+    local charConn, descConn, pushLoopThread
 
     local snap = setmetatable({}, { __mode = "k" })
 
@@ -3386,16 +3429,46 @@ F.bodyMaterial = (function()
         end
     end
 
+    -- Re-push all our values onto every snapped instance. The game's
+    -- character/accessory scripts re-set Material / Color / face
+    -- decals on a tick to keep the avatar visually intact - this
+    -- loop fires every ~0.4s to defeat those overwrites. Also re-
+    -- strips meshes + decals so a re-added face / shirt goes back
+    -- to hidden.
     local function pushLiveValues()
         for inst, s in pairs(snap) do
-            if inst and inst.Parent and s.kind == "part" then
+            if inst and inst.Parent then
                 pcall(function()
-                    inst.Material     = material
-                    inst.Color        = color
-                    inst.Transparency = transp
+                    if s.kind == "part" then
+                        inst.Material     = material
+                        inst.Color        = color
+                        inst.Transparency = transp
+                        if inst:IsA("MeshPart") then inst.TextureID = "" end
+                    elseif s.kind == "mesh" then
+                        inst.TextureId   = ""
+                        inst.VertexColor = Vector3.new(1, 1, 1)
+                    elseif s.kind == "deco" then
+                        inst.Transparency = 1
+                    end
                 end)
             end
         end
+    end
+
+    -- DescendantAdded catches accessories / shirts / face decals that
+    -- load AFTER walkChar's initial pass. Without this, a hat that
+    -- streams in 200ms after CharacterAdded never gets recoloured.
+    local function bindDescAdded(c)
+        if descConn then descConn:Disconnect() end
+        if not c then return end
+        descConn = c.DescendantAdded:Connect(function(inst)
+            if not active then return end
+            if isInsideTool(inst, c) then return end
+            if inst:IsA("BasePart") then recolourPart(inst)
+            elseif inst:IsA("SpecialMesh") then stripMesh(inst)
+            elseif inst:IsA("Texture") or inst:IsA("Decal") then hideDeco(inst)
+            end
+        end)
     end
 
     local function start()
@@ -3403,13 +3476,29 @@ F.bodyMaterial = (function()
         active = true
         if charConn then charConn:Disconnect() end
         charConn = lplr.CharacterAdded:Connect(function(c)
-            if active then task.wait(0.3); walkChar(c) end
+            if active then
+                task.wait(0.3)
+                walkChar(c)
+                bindDescAdded(c)
+            end
         end)
         walkChar(lplr.Character)
+        bindDescAdded(lplr.Character)
+        -- periodic re-push to defeat game-script overrides
+        if pushLoopThread then pcall(task.cancel, pushLoopThread) end
+        pushLoopThread = task.spawn(function()
+            while active do
+                task.wait(0.4)
+                pushLiveValues()
+            end
+            pushLoopThread = nil
+        end)
     end
 
     local function stop()
         active = false
+        if pushLoopThread then pcall(task.cancel, pushLoopThread); pushLoopThread = nil end
+        if descConn       then descConn:Disconnect();              descConn       = nil end
         restoreAll()
         if charConn then charConn:Disconnect(); charConn = nil end
     end
