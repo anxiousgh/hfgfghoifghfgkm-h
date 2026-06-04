@@ -9104,50 +9104,53 @@ F.games.bms = (function()
                     hum.Jump = true
                     task.wait(0.25)
                 elseif name == "jumping off map" then
-                    -- Walk to the nearest board corner first, THEN
-                    -- step off the edge. We compute the AABB of the
-                    -- tile field and the board centroid; the corner
-                    -- nearest the player is the destination, and the
-                    -- "off the edge" target is `corner + outward * 20`
-                    -- where outward is corner-from-centroid normalised.
-                    local cornerPt, outwardDir
+                    -- Walk to the nearest POINT on the board's edge
+                    -- (perpendicular projection onto the closest of
+                    -- the 4 sides of the AABB), THEN step off into
+                    -- the void perpendicular to that edge.
+                    --
+                    -- Old version walked to the nearest CORNER, which
+                    -- could be a long detour if the player was sitting
+                    -- in the middle of a side.
+                    local edgePt, outwardDir
                     if #tileList > 0 then
                         local minX, maxX = math.huge, -math.huge
                         local minZ, maxZ = math.huge, -math.huge
-                        local cx, cz, n = 0, 0, 0
                         for _, t in ipairs(tileList) do
                             local p = t.Position
                             if p.X < minX then minX = p.X end
                             if p.X > maxX then maxX = p.X end
                             if p.Z < minZ then minZ = p.Z end
                             if p.Z > maxZ then maxZ = p.Z end
-                            cx, cz, n = cx + p.X, cz + p.Z, n + 1
                         end
-                        cx, cz = cx / n, cz / n
-                        local pos     = hrp.Position
-                        local corners = {
-                            Vector3.new(minX, pos.Y, minZ),
-                            Vector3.new(minX, pos.Y, maxZ),
-                            Vector3.new(maxX, pos.Y, minZ),
-                            Vector3.new(maxX, pos.Y, maxZ),
-                        }
-                        local bestD = math.huge
-                        for _, p in ipairs(corners) do
-                            local d = (p - pos).Magnitude
-                            if d < bestD then cornerPt, bestD = p, d end
+                        local pos = hrp.Position
+                        -- distances to each of the 4 edges
+                        local dL, dR = pos.X - minX, maxX - pos.X
+                        local dF, dB = pos.Z - minZ, maxZ - pos.Z
+                        local best = math.min(dL, dR, dF, dB)
+                        if best == dL then
+                            edgePt = Vector3.new(minX, pos.Y, math.clamp(pos.Z, minZ, maxZ))
+                            outwardDir = Vector3.new(-1, 0, 0)
+                        elseif best == dR then
+                            edgePt = Vector3.new(maxX, pos.Y, math.clamp(pos.Z, minZ, maxZ))
+                            outwardDir = Vector3.new( 1, 0, 0)
+                        elseif best == dF then
+                            edgePt = Vector3.new(math.clamp(pos.X, minX, maxX), pos.Y, minZ)
+                            outwardDir = Vector3.new( 0, 0, -1)
+                        else
+                            edgePt = Vector3.new(math.clamp(pos.X, minX, maxX), pos.Y, maxZ)
+                            outwardDir = Vector3.new( 0, 0,  1)
                         end
-                        local outV = Vector3.new(cornerPt.X - cx, 0, cornerPt.Z - cz)
-                        if outV.Magnitude > 0.01 then outwardDir = outV.Unit end
                     end
-                    if cornerPt then
-                        pcall(function() hum:MoveTo(cornerPt) end)
+                    if edgePt then
+                        pcall(function() hum:MoveTo(edgePt) end)
                         local deadline = tick() + 8
                         while tick() < deadline and autoActive do
-                            if (hrp.Position - cornerPt).Magnitude < 4 then break end
+                            if (hrp.Position - edgePt).Magnitude < 4 then break end
                             task.wait(0.1)
                         end
                         if outwardDir then
-                            pcall(function() hum:MoveTo(cornerPt + outwardDir * 20) end)
+                            pcall(function() hum:MoveTo(edgePt + outwardDir * 20) end)
                             task.wait(3)
                         end
                     else
