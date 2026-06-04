@@ -9002,6 +9002,19 @@ F.games.bms = (function()
 
     local function startAction(name)
         stopAction()
+        -- 'random' rolls one of the four real actions at trigger time
+        -- so the bot can't be fingerprinted by always doing the same
+        -- thing on each end-of-round.
+        if name == "random" then
+            local choices = {
+                "staying still",
+                "walking randomly",
+                "jumping in a circle",
+                "jumping off map",
+            }
+            name = choices[math.random(1, #choices)]
+            print("[BMS] random action resolved to:", name)
+        end
         if name == "staying still" or not name then return end
         actionThread = task.spawn(function()
             local t0 = tick()

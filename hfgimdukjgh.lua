@@ -2450,6 +2450,7 @@ do
         local _bmsActions = {
             "staying still", "walking randomly",
             "jumping in a circle", "jumping off map",
+            "random",
         }
         BMSAuto:AddDropdown("BMSWinAction", {
             Values   = _bmsActions,
