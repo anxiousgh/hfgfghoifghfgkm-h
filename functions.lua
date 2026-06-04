@@ -9214,15 +9214,25 @@ F.games.bms = (function()
                             task.wait(0.1)
                         end
                         if outwardDir then
-                            -- Walk past the edge AND jump off it - some
-                            -- maps have a tiny lip; jumping clears it.
-                            -- Single jump only while grounded so we don't
-                            -- accidentally fly back up.
+                            -- Walk past the edge AND keep pumping jumps
+                            -- while we're still grounded. Single-shot
+                            -- jump fired ONCE at the start landed before
+                            -- the character even reached the edge - by
+                            -- the time it crossed the boundary it was
+                            -- mid-stride, not airborne, so it just walked
+                            -- off instead of launching. Looping the jump
+                            -- (only when grounded) means every ground
+                            -- contact on the way to the edge becomes a
+                            -- fresh jump; once we're in the air the
+                            -- gate stops us from flying.
                             pcall(function() hum:MoveTo(edgePt + outwardDir * 20) end)
-                            if hum.FloorMaterial ~= Enum.Material.Air then
-                                pcall(function() hum.Jump = true end)
+                            local t0 = tick()
+                            while autoActive and (tick() - t0) < 3 do
+                                if hum.FloorMaterial ~= Enum.Material.Air then
+                                    pcall(function() hum.Jump = true end)
+                                end
+                                task.wait(0.15)
                             end
-                            task.wait(3)
                         end
                     else
                         -- no board found - fall straight down as a fallback
