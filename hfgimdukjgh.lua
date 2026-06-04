@@ -2541,6 +2541,18 @@ end
 -- ============================================================
 Library:SetWatermarkVisibility(true)
 
+-- Game name: resolved once via MarketplaceService at watermark setup
+-- (the per-game `_currentGame` is scoped to the Games tab builder
+-- and isn't visible here). Fingerprint-fallback identical to the
+-- one used in functions.lua's game detector.
+local _wmGameName = "?"
+do
+    local ok, info = pcall(function()
+        return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+    end)
+    if ok and info and info.Name then _wmGameName = info.Name end
+end
+
 -- only update watermark text once per second instead of every frame -
 -- reading Stats.Network + string.format + label rewrite was happening
 -- every render frame, wasted at 240 fps.
@@ -2553,8 +2565,11 @@ local WatermarkConn = RunService.RenderStepped:Connect(function()
         pcall(function()
             ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())
         end)
-        Library:SetWatermark(("decay.lua v[%s] | %d fps | %d ms"):format(
-            (F.getVersion and F.getVersion() or "?"):sub(1, 16), math.floor(FPS), ping))
+        local build  = (F.getVersion and F.getVersion() or "?"):sub(1, 16)
+        local uname  = LocalPlayer.Name or "?"
+        local dname  = LocalPlayer.DisplayName or uname
+        Library:SetWatermark(("decay.lua | %s | %s | %d fps | %d ms | %s (@%s)"):format(
+            _wmGameName, build, math.floor(FPS), ping, uname, dname))
     end
 end)
 
