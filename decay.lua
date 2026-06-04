@@ -142,6 +142,26 @@ do
         g.syn.crypt  = g.syn.crypt or {}
         g.syn.crypt.base64 = g.syn.crypt.base64 or { decode = decode }
     end
+    -- syn.protect_gui: hide ScreenGui from anti-cheat scans. Use the
+    -- executor's equivalent if present, otherwise no-op (UI still
+    -- works without protection).
+    if not g.syn.protect_gui then
+        g.syn.protect_gui =
+               rawget(_G, "protectgui")
+            or rawget(_G, "protect_gui")
+            or rawget(_G, "syn_protect_gui")
+            or function() end
+    end
+    -- syn.request: HTTP request, used by Octohook's webhook /
+    -- Discord-join button. Map to the executor's request function.
+    if not g.syn.request then
+        g.syn.request =
+               rawget(_G, "request")
+            or rawget(_G, "http_request")
+            or rawget(_G, "httprequest")
+            or (http and http.request)
+            or (function(opts) return { Success = false, Body = "", StatusCode = 0 } end)
+    end
 end
 
 local _octoFn, _octoErr = loadstring(_octoSrc)
