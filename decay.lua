@@ -97,6 +97,53 @@ do
     end
 end
 
+-- Synapse-X compat shim for embedded image data. Octohook decodes
+-- inline base64 PNGs via `syn.crypt.base64.decode("...")`. Potassium
+-- and most non-Synapse executors don't expose `syn`, so the lookup
+-- inside NewWindow throws ":1477: attempt to index nil with 'crypt'".
+-- Provide a stub that forwards to whatever base64 decoder the
+-- executor DOES expose (`crypt.base64decode`, `crypt.base64.decode`,
+-- `base64.decode`, etc).
+do
+    local g = getgenv()
+    if not (g.syn and g.syn.crypt and g.syn.crypt.base64 and g.syn.crypt.base64.decode) then
+        local decode = nil
+        local c = rawget(_G, "crypt") or (g and g.crypt)
+        if c then
+            decode = c.base64decode or c.base64_decode
+            if not decode and c.base64 then
+                decode = c.base64.decode or c.base64.base64_decode
+            end
+            if not decode then decode = c.decode_base64 end
+        end
+        if not decode then
+            local b = rawget(_G, "base64") or (g and g.base64)
+            if b then decode = b.decode or b.fromString end
+        end
+        if not decode then
+            -- pure-Lua base64 fallback (slow but works anywhere).
+            local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+            decode = function(data)
+                data = string.gsub(data, "[^" .. chars .. "=]", "")
+                return (data:gsub(".", function(x)
+                    if x == "=" then return "" end
+                    local r, f = "", (chars:find(x, 1, true) - 1)
+                    for i = 6, 1, -1 do r = r .. (f % 2^i - f % 2^(i-1) > 0 and "1" or "0") end
+                    return r
+                end):gsub("%d%d%d?%d?%d?%d?%d?%d?", function(x)
+                    if #x ~= 8 then return "" end
+                    local c = 0
+                    for i = 1, 8 do c = c + (x:sub(i, i) == "1" and 2^(8 - i) or 0) end
+                    return string.char(c)
+                end))
+            end
+        end
+        g.syn        = g.syn or {}
+        g.syn.crypt  = g.syn.crypt or {}
+        g.syn.crypt.base64 = g.syn.crypt.base64 or { decode = decode }
+    end
+end
+
 local _octoFn, _octoErr = loadstring(_octoSrc)
 if not _octoFn then
     error("[decay] Octohook failed to compile: " .. tostring(_octoErr), 0)
