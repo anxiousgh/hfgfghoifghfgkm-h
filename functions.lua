@@ -3081,41 +3081,120 @@ F.fov = { set = setFov, get = function() return CUSTOM_FOV end }
 --  so the highlight follows whatever you're holding.
 -- ============================================================
 F.toolGlow = (function()
-    local active = false
-    local fillColor    = Color3.fromRGB(255,  60,  60)
-    local outlineColor = Color3.fromRGB(255, 255, 255)
-    local fillTransp   = 0.35
-    local outlineTransp= 0.0
-    local hl
+    -- ============================================================
+    -- Strip every texture off the equipped tool and force Neon
+    -- material in `fillColor`. No Highlight - the tool itself glows.
+    --
+    -- Mesh texture sources handled:
+    --   * MeshPart.TextureID           (string property)
+    --   * SpecialMesh.TextureId        (child instance on a Part)
+    --   * Texture / Decal instances    (child instances on any BasePart)
+    --
+    -- Original property values are stashed per-instance so toggling
+    -- off restores the tool exactly (textures back, original material
+    -- + colour). Snap is weak-keyed so dropped tools GC freely.
+    --
+    -- Backward-compatible API: setOutlineColor / setOutlineTransparency
+    -- still exist (the loader UI calls them) but are no-ops in neon
+    -- mode. fillTransparency maps to part.Transparency directly.
+    -- ============================================================
+    local active        = false
+    local fillColor     = Color3.fromRGB(255, 60, 60)
+    local fillTransp    = 0.0
+    local outlineColor  = Color3.fromRGB(255, 255, 255)
+    local outlineTransp = 0.0
     local equipConn, unequipConn, charConn
 
-    local function ensureHl()
-        if hl and hl.Parent then return hl end
-        hl = Instance.new("Highlight")
-        hl.Name             = "_decay_tool_glow"
-        hl.DepthMode        = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.FillColor        = fillColor
-        hl.OutlineColor     = outlineColor
-        hl.FillTransparency = fillTransp
-        hl.OutlineTransparency = outlineTransp
-        hl.Enabled          = true
-        return hl
+    -- Per-instance snapshot. Keyed by Instance ref (weak), value is a
+    -- table of the original property values we touched.
+    local snap = setmetatable({}, { __mode = "k" })
+
+    local function recolourPart(p)
+        if snap[p] then return end
+        snap[p] = {
+            kind         = "part",
+            mat          = p.Material,
+            color        = p.Color,
+            transparency = p.Transparency,
+            texId        = p:IsA("MeshPart") and p.TextureID or nil,
+        }
+        p.Material      = Enum.Material.Neon
+        p.Color         = fillColor
+        p.Transparency  = fillTransp
+        if p:IsA("MeshPart") then p.TextureID = "" end
+    end
+
+    local function stripMesh(m)
+        if snap[m] then return end
+        snap[m] = {
+            kind        = "mesh",
+            texId       = m.TextureId,
+            vertexColor = m.VertexColor,
+        }
+        m.TextureId   = ""
+        m.VertexColor = Vector3.new(1, 1, 1)
+    end
+
+    local function hideDeco(d)
+        if snap[d] then return end
+        snap[d] = { kind = "deco", transparency = d.Transparency }
+        d.Transparency = 1
+    end
+
+    local function walkTool(tool)
+        if not tool then return end
+        for _, inst in ipairs(tool:GetDescendants()) do
+            if inst:IsA("BasePart") then
+                recolourPart(inst)
+            elseif inst:IsA("SpecialMesh") then
+                stripMesh(inst)
+            elseif inst:IsA("Texture") or inst:IsA("Decal") then
+                hideDeco(inst)
+            end
+        end
+    end
+
+    local function restoreAll()
+        for inst, s in pairs(snap) do
+            if inst and inst.Parent then
+                pcall(function()
+                    if s.kind == "part" then
+                        inst.Material      = s.mat
+                        inst.Color         = s.color
+                        inst.Transparency  = s.transparency
+                        if s.texId ~= nil and inst:IsA("MeshPart") then
+                            inst.TextureID = s.texId
+                        end
+                    elseif s.kind == "mesh" then
+                        inst.TextureId   = s.texId
+                        inst.VertexColor = s.vertexColor
+                    elseif s.kind == "deco" then
+                        inst.Transparency = s.transparency
+                    end
+                end)
+            end
+            snap[inst] = nil
+        end
+    end
+
+    -- Re-push the current colour/transparency onto every snapped part
+    -- (live colour-picker / slider updates).
+    local function pushLiveValues()
+        for inst, s in pairs(snap) do
+            if inst and inst.Parent and s.kind == "part" then
+                pcall(function()
+                    inst.Color        = fillColor
+                    inst.Transparency = fillTransp
+                end)
+            end
+        end
     end
 
     local function attachToCurrent()
         if not active then return end
         local c = lplr.Character; if not c then return end
         local tool = c:FindFirstChildOfClass("Tool")
-        if tool then
-            local h = ensureHl()
-            h.FillColor = fillColor; h.OutlineColor = outlineColor
-            h.FillTransparency = fillTransp; h.OutlineTransparency = outlineTransp
-            h.Adornee = tool
-            h.Parent  = tool
-            h.Enabled = true
-        else
-            if hl then hl.Enabled = false end
-        end
+        if tool then walkTool(tool) end
     end
 
     local function wireChar(c)
@@ -3126,7 +3205,13 @@ F.toolGlow = (function()
             if ch:IsA("Tool") then task.defer(attachToCurrent) end
         end)
         unequipConn = c.ChildRemoved:Connect(function(ch)
-            if ch:IsA("Tool") then task.defer(attachToCurrent) end
+            -- Drop unequipped tool's parts from snap so re-equipping a
+            -- different tool re-snapshots cleanly. We don't restore the
+            -- unequipped tool because it's no longer ours to worry about.
+            if ch:IsA("Tool") then
+                for _, d in ipairs(ch:GetDescendants()) do snap[d] = nil end
+                snap[ch] = nil
+            end
         end)
         attachToCurrent()
     end
@@ -3143,7 +3228,7 @@ F.toolGlow = (function()
 
     local function stop()
         active = false
-        if hl then pcall(function() hl:Destroy() end); hl = nil end
+        restoreAll()
         if equipConn   then equipConn:Disconnect();   equipConn   = nil end
         if unequipConn then unequipConn:Disconnect(); unequipConn = nil end
         if charConn    then charConn:Disconnect();    charConn    = nil end
@@ -3154,10 +3239,19 @@ F.toolGlow = (function()
         stop     = stop,
         toggle   = function() if active then stop() else start() end end,
         isActive = function() return active end,
-        setFillColor          = function(c) if typeof(c) == "Color3" then fillColor    = c; if hl then hl.FillColor    = c end end end,
-        setOutlineColor       = function(c) if typeof(c) == "Color3" then outlineColor = c; if hl then hl.OutlineColor = c end end end,
-        setFillTransparency   = function(n) fillTransp    = math.clamp(tonumber(n) or 0.35, 0, 1); if hl then hl.FillTransparency    = fillTransp    end end,
-        setOutlineTransparency= function(n) outlineTransp = math.clamp(tonumber(n) or 0,    0, 1); if hl then hl.OutlineTransparency = outlineTransp end end,
+        setFillColor = function(c)
+            if typeof(c) == "Color3" then
+                fillColor = c
+                if active then pushLiveValues() end
+            end
+        end,
+        setFillTransparency = function(n)
+            fillTransp = math.clamp(tonumber(n) or 0, 0, 1)
+            if active then pushLiveValues() end
+        end,
+        -- legacy no-ops (kept so loader UI doesn't crash on call)
+        setOutlineColor       = function(c) if typeof(c) == "Color3" then outlineColor = c end end,
+        setOutlineTransparency= function(n) outlineTransp = math.clamp(tonumber(n) or 0, 0, 1) end,
         getFillColor    = function() return fillColor    end,
         getOutlineColor = function() return outlineColor end,
     }
