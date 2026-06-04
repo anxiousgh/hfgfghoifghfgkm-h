@@ -3231,22 +3231,41 @@ F.toolMaterial = (function()
         if charConn    then charConn:Disconnect();    charConn    = nil end
     end
 
-    -- Material setter: accept Enum.Material directly, or a string
-    -- name (case-insensitive) and map it to the enum. Defaults to
-    -- Neon if the name doesn't match anything sensible.
+    -- Material setter: accept Enum.Material directly, OR a string
+    -- name (case + space + dot insensitive), OR a Linoria-style
+    -- table from a multi-select dropdown ({"Neon"=true} shape).
     local function setMaterial(m)
+        local picked
         if typeof(m) == "EnumItem" and m.EnumType == Enum.Material then
-            material = m
+            picked = m
         elseif type(m) == "string" then
-            local norm = m:lower():gsub("%s+", "")
-            if     norm == "neon"       then material = Enum.Material.Neon
-            elseif norm == "forcefield" then material = Enum.Material.ForceField
-            elseif norm == "glass"      then material = Enum.Material.Glass
-            elseif norm == "plastic"    then material = Enum.Material.Plastic
-            elseif norm == "metal"      then material = Enum.Material.Metal
-            elseif norm == "smoothplastic" then material = Enum.Material.SmoothPlastic
-            elseif Enum.Material[m] then material = Enum.Material[m]
+            local norm = m:lower():gsub("[%s%.]+", "")
+            if     norm == "neon"          then picked = Enum.Material.Neon
+            elseif norm == "forcefield"    then picked = Enum.Material.ForceField
+            elseif norm == "glass"         then picked = Enum.Material.Glass
+            elseif norm == "plastic"       then picked = Enum.Material.Plastic
+            elseif norm == "metal"         then picked = Enum.Material.Metal
+            elseif norm == "smoothplastic" then picked = Enum.Material.SmoothPlastic
+            else
+                local ok, em = pcall(function() return Enum.Material[m] end)
+                if ok and em then picked = em end
             end
+        elseif type(m) == "table" then
+            -- Linoria multi-select returns {["Neon"]=true} or {"Neon"}.
+            for k, v in pairs(m) do
+                local name = (type(k) == "string") and k or v
+                if type(name) == "string" then
+                    setMaterial(name)  -- recurse - picks the first match
+                    return
+                end
+            end
+        end
+        if picked then
+            material = picked
+            print("[decay] tool material ->", picked.Name,
+                  active and "(live)" or "(stored - turn toggle on to apply)")
+        else
+            warn("[decay] tool material: unknown input", typeof(m), m)
         end
         if active then pushLiveValues() end
     end

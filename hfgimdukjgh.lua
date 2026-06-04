@@ -975,7 +975,13 @@ do
         Values   = { "Neon", "ForceField" },
         Default  = "Neon",
         Text     = "Material",
-        Callback = F.toolMaterial.setMaterial,
+        Callback = function(v)
+            -- explicit wrapper so the signature is unambiguous + we
+            -- can trace dropdown fires that don't end up updating
+            -- the visual.
+            print("[decay] ToolMaterialKind dropdown fired:", typeof(v), v)
+            F.toolMaterial.setMaterial(v)
+        end,
     })
     TabEspWorld:AddLabel("Color"):AddColorPicker("ToolMaterialColor", {
         Default = F.toolMaterial.getColor(), Title = "Tool material color",
