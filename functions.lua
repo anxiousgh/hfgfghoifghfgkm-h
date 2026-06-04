@@ -2868,20 +2868,24 @@ F.spin      = makeToggle(startSpin,      stopSpin,      "spinActive")
 -- ============================================================
 F.hvhMovement = (function()
     local active        = false
-    local jiggleAmt     = 25   -- max ±degrees off camera yaw
+    local jiggleAmtMin  = 15   -- random ±degree range, rolled per snap
+    local jiggleAmtMax  = 35
     local jiggleHzMin   = 1    -- random snap-rate range, full cycles/sec
     local jiggleHzMax   = 3
     local _savedAR      = nil  -- captured Humanoid.AutoRotate
     -- snap scheduling: per-snap we roll a fresh Hz in [min,max] and
-    -- compute when the next snap should happen. Keeps the body
-    -- flicking at irregular intervals instead of a fixed clock.
+    -- compute when the next snap should happen. Same for amount -
+    -- each snap picks a fresh magnitude. Keeps both period AND
+    -- swing-distance irregular.
     local _sign         = 1
+    local _curAmt       = 0    -- magnitude held since last snap
     local _nextSnapAt   = 0
 
     local function start()
         if active then return end
         active      = true
         _sign       = (math.random() < 0.5) and -1 or 1
+        _curAmt     = (jiggleAmtMin + jiggleAmtMax) * 0.5
         _nextSnapAt = 0
         RunService:BindToRenderStep("decay_hvh", Enum.RenderPriority.Last.Value + 1, function()
             if not active then
@@ -2902,17 +2906,21 @@ F.hvhMovement = (function()
             if dx*dx + dz*dz < 0.01 then return end
             local baseYaw = math.atan2(-dx, -dz)
             -- Snap scheduling: when the planned snap time arrives,
-            -- flip sign and roll the next interval from a random Hz
-            -- in [min, max]. Each half-cycle = 1/(2*Hz) seconds.
+            -- flip sign and roll a fresh interval (Hz in [min,max])
+            -- AND a fresh amount (deg in [min,max]). Both held until
+            -- the next snap. Each half-cycle = 1/(2*Hz) seconds.
             local now = tick()
             if now >= _nextSnapAt then
                 _sign = -_sign
-                local lo = math.max(jiggleHzMin, 0.01)
-                local hi = math.max(jiggleHzMax, lo)
-                local hz = lo + math.random() * (hi - lo)
+                local hzLo = math.max(jiggleHzMin, 0.01)
+                local hzHi = math.max(jiggleHzMax, hzLo)
+                local hz   = hzLo + math.random() * (hzHi - hzLo)
                 _nextSnapAt = now + 1 / (2 * hz)
+                local amLo = math.max(jiggleAmtMin, 0)
+                local amHi = math.max(jiggleAmtMax, amLo)
+                _curAmt = amLo + math.random() * (amHi - amLo)
             end
-            local j = _sign * math.rad(jiggleAmt)
+            local j = _sign * math.rad(_curAmt)
             hrp.CFrame = CFrame.new(hrp.Position) * CFrame.fromEulerAnglesYXZ(0, baseYaw + j, 0)
         end)
     end
@@ -2933,7 +2941,14 @@ F.hvhMovement = (function()
         stop     = stop,
         toggle   = function() if active then stop() else start() end end,
         isActive = function() return active end,
-        setJiggleAmount = function(n) jiggleAmt = math.clamp(tonumber(n) or 25, 0, 180) end,
+        setJiggleAmountMin = function(n)
+            jiggleAmtMin = math.clamp(tonumber(n) or 15, 0, 180)
+            if jiggleAmtMin > jiggleAmtMax then jiggleAmtMax = jiggleAmtMin end
+        end,
+        setJiggleAmountMax = function(n)
+            jiggleAmtMax = math.clamp(tonumber(n) or 35, 0, 180)
+            if jiggleAmtMax < jiggleAmtMin then jiggleAmtMin = jiggleAmtMax end
+        end,
         setJiggleFreqMin = function(n)
             jiggleHzMin = math.clamp(tonumber(n) or 1, 0.05, 30)
             if jiggleHzMin > jiggleHzMax then jiggleHzMax = jiggleHzMin end
@@ -2942,9 +2957,10 @@ F.hvhMovement = (function()
             jiggleHzMax = math.clamp(tonumber(n) or 3, 0.05, 30)
             if jiggleHzMax < jiggleHzMin then jiggleHzMin = jiggleHzMax end
         end,
-        getJiggleAmount  = function() return jiggleAmt end,
-        getJiggleFreqMin = function() return jiggleHzMin end,
-        getJiggleFreqMax = function() return jiggleHzMax end,
+        getJiggleAmountMin = function() return jiggleAmtMin end,
+        getJiggleAmountMax = function() return jiggleAmtMax end,
+        getJiggleFreqMin   = function() return jiggleHzMin end,
+        getJiggleFreqMax   = function() return jiggleHzMax end,
     }
 end)()
 F.spin.setSpeed = function(n)

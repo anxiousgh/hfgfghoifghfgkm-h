@@ -1102,10 +1102,15 @@ do
         Default = false,
         Tooltip = "Pins your character's yaw to face the camera position and snaps left/right. Same write-at-Last+1 priority as Face Target so shiftlock / game scripts can't override the rotation.",
         Callback = function(v) if v then F.hvhMovement.start() else F.hvhMovement.stop() end end })
-    Hvh:AddSlider("HvhJiggleAmount", {
-        Text     = "Jiggle amount",
-        Default  = 25, Min = 0, Max = 180, Rounding = 0, Suffix = " deg",
-        Callback = function(v) F.hvhMovement.setJiggleAmount(v) end,
+    Hvh:AddSlider("HvhJiggleAmountMin", {
+        Text     = "Jiggle amount min",
+        Default  = 15, Min = 0, Max = 180, Rounding = 0, Suffix = " deg",
+        Callback = function(v) F.hvhMovement.setJiggleAmountMin(v) end,
+    })
+    Hvh:AddSlider("HvhJiggleAmountMax", {
+        Text     = "Jiggle amount max",
+        Default  = 35, Min = 0, Max = 180, Rounding = 0, Suffix = " deg",
+        Callback = function(v) F.hvhMovement.setJiggleAmountMax(v) end,
     })
     Hvh:AddSlider("HvhJiggleFreqMin", {
         Text     = "Jiggle frequency min",
