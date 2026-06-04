@@ -9090,18 +9090,33 @@ F.games.bms = (function()
         if name == "staying still" or not name then return end
         actionThread = task.spawn(function()
             local t0 = tick()
+            local _circleCenter  -- anchored on first iteration of circle action
             while autoActive do
                 local c = lplr.Character
                 local hum = c and c:FindFirstChildOfClass("Humanoid")
                 local hrp = c and c:FindFirstChild("HumanoidRootPart")
                 if not hum or not hrp or hum.Health <= 0 then task.wait(0.5); continue end
                 if name == "jumping in a circle" then
-                    -- step around a 6-stud radius circle while jumping
+                    -- Step around a SMALL (~5 stud diameter, 2.5 radius)
+                    -- circle. Anchor the centre to the position we were
+                    -- at when the action started (t0) so the circle
+                    -- doesn't drift after each MoveTo.
+                    _circleCenter = _circleCenter or hrp.Position
                     local a = (tick() - t0) * 2  -- angular speed
-                    local cx, cz = hrp.Position.X, hrp.Position.Z
-                    local target = Vector3.new(cx + math.cos(a) * 6, hrp.Position.Y, cz + math.sin(a) * 6)
+                    local target = Vector3.new(
+                        _circleCenter.X + math.cos(a) * 2.5,
+                        _circleCenter.Y,
+                        _circleCenter.Z + math.sin(a) * 2.5
+                    )
                     pcall(function() hum:MoveTo(target) end)
-                    hum.Jump = true
+                    -- Force a jump every tick. hum.Jump only triggers
+                    -- one jump per state cycle - ChangeState forces it
+                    -- even when the prior Jump hasn't fully completed
+                    -- (this is what HC anti-jump scripts blow past too).
+                    pcall(function()
+                        hum.Jump = true
+                        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                    end)
                     task.wait(0.25)
                 elseif name == "jumping off map" then
                     -- Walk to the nearest POINT on the board's edge
@@ -9150,7 +9165,13 @@ F.games.bms = (function()
                             task.wait(0.1)
                         end
                         if outwardDir then
+                            -- Walk past the edge AND jump off it - some
+                            -- maps have a tiny lip; jumping clears it.
                             pcall(function() hum:MoveTo(edgePt + outwardDir * 20) end)
+                            pcall(function()
+                                hum.Jump = true
+                                hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                            end)
                             task.wait(3)
                         end
                     else
