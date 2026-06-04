@@ -2888,9 +2888,21 @@ F.hvhMovement = (function()
                 if hum.AutoRotate then pcall(function() hum.AutoRotate = false end) end
             end
             local cam = workspace.CurrentCamera; if not cam then return end
-            local look = cam.CFrame.LookVector
-            local baseYaw = math.atan2(-look.X, -look.Z)
-            local j = math.sin(tick() * jiggleHz * 2 * math.pi) * math.rad(jiggleAmt)
+            -- Face TOWARD the camera position (so the character's front
+            -- points at the viewer regardless of aim direction). Old
+            -- version used cam.LookVector which aligned the body with
+            -- the aim direction - that turned out to be the wrong
+            -- direction (faces away from camera in third-person).
+            local dx = cam.CFrame.Position.X - hrp.Position.X
+            local dz = cam.CFrame.Position.Z - hrp.Position.Z
+            if dx*dx + dz*dz < 0.01 then return end
+            local baseYaw = math.atan2(-dx, -dz)
+            -- SNAP jiggle: square wave instead of sin so the body
+            -- flicks left/right rather than smoothly oscillating.
+            -- frequency is full cycles per second; (sign flips 2*Hz
+            -- times per second).
+            local sign = (math.floor(tick() * jiggleHz * 2) % 2 == 0) and 1 or -1
+            local j = sign * math.rad(jiggleAmt)
             hrp.CFrame = CFrame.new(hrp.Position) * CFrame.fromEulerAnglesYXZ(0, baseYaw + j, 0)
         end)
     end

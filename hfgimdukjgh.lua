@@ -1085,21 +1085,6 @@ do
     Move:AddToggle("AutoRespawn",{ Text = "Auto-respawn",  Default = false,
         Callback = function(v) if v then F.autoRespawn.start() else F.autoRespawn.stop() end end })
 
-    Move:AddToggle("HvhMove", { Text = "CSGO HvH movement",
-        Default = false,
-        Tooltip = "Pins your character yaw to the camera's facing direction and jiggles left/right. Same write-at-Last+1 pattern as Face Target so shiftlock / game scripts can't override the rotation.",
-        Callback = function(v) if v then F.hvhMovement.start() else F.hvhMovement.stop() end end })
-    Move:AddSlider("HvhJiggleAmount", {
-        Text     = "Jiggle amount",
-        Default  = 25, Min = 0, Max = 180, Rounding = 0, Suffix = " deg",
-        Callback = function(v) F.hvhMovement.setJiggleAmount(v) end,
-    })
-    Move:AddSlider("HvhJiggleFrequency", {
-        Text     = "Jiggle frequency",
-        Default  = 8, Min = 0.1, Max = 30, Rounding = 1, Suffix = " Hz",
-        Callback = function(v) F.hvhMovement.setJiggleFrequency(v) end,
-    })
-
     -- Rocket jump: toggle gates Space-as-rocket-boost. Off = normal jump.
     -- On = pressing Space fires the rocket impulse instead. Manual fire
     -- button + tuning sliders are over in the right Extras groupbox.
@@ -1109,6 +1094,23 @@ do
         Callback = function(v)
             if v then F.rocketJump.start() else F.rocketJump.stop() end
         end,
+    })
+
+    -- own groupbox stacked under Movement on the left
+    local Hvh = Tabs.Movement:AddLeftGroupbox("CSGO HvH movement")
+    Hvh:AddToggle("HvhMove", { Text = "Enabled",
+        Default = false,
+        Tooltip = "Pins your character's yaw to face the camera position and snaps left/right. Same write-at-Last+1 priority as Face Target so shiftlock / game scripts can't override the rotation.",
+        Callback = function(v) if v then F.hvhMovement.start() else F.hvhMovement.stop() end end })
+    Hvh:AddSlider("HvhJiggleAmount", {
+        Text     = "Jiggle amount",
+        Default  = 25, Min = 0, Max = 180, Rounding = 0, Suffix = " deg",
+        Callback = function(v) F.hvhMovement.setJiggleAmount(v) end,
+    })
+    Hvh:AddSlider("HvhJiggleFrequency", {
+        Text     = "Jiggle frequency",
+        Default  = 8, Min = 0.1, Max = 30, Rounding = 1, Suffix = " Hz",
+        Callback = function(v) F.hvhMovement.setJiggleFrequency(v) end,
     })
 
     -- right side: extras (spin/flip/ice + blink)
