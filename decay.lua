@@ -37,10 +37,71 @@ local F = _fnFn()
 
 -- ============================================================
 -- Octohook bootstrap
+-- ----------------------------------------------------------------
+-- Octohook line 77 tries to load Quenty's Signal module from
+-- NevermoreEngine via raw HttpGet. That module is part of a
+-- Nevermore loader package and breaks when loaded standalone:
+--   ':47: attempt to index nil with loader' (the Signal source
+--   expects a `loader` global the executor doesn't provide).
+--
+-- Patch it: download Octohook, regex-replace the broken Signal
+-- loader line with a self-contained Signal class that exposes
+-- the same Connect / Fire / Wait / Destroy surface, then
+-- loadstring the patched source.
 -- ============================================================
-local OctoLib = loadstring(game:HttpGet(
+local _octoSrc = game:HttpGet(
     "https://raw.githubusercontent.com/cueshut/saves/main/octohook%20ui%20lib"
-))({ cheatname = "decay", gamename = "universal" })
+)
+local _inlineSignal = [[(function()
+    local Signal = {} Signal.__index = Signal
+    function Signal.new() return setmetatable({_cb = {}}, Signal) end
+    function Signal:Connect(fn)
+        local conn = { Connected = true }
+        function conn:Disconnect() conn.Connected = false end
+        table.insert(self._cb, {fn = fn, conn = conn})
+        return conn
+    end
+    function Signal:Fire(...)
+        local args = table.pack(...)
+        for i = #self._cb, 1, -1 do
+            local e = self._cb[i]
+            if not e.conn.Connected then
+                table.remove(self._cb, i)
+            else
+                task.spawn(e.fn, table.unpack(args, 1, args.n))
+            end
+        end
+    end
+    function Signal:Wait()
+        local thread = coroutine.running()
+        local conn
+        conn = self:Connect(function(...)
+            conn:Disconnect()
+            task.spawn(thread, ...)
+        end)
+        return coroutine.yield()
+    end
+    function Signal:Destroy() self._cb = {} end
+    return Signal
+end)()]]
+do
+    local n
+    _octoSrc, n = _octoSrc:gsub(
+        "signal%s*=%s*loadstring%(game:HttpGet%('https://raw%.githubusercontent%.com/Quenty/[^']+'%)%)%(%);?",
+        "signal = " .. _inlineSignal .. ";"
+    )
+    if n == 0 then
+        warn("[decay] Octohook Signal patch: 0 substitutions - upstream may have changed")
+    else
+        print("[decay] Octohook Signal patch applied (" .. n .. " substitution)")
+    end
+end
+
+local _octoFn, _octoErr = loadstring(_octoSrc)
+if not _octoFn then
+    error("[decay] Octohook failed to compile: " .. tostring(_octoErr), 0)
+end
+local OctoLib = _octoFn({ cheatname = "decay", gamename = "universal" })
 OctoLib:init()
 
 local Players = game:GetService("Players")
