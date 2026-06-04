@@ -1,9 +1,9 @@
 -- ============================================================
---  cclosure.vip   //   @vampire   //   LinoriaLib build
+--  decay.lua   //   @vampire   //   Octohook UI build
 --  executor: Potassium
 -- ============================================================
 
-print("[loader] cclosure.vip hfgimdukjgh v1.13.3 loaded - if you don't see this, your loader file itself is cached")
+print("[decay] decay.lua loaded - if you don't see this, your loader file itself is cached")
 
 -- raw.githubusercontent.com IGNORES query strings for cache keying so
 -- the old `?_=tick()` trick is a no-op. SHA-pin the URLs via the
@@ -22,40 +22,26 @@ end
 local repo
 if _sha then
     repo = "https://raw.githubusercontent.com/" .. _ghOwner .. "/" .. _ghRepo .. "/" .. _sha .. "/"
-    print("[loader] SHA-pinned base:", _sha:sub(1,12) .. "...")
+    print("[decay] SHA-pinned base:", _sha:sub(1,12) .. "...")
 else
     repo = "https://raw.githubusercontent.com/" .. _ghOwner .. "/" .. _ghRepo .. "/" .. _ghBranch .. "/"
-    warn("[loader] GitHub API failed - falling back to main branch (may be cached)")
+    warn("[decay] GitHub API failed - falling back to main branch (may be cached)")
 end
 
 local _functionsSrc = game:HttpGet(repo .. "functions.lua")
 local _fnFn, _fnErr = loadstring(_functionsSrc)
 if not _fnFn then
-    error("[cclosure.vip] functions.lua failed to compile: " .. tostring(_fnErr), 0)
+    error("[decay] functions.lua failed to compile: " .. tostring(_fnErr), 0)
 end
 local F = _fnFn()
 
-local Library      = loadstring(game:HttpGet(repo .. "lib.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "libaddons/tman.lua"))()
-local SaveManager  = loadstring(game:HttpGet(repo .. "libaddons/sman.lua"))()
-
--- Patch: LinoriaLib button labels render a hair too low because the font's
--- visual midpoint sits below its line-box center. Shift button labels up by 1px.
-do
-    local orig = Library.CreateLabel
-    if orig then
-        Library.CreateLabel = function(self, props, ...)
-            local lbl = orig(self, props, ...)
-            if lbl and props
-                and props.Size    == UDim2.new(1, 0, 1, 0)
-                and props.TextSize == 14
-                and props.ZIndex   == 6 then
-                lbl.Position = UDim2.fromOffset(0, -1)
-            end
-            return lbl
-        end
-    end
-end
+-- ============================================================
+-- Octohook bootstrap
+-- ============================================================
+local OctoLib = loadstring(game:HttpGet(
+    "https://raw.githubusercontent.com/cueshut/saves/main/octohook%20ui%20lib"
+))({ cheatname = "decay", gamename = "universal" })
+OctoLib:init()
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -63,9 +49,230 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 
 -- ============================================================
---  one-shot keybind infrastructure
---  fires on press for any KeyPicker registered via bindFireKey, regardless
---  of the picker's mode - so one-shot actions don't visually toggle on/off
+-- LinoriaLib -> Octohook compatibility shim
+-- ----------------------------------------------------------------
+-- The existing UI code (2500+ lines) calls LinoriaLib's API:
+--   Tab:AddLeftGroupbox / AddRightGroupbox / AddLeftTabbox / AddRightTabbox
+--   Section:AddToggle(flag, opts) / AddSlider(flag, opts) /
+--           AddInput / AddDropdown / AddButton / AddLabel / AddDivider
+--   Label:AddColorPicker(flag, opts) / AddKeyPicker(flag, opts) chains
+--   Toggles[flag].Value / :OnChanged() / :SetValue()
+--   Options[flag] same shape
+--   Library:Notify(text, time), Library.Unloaded, Library:OnUnload(fn)
+--
+-- This shim translates each of those onto Octohook's API:
+--   tab:AddSection(name, column 1 or 2)
+--   section:AddToggle / AddSlider / AddBox / AddList / AddColor / AddBind
+--   library:SendNotification(text, time)
+--
+-- Octohook stores values in `OctoLib.flags[flag]`; we mirror them
+-- into our Toggles/Options tables so existing access patterns work.
+-- ============================================================
+Library = {
+    Unloaded = false,
+    CreateLabel = function() return nil end,  -- patch hook stub
+}
+Toggles = {}
+Options = {}
+
+function Library:Notify(text, t)
+    OctoLib:SendNotification(tostring(text), t or 3)
+end
+function Library:OnUnload(fn)
+    if OctoLib.unloaded and OctoLib.unloaded.Connect then
+        OctoLib.unloaded:Connect(function()
+            Library.Unloaded = true
+            pcall(fn)
+        end)
+    end
+end
+
+local function _wrap(octoObj, initial)
+    local w = { Value = initial, _changed = {}, _octo = octoObj }
+    function w:OnChanged(cb) table.insert(self._changed, cb) end
+    return w
+end
+local function _fire(w, v)
+    w.Value = v
+    for _, cb in ipairs(w._changed) do pcall(cb, v) end
+end
+
+local function wrapSection(section)
+    local s = { _section = section }
+
+    function s:AddToggle(flag, opts)
+        opts = opts or {}
+        local userCB = opts.Callback or function() end
+        local octoT = section:AddToggle({
+            text     = opts.Text or "",
+            flag     = flag,
+            state    = opts.Default or false,
+            tooltip  = opts.Tooltip,
+            callback = function(v)
+                pcall(userCB, v)
+                if Toggles[flag] then _fire(Toggles[flag], v) end
+            end,
+        })
+        local w = _wrap(octoT, opts.Default or false)
+        function w:SetValue(v) octoT:SetState(v, true); _fire(self, v) end
+        Toggles[flag] = w
+        return self
+    end
+
+    function s:AddSlider(flag, opts)
+        opts = opts or {}
+        local userCB = opts.Callback or function() end
+        local incr = (opts.Rounding and 10 ^ -opts.Rounding) or 1
+        local octoSl = section:AddSlider({
+            text      = opts.Text or "",
+            flag      = flag,
+            min       = opts.Min or 0,
+            max       = opts.Max or 100,
+            increment = incr,
+            suffix    = opts.Suffix or "",
+            value     = opts.Default or opts.Min or 0,
+            tooltip   = opts.Tooltip,
+            callback  = function(v)
+                pcall(userCB, v)
+                if Options[flag] then _fire(Options[flag], v) end
+            end,
+        })
+        local w = _wrap(octoSl, opts.Default or opts.Min or 0)
+        function w:SetValue(v) octoSl:SetValue(v, true); _fire(self, v) end
+        Options[flag] = w
+        return self
+    end
+
+    function s:AddInput(flag, opts)
+        opts = opts or {}
+        local userCB = opts.Callback or function() end
+        local octoB = section:AddBox({
+            text     = opts.Text or "",
+            flag     = flag,
+            input    = opts.Default or "",
+            tooltip  = opts.Tooltip,
+            callback = function(v)
+                pcall(userCB, v)
+                if Options[flag] then _fire(Options[flag], v) end
+            end,
+        })
+        local w = _wrap(octoB, opts.Default or "")
+        function w:SetValue(v) octoB:SetInput(v, true); _fire(self, v) end
+        Options[flag] = w
+        return self
+    end
+
+    function s:AddDropdown(flag, opts)
+        opts = opts or {}
+        local userCB = opts.Callback or function() end
+        local octoL = section:AddList({
+            text     = opts.Text or "",
+            flag     = flag,
+            values   = opts.Values or {},
+            selected = opts.Default,
+            multi    = opts.Multi or false,
+            tooltip  = opts.Tooltip,
+            callback = function(v)
+                pcall(userCB, v)
+                if Options[flag] then _fire(Options[flag], v) end
+            end,
+        })
+        local w = _wrap(octoL, opts.Default)
+        function w:SetValue(v) octoL:Select(v, true); _fire(self, v) end
+        function w:SetValues(vals)
+            octoL:ClearValues()
+            for _, val in ipairs(vals) do octoL:AddValue(val) end
+        end
+        Options[flag] = w
+        return self
+    end
+
+    function s:AddButton(opts)
+        if type(opts) == "string" then opts = { Text = opts } end
+        section:AddButton({
+            text     = opts.Text or "Button",
+            confirm  = opts.DoubleClick or false,
+            callback = opts.Func or function() end,
+        })
+        return self
+    end
+
+    function s:AddDivider()
+        section:AddSeparator({ text = "" })
+        return self
+    end
+
+    function s:AddLabel(text)
+        section:AddSeparator({ text = tostring(text) })
+        local lbl = { _section = section, _labelText = tostring(text) }
+        function lbl:AddColorPicker(flag, opts)
+            opts = opts or {}
+            local userCB = opts.Callback or function() end
+            local octoC = section:AddColor({
+                text     = self._labelText,
+                flag     = flag,
+                color    = opts.Default or Color3.new(1, 1, 1),
+                trans    = opts.Transparency or 0,
+                tooltip  = opts.Title,
+                callback = function(c)
+                    pcall(userCB, c)
+                    if Options[flag] then _fire(Options[flag], c) end
+                end,
+            })
+            local w = _wrap(octoC, opts.Default or Color3.new(1, 1, 1))
+            function w:SetValue(c) octoC:SetColor(c, true); _fire(self, c) end
+            Options[flag] = w
+            return self
+        end
+        function lbl:AddKeyPicker(flag, opts)
+            opts = opts or {}
+            local userCB     = opts.Callback or function() end
+            local userChange = opts.ChangedCallback or function() end
+            local octoB = section:AddBind({
+                text        = self._labelText,
+                flag        = flag,
+                bind        = opts.Default or "none",
+                mode        = (opts.Mode or "Toggle"):lower(),
+                tooltip     = opts.Title,
+                nomouse     = opts.NoUI or false,
+                noindicator = opts.NoUI or false,
+                callback    = function(state)
+                    pcall(userCB, state)
+                    if Options[flag] then _fire(Options[flag], state) end
+                end,
+                keycallback = function(newKey) pcall(userChange, newKey) end,
+            })
+            local w = _wrap(octoB, opts.Default)
+            function w:SetValue(k) octoB:SetBind(k); _fire(self, k) end
+            Options[flag] = w
+            return self
+        end
+        return lbl
+    end
+
+    return s
+end
+
+local function makeTabbox(tab, column)
+    return {
+        AddTab = function(self, name)
+            return wrapSection(tab:AddSection(name, column))
+        end,
+    }
+end
+
+local function wrapTab(tab)
+    function tab:AddLeftGroupbox(name)  return wrapSection(self:AddSection(name, 1)) end
+    function tab:AddRightGroupbox(name) return wrapSection(self:AddSection(name, 2)) end
+    function tab:AddLeftTabbox()        return makeTabbox(self, 1) end
+    function tab:AddRightTabbox()       return makeTabbox(self, 2) end
+    return tab
+end
+
+-- ============================================================
+-- one-shot keybind infrastructure (Octohook bind callbacks fire
+-- on state change in toggle mode; for ChangedCallback-style one-
+-- shots we register here and fire on raw InputBegan match)
 -- ============================================================
 local _fireKeys = {}
 local function bindFireKey(optKey, fn) _fireKeys[optKey] = fn end
@@ -78,9 +285,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
     local uit = input.UserInputType
     local function matches(v)
         if v == nil then return false end
-        if typeof(v) == "EnumItem" then
-            return kc == v or uit == v
-        end
+        if typeof(v) == "EnumItem" then return kc == v or uit == v end
         local s = tostring(v)
         if kc and kc ~= Enum.KeyCode.Unknown and kc.Name == s then return true end
         local n = uit and uit.Name or ""
@@ -95,23 +300,30 @@ UserInputService.InputBegan:Connect(function(input, gp)
     end
 end)
 
-local Window = Library:CreateWindow({
-    Title         = "cclosure.vip | @vampire",
-    Center        = true,
-    AutoShow      = true,
-    TabPadding    = 8,
-    MenuFadeTime  = 0.2,
+-- Window + builtin Settings tab (theme + config + bind for toggle).
+local Window = OctoLib.NewWindow({
+    title = "decay.lua | @vampire",
+    size  = UDim2.new(0, 600, 0, 600),
 })
+OctoLib:CreateSettingsTab(Window)
+
+-- Library:CreateWindow shim (returns existing window for legacy callers)
+function Library:CreateWindow(_opts) return Window end
 
 local Tabs = {
-    Combat   = Window:AddTab("Combat"),
-    Visual   = Window:AddTab("Visual"),
-    Movement = Window:AddTab("Movement"),
-    Players  = Window:AddTab("Players"),
-    Misc     = Window:AddTab("Misc"),
-    Games    = Window:AddTab("Games"),
-    Config   = Window:AddTab("Config"),
+    Combat   = wrapTab(Window:AddTab("Combat")),
+    Visual   = wrapTab(Window:AddTab("Visual")),
+    Movement = wrapTab(Window:AddTab("Movement")),
+    Players  = wrapTab(Window:AddTab("Players")),
+    Misc     = wrapTab(Window:AddTab("Misc")),
+    Games    = wrapTab(Window:AddTab("Games")),
+    Config   = wrapTab(Window:AddTab("Config")),
 }
+
+-- ThemeManager / SaveManager: Octohook has its own settings tab so
+-- we just no-op the addon APIs the old UI code calls.
+local ThemeManager = setmetatable({}, { __index = function() return function() end end })
+local SaveManager  = setmetatable({}, { __index = function() return function() end end })
 
 -- ============================================================
 --  COMBAT TAB  (silent aim / ragebot / triggerbot / camlock)
