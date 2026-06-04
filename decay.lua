@@ -243,8 +243,59 @@ local function wrapSection(section)
         })
         local w = _wrap(octoT, opts.Default or false)
         function w:SetValue(v) octoT:SetState(v, true); _fire(self, v) end
+        -- Sub-element chains: LinoriaLib lets you do
+        --   AimToggle:AddKeyPicker("AimKey", {Default="J", Mode="Toggle", ...})
+        --   AimToggle:AddColorPicker("Col", {Default=Color3.new(...)})
+        -- Octohook supports the same via toggle:AddBind / :AddColor,
+        -- which render the sub-control inline beside the toggle.
+        function w:AddKeyPicker(subflag, sopts)
+            sopts = sopts or {}
+            local subCB     = sopts.Callback or function() end
+            local subChange = sopts.ChangedCallback or function() end
+            local sync      = sopts.SyncToggleState
+            local octoB = octoT:AddBind({
+                text        = sopts.Text or "",
+                flag        = subflag,
+                bind        = sopts.Default or "none",
+                mode        = (sopts.Mode or "Toggle"):lower(),
+                tooltip     = sopts.Title,
+                nomouse     = sopts.NoUI or false,
+                noindicator = sopts.NoUI or false,
+                callback    = function(state)
+                    pcall(subCB, state)
+                    if sync then octoT:SetState(state) end
+                    if Options[subflag] then _fire(Options[subflag], state) end
+                end,
+                keycallback = function(newKey) pcall(subChange, newKey) end,
+            })
+            local sw = _wrap(octoB, sopts.Default)
+            function sw:SetValue(k) octoB:SetBind(k); _fire(self, k) end
+            Options[subflag] = sw
+            return self  -- allow further .AddXxx chains off the toggle
+        end
+        function w:AddColorPicker(subflag, sopts)
+            sopts = sopts or {}
+            local subCB = sopts.Callback or function() end
+            local octoC = octoT:AddColor({
+                text     = sopts.Text or "",
+                flag     = subflag,
+                color    = sopts.Default or Color3.new(1, 1, 1),
+                trans    = sopts.Transparency or 0,
+                tooltip  = sopts.Title,
+                callback = function(c)
+                    pcall(subCB, c)
+                    if Options[subflag] then _fire(Options[subflag], c) end
+                end,
+            })
+            local sw = _wrap(octoC, sopts.Default or Color3.new(1, 1, 1))
+            function sw:SetValue(c) octoC:SetColor(c, true); _fire(self, c) end
+            Options[subflag] = sw
+            return self
+        end
         Toggles[flag] = w
-        return self
+        return w   -- IMPORTANT: return the toggle wrapper, not the section,
+                   -- so the loader can chain AddKeyPicker / AddColorPicker
+                   -- off `local Tog = section:AddToggle(...)`.
     end
 
     function s:AddSlider(flag, opts)
