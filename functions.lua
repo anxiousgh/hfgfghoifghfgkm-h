@@ -9099,33 +9099,46 @@ F.games.bms = (function()
                 local hrp = c and c:FindFirstChild("HumanoidRootPart")
                 if not hum or not hrp or hum.Health <= 0 then task.wait(0.5); continue end
                 if name == "jumping in a circle" then
-                    -- Step around a SMALL (~5 stud diameter, 2.5 radius)
-                    -- circle. Anchor the centre to the position we were
-                    -- at when the action started (t0) so the circle
-                    -- doesn't drift after each MoveTo.
+                    -- Velocity-based orbit around a fixed 2.5-stud
+                    -- radius. The previous MoveTo-per-tick produced a
+                    -- stutter (target moved ~1.3 studs/tick, character
+                    -- arrived before the next target was issued, then
+                    -- stopped). hum:Move applies a walking direction
+                    -- continuously - the humanoid moves at full
+                    -- walkspeed along the direction we give it each
+                    -- frame.
+                    --
+                    -- direction = tangent (perpendicular to radius,
+                    -- ccw) + small radial nudge to keep us on the
+                    -- 2.5-stud orbit instead of spiralling out.
                     _circleCenter = _circleCenter or hrp.Position
-                    local a = (tick() - t0) * 2  -- angular speed
-                    local target = Vector3.new(
-                        _circleCenter.X + math.cos(a) * 2.5,
-                        _circleCenter.Y,
-                        _circleCenter.Z + math.sin(a) * 2.5
-                    )
-                    pcall(function() hum:MoveTo(target) end)
-                    -- Only jump while grounded - otherwise ChangeState
-                    -- mid-air re-fires Jump every tick and the character
-                    -- climbs into the sky (user reported 'flying' from
-                    -- the old always-jump version). FloorMaterial = Air
-                    -- means no contact; HumanoidStateType.Freefall or
-                    -- Jumping also means airborne.
-                    local grounded = hum.FloorMaterial ~= Enum.Material.Air
-                    if grounded then
-                        local st = hum:GetState()
-                        if st ~= Enum.HumanoidStateType.Jumping
-                           and st ~= Enum.HumanoidStateType.Freefall then
-                            pcall(function() hum.Jump = true end)
-                        end
+                    local rel  = hrp.Position - _circleCenter
+                    local rel2 = Vector3.new(rel.X, 0, rel.Z)
+                    local d    = rel2.Magnitude
+                    local tangent
+                    if d > 0.01 then
+                        -- 90deg ccw rotation about world up
+                        tangent = Vector3.new(-rel2.Z, 0, rel2.X) / d
+                    else
+                        tangent = Vector3.new(1, 0, 0)
                     end
-                    task.wait(0.25)
+                    local radial = Vector3.zero
+                    if     d > 2.7 then radial = -rel2 / d   -- pull inward
+                    elseif d < 2.3 then radial =  rel2 / d   -- push outward
+                    end
+                    local moveDir = tangent + radial * 0.5
+                    if moveDir.Magnitude > 0.01 then
+                        moveDir = moveDir.Unit
+                    end
+                    pcall(function() hum:Move(moveDir, false) end)
+                    -- Jump only when grounded. Dropped the state-check
+                    -- (Jumping / Freefall) - it was too strict, the
+                    -- humanoid spends a lot of in-between time NEITHER
+                    -- jumping nor freefalling and the jump never fired.
+                    if hum.FloorMaterial ~= Enum.Material.Air then
+                        pcall(function() hum.Jump = true end)
+                    end
+                    task.wait(0.1)  -- 10 Hz update keeps Move applying
                 elseif name == "jumping off map" then
                     -- Walk to the nearest POINT on the board's edge
                     -- (perpendicular projection onto the closest of
@@ -9248,7 +9261,13 @@ F.games.bms = (function()
 
     local function startRespawnAction()
         stopRespawnAction()
-        if respawnAction == "stay still" then return end
+        local name = respawnAction
+        if name == "random" then
+            local choices = { "stay still", "walk randomly", "sit down" }
+            name = choices[math.random(1, #choices)]
+            print("[BMS] random respawn action resolved to:", name)
+        end
+        if name == "stay still" then return end
         respawnActionThread = task.spawn(function()
             while autoActive do
                 local c   = lplr.Character
@@ -9261,12 +9280,12 @@ F.games.bms = (function()
                 -- exit as soon as we're back on the board
                 if isOnTiles(hrp) then break end
 
-                if respawnAction == "walk randomly" then
+                if name == "walk randomly" then
                     local target = hrp.Position
                         + Vector3.new(math.random(-20, 20), 0, math.random(-20, 20))
                     pcall(function() hum:MoveTo(target) end)
                     task.wait(0.8 + math.random() * 1.5)
-                elseif respawnAction == "sit down" then
+                elseif name == "sit down" then
                     local seat = findNearestSeat()
                     if seat then
                         pcall(function() hum:MoveTo(seat.Position) end)

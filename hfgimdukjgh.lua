@@ -2479,10 +2479,10 @@ do
             Callback = function(v) F.games.bms.autoPlay.setFailAction(v) end,
         })
         BMSAuto:AddDropdown("BMSRespawnAction", {
-            Values   = { "stay still", "walk randomly", "sit down" },
+            Values   = { "stay still", "walk randomly", "sit down", "random" },
             Default  = "stay still",
             Text     = "Action after respawn",
-            Tooltip  = "Fires on every CharacterAdded (death + respawn). Stops the moment the player gets teleported back onto the tile field.",
+            Tooltip  = "Fires on every CharacterAdded (death + respawn). Stops the moment the player gets teleported back onto the tile field. 'random' rolls one of the three real options at each respawn.",
             Callback = function(v) F.games.bms.autoPlay.setRespawnAction(v) end,
         })
 
