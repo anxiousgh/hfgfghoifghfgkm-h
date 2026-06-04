@@ -989,6 +989,27 @@ do
     TabEspWorld:AddSlider("ToolMaterialTransparency", { Text = "Transparency",
         Default = 0, Min = 0, Max = 1, Rounding = 2,
         Callback = F.toolMaterial.setTransparency })
+
+    TabEspWorld:AddDivider()
+    TabEspWorld:AddLabel("Body material")
+    TabEspWorld:AddToggle("BodyMaterial", { Text = "Body material (character)",
+        Default = false,
+        Callback = function(v) if v then F.bodyMaterial.start() else F.bodyMaterial.stop() end end })
+    TabEspWorld:AddDropdown("BodyMaterialKind", {
+        Values   = { "Neon", "ForceField" },
+        Default  = "Neon",
+        Text     = "Material",
+        Callback = function(v)
+            print("[decay] BodyMaterialKind dropdown fired:", typeof(v), v)
+            F.bodyMaterial.setMaterial(v)
+        end,
+    })
+    TabEspWorld:AddLabel("Color"):AddColorPicker("BodyMaterialColor", {
+        Default = F.bodyMaterial.getColor(), Title = "Body material color",
+        Callback = F.bodyMaterial.setColor })
+    TabEspWorld:AddSlider("BodyMaterialTransparency", { Text = "Transparency",
+        Default = 0, Min = 0, Max = 1, Rounding = 2,
+        Callback = F.bodyMaterial.setTransparency })
 end
 
 -- ============================================================

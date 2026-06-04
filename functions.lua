@@ -3292,6 +3292,182 @@ F.toolMaterial = (function()
 end)()
 
 -- ============================================================
+--  BODY MATERIAL
+--  Same idea as toolMaterial but walks the whole character
+--  (body parts, accessories, head, etc.) instead of the equipped
+--  tool. Tool descendants are SKIPPED so toolMaterial can own
+--  the equipped weapon without the two features fighting over
+--  the snap map.
+-- ============================================================
+F.bodyMaterial = (function()
+    local active     = false
+    local color      = Color3.fromRGB(255, 60, 60)
+    local transp     = 0.0
+    local material   = Enum.Material.Neon
+    local charConn
+
+    local snap = setmetatable({}, { __mode = "k" })
+
+    local function recolourPart(p)
+        if snap[p] then return end
+        snap[p] = {
+            kind         = "part",
+            mat          = p.Material,
+            color        = p.Color,
+            transparency = p.Transparency,
+            texId        = p:IsA("MeshPart") and p.TextureID or nil,
+        }
+        p.Material      = material
+        p.Color         = color
+        p.Transparency  = transp
+        if p:IsA("MeshPart") then p.TextureID = "" end
+    end
+
+    local function stripMesh(m)
+        if snap[m] then return end
+        snap[m] = { kind = "mesh", texId = m.TextureId, vertexColor = m.VertexColor }
+        m.TextureId   = ""
+        m.VertexColor = Vector3.new(1, 1, 1)
+    end
+
+    local function hideDeco(d)
+        if snap[d] then return end
+        snap[d] = { kind = "deco", transparency = d.Transparency }
+        d.Transparency = 1
+    end
+
+    -- Skip everything inside an equipped Tool - that's toolMaterial's
+    -- territory. We walk up to the character root and bail if we
+    -- cross a Tool on the way.
+    local function isInsideTool(inst, char)
+        local p = inst.Parent
+        while p and p ~= char do
+            if p:IsA("Tool") then return true end
+            p = p.Parent
+        end
+        return false
+    end
+
+    local function walkChar(c)
+        if not c then return end
+        for _, inst in ipairs(c:GetDescendants()) do
+            if not isInsideTool(inst, c) then
+                if inst:IsA("BasePart") then
+                    recolourPart(inst)
+                elseif inst:IsA("SpecialMesh") then
+                    stripMesh(inst)
+                elseif inst:IsA("Texture") or inst:IsA("Decal") then
+                    hideDeco(inst)
+                end
+            end
+        end
+    end
+
+    local function restoreAll()
+        for inst, s in pairs(snap) do
+            if inst and inst.Parent then
+                pcall(function()
+                    if s.kind == "part" then
+                        inst.Material      = s.mat
+                        inst.Color         = s.color
+                        inst.Transparency  = s.transparency
+                        if s.texId ~= nil and inst:IsA("MeshPart") then
+                            inst.TextureID = s.texId
+                        end
+                    elseif s.kind == "mesh" then
+                        inst.TextureId   = s.texId
+                        inst.VertexColor = s.vertexColor
+                    elseif s.kind == "deco" then
+                        inst.Transparency = s.transparency
+                    end
+                end)
+            end
+            snap[inst] = nil
+        end
+    end
+
+    local function pushLiveValues()
+        for inst, s in pairs(snap) do
+            if inst and inst.Parent and s.kind == "part" then
+                pcall(function()
+                    inst.Material     = material
+                    inst.Color        = color
+                    inst.Transparency = transp
+                end)
+            end
+        end
+    end
+
+    local function start()
+        if active then return end
+        active = true
+        if charConn then charConn:Disconnect() end
+        charConn = lplr.CharacterAdded:Connect(function(c)
+            if active then task.wait(0.3); walkChar(c) end
+        end)
+        walkChar(lplr.Character)
+    end
+
+    local function stop()
+        active = false
+        restoreAll()
+        if charConn then charConn:Disconnect(); charConn = nil end
+    end
+
+    local function setMaterial(m)
+        local picked
+        if typeof(m) == "EnumItem" and m.EnumType == Enum.Material then
+            picked = m
+        elseif type(m) == "string" then
+            local norm = m:lower():gsub("[%s%.]+", "")
+            if     norm == "neon"          then picked = Enum.Material.Neon
+            elseif norm == "forcefield"    then picked = Enum.Material.ForceField
+            elseif norm == "glass"         then picked = Enum.Material.Glass
+            elseif norm == "plastic"       then picked = Enum.Material.Plastic
+            elseif norm == "metal"         then picked = Enum.Material.Metal
+            elseif norm == "smoothplastic" then picked = Enum.Material.SmoothPlastic
+            else
+                local ok, em = pcall(function() return Enum.Material[m] end)
+                if ok and em then picked = em end
+            end
+        elseif type(m) == "table" then
+            for k, v in pairs(m) do
+                local name = (type(k) == "string") and k or v
+                if type(name) == "string" then setMaterial(name); return end
+            end
+        end
+        if picked then
+            material = picked
+            print("[decay] body material ->", picked.Name,
+                  active and "(live)" or "(stored - turn toggle on to apply)")
+        else
+            warn("[decay] body material: unknown input", typeof(m), m)
+        end
+        if active then pushLiveValues() end
+    end
+
+    return {
+        start    = start,
+        stop     = stop,
+        toggle   = function() if active then stop() else start() end end,
+        isActive = function() return active end,
+        setColor = function(c)
+            if typeof(c) == "Color3" then
+                color = c
+                if active then pushLiveValues() end
+            end
+        end,
+        setTransparency = function(n)
+            transp = math.clamp(tonumber(n) or 0, 0, 1)
+            if active then pushLiveValues() end
+        end,
+        setMaterial  = setMaterial,
+        getColor     = function() return color end,
+        getMaterial  = function() return material end,
+    }
+end)()
+
+-- ============================================================
 --  ROCKET JUMP
 --  Toggle on -> pressing Space triggers an instant velocity blast
 --  in (camera lookvector + up) * force. Toggle off -> Space does
