@@ -1100,7 +1100,6 @@ do
     local Hvh = Tabs.Movement:AddLeftGroupbox("CSGO HvH movement")
     Hvh:AddToggle("HvhMove", { Text = "Enabled",
         Default = false,
-        Tooltip = "Pins your character's yaw to face the camera position and snaps left/right. Same write-at-Last+1 priority as Face Target so shiftlock / game scripts can't override the rotation.",
         Callback = function(v) if v then F.hvhMovement.start() else F.hvhMovement.stop() end end })
     Hvh:AddSlider("HvhJiggleAmountMin", {
         Text     = "Jiggle amount min",
@@ -2273,7 +2272,6 @@ do
             Default     = "",
             Placeholder = "paste session token here",
             Text        = "Manual token",
-            Tooltip     = "Set the session token manually if autocapture fails",
             Callback    = function(v)
                 if v and #v > 8 then
                     F.games.bms.setToken(v)
@@ -2483,7 +2481,6 @@ do
             Values   = { "legit", "logical", "flagless" },
             Default  = "legit",
             Text     = "Playstyle",
-            Tooltip  = "legit = current behaviour. logical = small pause after each flag fire so newly exposed bombs get a human-looking beat. flagless = never place flags; only walk safes.",
             Callback = function(v) F.games.bms.autoPlay.setPlaystyle(v) end,
         })
         local _bmsActions = {
@@ -2495,21 +2492,18 @@ do
             Values   = _bmsActions,
             Default  = "staying still",
             Text     = "Action after win",
-            Tooltip  = "Triggered when any tile turns green (0,252,0).",
             Callback = function(v) F.games.bms.autoPlay.setWinAction(v) end,
         })
         BMSAuto:AddDropdown("BMSFailAction", {
             Values   = _bmsActions,
             Default  = "staying still",
             Text     = "Action after fail",
-            Tooltip  = "Triggered when any tile turns red (255,0,0).",
             Callback = function(v) F.games.bms.autoPlay.setFailAction(v) end,
         })
         BMSAuto:AddDropdown("BMSRespawnAction", {
             Values   = { "stay still", "walk randomly", "sit down", "random" },
             Default  = "stay still",
             Text     = "Action after respawn",
-            Tooltip  = "Fires on every CharacterAdded (death + respawn). Stops the moment the player gets teleported back onto the tile field. 'random' rolls one of the three real options at each respawn.",
             Callback = function(v) F.games.bms.autoPlay.setRespawnAction(v) end,
         })
 
