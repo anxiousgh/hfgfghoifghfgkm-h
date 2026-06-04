@@ -1,4 +1,4 @@
--- cclosure.vip / vampireware functions module
+-- decay.lua / vampireware functions module
 -- GUI-agnostic: extracted gameplay logic from vampireware.lua
 -- Usage:
 --   local F = loadstring(game:HttpGet('https://raw.githubusercontent.com/anxiousgh/asdasdasdasdasd/main/functions.lua'))()
@@ -1938,7 +1938,7 @@ end
 local function ensureRBHighlight()
     if RB_outlineHL and RB_outlineHL.Parent then return RB_outlineHL end
     RB_outlineHL = Instance.new("Highlight")
-    RB_outlineHL.Name = "_cclosure_rb_outline"
+    RB_outlineHL.Name = "_decay_rb_outline"
     RB_outlineHL.FillTransparency    = 1
     RB_outlineHL.OutlineColor        = Color3.fromRGB(255, 80, 80)
     RB_outlineHL.OutlineTransparency = 0
@@ -3411,10 +3411,10 @@ F.players = {
 --  player in the list who's in the current server (or who joins
 --  later) is automatically added to the ragebot's target list.
 --  UserId is the persistent key since usernames can change.
---  Stored in `cclosure_autotarget.json` via writefile/readfile.
+--  Stored in `decay_autotarget.json` via writefile/readfile.
 -- ============================================================
 F.autoTargeter = (function()
-    local SAVE_FILE = "cclosure_autotarget.json"
+    local SAVE_FILE = "decay_autotarget.json"
     local HttpService = game:GetService("HttpService")
 
     local entries = {}  -- [userId(number)] = username(string)
@@ -3984,7 +3984,7 @@ local _rbHudLastUid = nil
 local function _buildRbHud()
     if _rbHud and _rbHud.Parent then return end
     local sg = Instance.new("ScreenGui")
-    sg.Name = "_cclosure_rb_hud"
+    sg.Name = "_decay_rb_hud"
     sg.ResetOnSpawn = false
     sg.IgnoreGuiInset = true
     sg.ZIndexBehavior = Enum.ZIndexBehavior.Global
@@ -4881,7 +4881,7 @@ end)()
 --     to 0 spread also trips the pattern check.
 --
 --  Optional ammo refill writes Tool.Script.Ammo.Value to its
---  observed max each Heartbeat (cclosure-style), keeps the gun
+--  observed max each Heartbeat (c-closure style), keeps the gun
 --  visually full and ready to click-fire.
 -- ============================================================
 
@@ -6483,7 +6483,7 @@ F.games.mm2 = (function()
         --          (CFrame.new(x, y, z) with default basis)
         local ok, err = pcall(function() remote:FireServer(theirCF, myPos) end)
         if not ok then
-            print("[cclosure.vip] Shoot FireServer error:", err)
+            print("[decay.lua] Shoot FireServer error:", err)
         end
 
         -- restart desync after a brief grace period so the shot has
