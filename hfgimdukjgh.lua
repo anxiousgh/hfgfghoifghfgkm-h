@@ -1,5 +1,5 @@
 -- ============================================================
---  decay.lua   //   @vampire   //   LinoriaLib build
+--  decay.lua   //   LinoriaLib build
 --  executor: Potassium
 -- ============================================================
 
@@ -96,7 +96,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
 end)
 
 local Window = Library:CreateWindow({
-    Title         = "decay.lua | @vampire",
+    Title         = "decay.lua",
     Center        = true,
     AutoShow      = true,
     TabPadding    = 8,
@@ -2613,10 +2613,8 @@ local WatermarkConn = RunService.RenderStepped:Connect(function()
             ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())
         end)
         local build  = (F.getVersion and F.getVersion() or "?"):sub(1, 16)
-        local uname  = LocalPlayer.Name or "?"
-        local dname  = LocalPlayer.DisplayName or uname
-        Library:SetWatermark(("decay.lua | %s | %s | %d fps | %d ms | %s (@%s)"):format(
-            _wmGameName, build, math.floor(FPS), ping, uname, dname))
+        Library:SetWatermark(("decay.lua | %s | %s | %d fps | %d ms"):format(
+            _wmGameName, build, math.floor(FPS), ping))
     end
 end)
 
