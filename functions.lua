@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.22.1"
+local SCRIPT_VERSION = "v1.21.10"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -6941,13 +6941,7 @@ F.games.bms = (function()
     -- only that tile's cache entry is dropped. Loops then use
     -- tileStateCached() which is a table lookup for the unchanged
     -- 99% of tiles.
-    local _stateCache  = {}
-    -- _numberCache MUST be declared before the listener block below
-    -- because the DescendantAdded / ChildAdded callbacks index it.
-    -- It was previously defined below at module load, so the closures
-    -- captured it as a nil global and threw 'attempt to index nil
-    -- with Instance' every time a descendant was added.
-    local _numberCache = {}
+    local _stateCache = {}
     local function tileStateCached(t)
         local s = _stateCache[t]
         if s then return s end
@@ -6999,9 +6993,8 @@ F.games.bms = (function()
     -- Cache for tileNumber. A tile's number doesn't change after the
     -- reveal that placed it, so once we compute it we can keep it
     -- forever. Cleared per-tile when the NumberGui is removed
-    -- (handled by the same listeners as _stateCache). The actual
-    -- `local _numberCache = {}` declaration lives above so the
-    -- listener closures can see it as an upvalue.
+    -- (handled by the same listeners as _stateCache below).
+    local _numberCache = {}
     local function tileNumberCached(tile)
         local n = _numberCache[tile]
         if n ~= nil then return n end
