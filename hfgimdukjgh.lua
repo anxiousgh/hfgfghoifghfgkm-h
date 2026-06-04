@@ -2439,6 +2439,34 @@ do
             true)
 
         BMSAuto:AddDivider()
+        BMSAuto:AddLabel("Playstyle actions")
+        BMSAuto:AddDropdown("BMSPlaystyle", {
+            Values   = { "legit", "logical" },
+            Default  = "legit",
+            Text     = "Playstyle",
+            Tooltip  = "logical = small pause after each flag fire so newly exposed bombs get a human-looking beat instead of an instant snap; legit = current behaviour.",
+            Callback = function(v) F.games.bms.autoPlay.setPlaystyle(v) end,
+        })
+        local _bmsActions = {
+            "staying still", "walking randomly",
+            "jumping in a circle", "jumping off map",
+        }
+        BMSAuto:AddDropdown("BMSWinAction", {
+            Values   = _bmsActions,
+            Default  = "staying still",
+            Text     = "Action after win",
+            Tooltip  = "Triggered when any tile turns green (0,252,0).",
+            Callback = function(v) F.games.bms.autoPlay.setWinAction(v) end,
+        })
+        BMSAuto:AddDropdown("BMSFailAction", {
+            Values   = _bmsActions,
+            Default  = "staying still",
+            Text     = "Action after fail",
+            Tooltip  = "Triggered when any tile turns red (255,0,0).",
+            Callback = function(v) F.games.bms.autoPlay.setFailAction(v) end,
+        })
+
+        BMSAuto:AddDivider()
         BMSAuto:AddLabel("Challenges")
         BMSAuto:AddToggle("BMSBullets", { Text = "Auto-destroy 'Bullet-Part' (bullets challenge)",
             Default = false,

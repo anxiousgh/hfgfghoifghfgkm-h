@@ -8485,6 +8485,32 @@ F.games.bms = (function()
     local walkLegit       = true
     local walkLegitJitter = 0.6  -- max ±studs of XZ offset per step
 
+    -- ---- playstyle + win/loss actions ----
+    -- playstyleMode:
+    --   'legit'   = current behaviour, no extra pacing
+    --   'logical' = small random delay after each flag fire so newly
+    --               exposed bombs / numbers get acted on with a
+    --               human-looking pause rather than an instant snap
+    -- winAction / failAction: what the bot does once the board ends.
+    --   'staying still', 'walking randomly', 'jumping in a circle',
+    --   'jumping off map'.
+    --
+    -- gameOverState tracks the LAST detected end-state so the main
+    -- autoplay loop can short-circuit while the action is running.
+    -- A periodic detector thread scans tile colours every second:
+    --   any tile R~1, G~0, B~0       -> loss (the bomb that killed you)
+    --   any tile R~0, G~0.99, B~0    -> win  (all bombs revealed green)
+    -- When detection transitions back to nil (new round started -
+    -- tiles repainted), the action stops and autoplay resumes.
+    local playstyleMode = "legit"
+    local winAction     = "staying still"
+    local failAction    = "staying still"
+    local gameOverState = nil
+    local actionThread  = nil
+    local detectorThread = nil
+    local _RED   = function(c) return c.R > 0.95 and c.G < 0.05 and c.B < 0.05 end
+    local _GREEN = function(c) return c.R < 0.05 and c.G > 0.95 and c.B < 0.05 end
+
     -- ---- path preview ----
     -- Glowing neon segments between consecutive tiles on the path the
     -- bot is about to walk. Parts are pooled (reused across ticks) so
@@ -8813,9 +8839,84 @@ F.games.bms = (function()
         end
     end
 
+    -- ---- end-of-round detector + actions ----
+    local function detectGameOver()
+        local parts = getParts(); if not parts then return nil end
+        for _, t in ipairs(parts:GetChildren()) do
+            if t:IsA("BasePart") then
+                local c = t.Color
+                if _RED(c)   then return "loss" end
+                if _GREEN(c) then return "win"  end
+            end
+        end
+        return nil
+    end
+
+    local function stopAction()
+        if actionThread then pcall(task.cancel, actionThread); actionThread = nil end
+    end
+
+    local function startAction(name)
+        stopAction()
+        if name == "staying still" or not name then return end
+        actionThread = task.spawn(function()
+            local t0 = tick()
+            while autoActive do
+                local c = lplr.Character
+                local hum = c and c:FindFirstChildOfClass("Humanoid")
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if not hum or not hrp or hum.Health <= 0 then task.wait(0.5); continue end
+                if name == "jumping in a circle" then
+                    -- step around a 6-stud radius circle while jumping
+                    local a = (tick() - t0) * 2  -- angular speed
+                    local cx, cz = hrp.Position.X, hrp.Position.Z
+                    local target = Vector3.new(cx + math.cos(a) * 6, hrp.Position.Y, cz + math.sin(a) * 6)
+                    pcall(function() hum:MoveTo(target) end)
+                    hum.Jump = true
+                    task.wait(0.25)
+                elseif name == "jumping off map" then
+                    pcall(function() hrp.CFrame = CFrame.new(0, -500, 0) end)
+                    task.wait(2)
+                    break  -- one-shot
+                elseif name == "walking randomly" then
+                    local target = hrp.Position
+                        + Vector3.new(math.random(-20, 20), 0, math.random(-20, 20))
+                    pcall(function() hum:MoveTo(target) end)
+                    task.wait(0.8 + math.random() * 1.5)
+                else
+                    break
+                end
+            end
+            actionThread = nil
+        end)
+    end
+
     local function autoPlayStart()
         if autoActive then return end
         autoActive = true
+        gameOverState = nil
+        if detectorThread then pcall(task.cancel, detectorThread) end
+        detectorThread = task.spawn(function()
+            while autoActive do
+                local state = detectGameOver()
+                if state ~= gameOverState then
+                    gameOverState = state
+                    if state == "win" then
+                        print("[BMS] win detected; running action:", winAction)
+                        startAction(winAction)
+                    elseif state == "loss" then
+                        print("[BMS] loss detected; running action:", failAction)
+                        startAction(failAction)
+                    else
+                        -- new round started (colours reset) - stop action
+                        stopAction()
+                    end
+                end
+                task.wait(1)
+            end
+            stopAction()
+            detectorThread = nil
+        end)
         setFollowCam(true)
         if autoThread then pcall(task.cancel, autoThread) end
         lastFlagAt = 0  -- reset cooldown so a fresh autoplay session starts immediately
@@ -8832,6 +8933,16 @@ F.games.bms = (function()
                 local hum  = char and char:FindFirstChildOfClass("Humanoid")
                 if not hum or hum.Health <= 0 then
                     task.wait(0.4)
+                    continue
+                end
+
+                -- Game-over short-circuit: detector thread tracks tile
+                -- colours (red = loss / green = win); while gameOverState
+                -- is set, the action thread (jumping/walking/staying) is
+                -- running and the main planner should idle so it doesn't
+                -- step on the action's MoveTos.
+                if gameOverState then
+                    task.wait(0.3)
                     continue
                 end
 
@@ -8891,7 +9002,15 @@ F.games.bms = (function()
                             pcall(function() remote:FireServer(best, token, true) end)
                         end
                         lastFlagAt = now + flagDelayRoll() - flagDelayMin
-                        task.wait(0.1)
+                        -- logical playstyle adds a 0.3-0.6s pause after
+                        -- each flag fire so newly exposed bombs / numbers
+                        -- get a human-looking beat instead of an instant
+                        -- snap. legit keeps the original 0.1s tick.
+                        if playstyleMode == "logical" then
+                            task.wait(0.3 + math.random() * 0.3)
+                        else
+                            task.wait(0.1)
+                        end
                         continue
                     end
                 end
@@ -9165,7 +9284,10 @@ F.games.bms = (function()
 
     local function autoPlayStop()
         autoActive = false
-        if autoThread then pcall(task.cancel, autoThread); autoThread = nil end
+        if autoThread     then pcall(task.cancel, autoThread);     autoThread     = nil end
+        if detectorThread then pcall(task.cancel, detectorThread); detectorThread = nil end
+        stopAction()
+        gameOverState = nil
         clearPathPreview()
         setFollowCam(false)
     end
@@ -9234,6 +9356,19 @@ F.games.bms = (function()
                 local deg = math.clamp(tonumber(n) or 60, 0, 90)
                 _camTiltAngle = math.rad(-deg)
             end,
+            -- playstyle + post-round actions
+            setPlaystyle = function(m)
+                if m == "legit" or m == "logical" then playstyleMode = m end
+            end,
+            getPlaystyle = function() return playstyleMode end,
+            setWinAction  = function(a)
+                if a then winAction = tostring(a) end
+            end,
+            setFailAction = function(a)
+                if a then failAction = tostring(a) end
+            end,
+            getWinAction  = function() return winAction end,
+            getFailAction = function() return failAction end,
         },
         hasToken      = function() return getgenv()._BMS_TOKEN ~= nil end,
         setToken      = setManualToken,
