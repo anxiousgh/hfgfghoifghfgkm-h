@@ -8553,6 +8553,7 @@ F.games.bms = (function()
         sg.Parent         = (gethui and gethui()) or game:GetService("CoreGui")
 
         local frame = Instance.new("Frame")
+        frame.Active                = true   -- decay: receive drag input
         frame.Size                  = UDim2.fromOffset(170, 72)
         frame.Position              = UDim2.fromOffset(10, 80)
         frame.BackgroundColor3      = Color3.fromRGB(20, 20, 22)
@@ -8570,11 +8571,44 @@ F.games.bms = (function()
         title.BackgroundTransparency = 1
         title.Size      = UDim2.new(1, 0, 0, 20)
         title.Position  = UDim2.fromOffset(0, 4)
-        title.Text      = "BMS Stats"
+        title.Text      = "BMS Stats   (drag)"
         title.TextColor3 = Color3.fromRGB(200, 200, 210)
         title.Font      = Enum.Font.SourceSansBold
         title.TextSize  = 14
         title.Parent    = frame
+
+        -- decay: draggable. Mouse/Touch down anywhere on the frame
+        -- starts a drag; we listen to UIS.InputChanged for the move
+        -- deltas + input.Changed for the up edge. Drag is anchored
+        -- to the initial mouse-frame offset so the cursor stays at
+        -- the grab point throughout the drag.
+        do
+            local UIS = game:GetService("UserInputService")
+            local dragging, dragStart, startPos
+            frame.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1
+                   or input.UserInputType == Enum.UserInputType.Touch then
+                    dragging  = true
+                    dragStart = input.Position
+                    startPos  = frame.Position
+                    input.Changed:Connect(function()
+                        if input.UserInputState == Enum.UserInputState.End then
+                            dragging = false
+                        end
+                    end)
+                end
+            end)
+            UIS.InputChanged:Connect(function(input)
+                if dragging
+                   and (input.UserInputType == Enum.UserInputType.MouseMovement
+                        or input.UserInputType == Enum.UserInputType.Touch) then
+                    local d = input.Position - dragStart
+                    frame.Position = UDim2.new(
+                        startPos.X.Scale, startPos.X.Offset + d.X,
+                        startPos.Y.Scale, startPos.Y.Offset + d.Y)
+                end
+            end)
+        end
 
         _statsWinLbl = Instance.new("TextLabel")
         _statsWinLbl.BackgroundTransparency = 1
