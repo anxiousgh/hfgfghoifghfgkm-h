@@ -7245,7 +7245,13 @@ F.games.bms = (function()
     -- only that tile's cache entry is dropped. Loops then use
     -- tileStateCached() which is a table lookup for the unchanged
     -- 99% of tiles.
-    local _stateCache = {}
+    local _stateCache  = {}
+    -- _numberCache MUST be declared above the parts-folder listener
+    -- block below, because the DescendantAdded / ChildAdded callbacks
+    -- index it. The OG declaration sat further down which captured
+    -- it as a nil global -> ':7263: attempt to index nil with Instance'
+    -- spammed every reveal.
+    local _numberCache = {}
     local function tileStateCached(t)
         local s = _stateCache[t]
         if s then return s end
@@ -7297,8 +7303,9 @@ F.games.bms = (function()
     -- Cache for tileNumber. A tile's number doesn't change after the
     -- reveal that placed it, so once we compute it we can keep it
     -- forever. Cleared per-tile when the NumberGui is removed
-    -- (handled by the same listeners as _stateCache below).
-    local _numberCache = {}
+    -- (handled by the same listeners as _stateCache). The actual
+    -- `local _numberCache = {}` declaration lives above so the
+    -- listener closures can see it as an upvalue.
     local function tileNumberCached(tile)
         local n = _numberCache[tile]
         if n ~= nil then return n end
@@ -8511,6 +8518,109 @@ F.games.bms = (function()
     local _RED   = function(c) return c.R > 0.95 and c.G < 0.05 and c.B < 0.05 end
     local _GREEN = function(c) return c.R < 0.05 and c.G > 0.95 and c.B < 0.05 end
 
+    -- ---- stats (persists across reloads) ----
+    -- Incremented by the detector on every win/loss TRANSITION (not
+    -- every tick the colours are set). Saved to a json file so the
+    -- counts survive a script reload.
+    local STATS_FILE = "decay_bms_stats.json"
+    local stats      = { wins = 0, losses = 0 }
+    do
+        if isfile and isfile(STATS_FILE) then
+            local ok, data = pcall(function()
+                return game:GetService("HttpService"):JSONDecode(readfile(STATS_FILE))
+            end)
+            if ok and type(data) == "table" then
+                stats.wins   = tonumber(data.wins)   or 0
+                stats.losses = tonumber(data.losses) or 0
+            end
+        end
+    end
+    local function saveStats()
+        pcall(function()
+            writefile(STATS_FILE, game:GetService("HttpService"):JSONEncode(stats))
+        end)
+    end
+
+    local statsGuiOn = false
+    local _statsGui, _statsWinLbl, _statsLossLbl
+    local function ensureStatsGui()
+        if _statsGui and _statsGui.Parent then return _statsGui end
+        local sg = Instance.new("ScreenGui")
+        sg.Name           = "_decay_bms_stats"
+        sg.IgnoreGuiInset = true
+        sg.ResetOnSpawn   = false
+        sg.DisplayOrder   = 1000
+        sg.Parent         = (gethui and gethui()) or game:GetService("CoreGui")
+
+        local frame = Instance.new("Frame")
+        frame.Size                  = UDim2.fromOffset(170, 72)
+        frame.Position              = UDim2.fromOffset(10, 80)
+        frame.BackgroundColor3      = Color3.fromRGB(20, 20, 22)
+        frame.BackgroundTransparency = 0.25
+        frame.BorderSizePixel       = 0
+        frame.Parent                = sg
+        local r = Instance.new("UICorner")
+        r.CornerRadius = UDim.new(0, 6); r.Parent = frame
+        local stroke = Instance.new("UIStroke")
+        stroke.Thickness = 1
+        stroke.Color     = Color3.fromRGB(60, 60, 70)
+        stroke.Parent    = frame
+
+        local title = Instance.new("TextLabel")
+        title.BackgroundTransparency = 1
+        title.Size      = UDim2.new(1, 0, 0, 20)
+        title.Position  = UDim2.fromOffset(0, 4)
+        title.Text      = "BMS Stats"
+        title.TextColor3 = Color3.fromRGB(200, 200, 210)
+        title.Font      = Enum.Font.SourceSansBold
+        title.TextSize  = 14
+        title.Parent    = frame
+
+        _statsWinLbl = Instance.new("TextLabel")
+        _statsWinLbl.BackgroundTransparency = 1
+        _statsWinLbl.Size      = UDim2.new(1, -10, 0, 18)
+        _statsWinLbl.Position  = UDim2.fromOffset(8, 25)
+        _statsWinLbl.Text      = "Wins:  0"
+        _statsWinLbl.TextColor3 = Color3.fromRGB(0, 220, 80)
+        _statsWinLbl.Font      = Enum.Font.SourceSans
+        _statsWinLbl.TextSize  = 15
+        _statsWinLbl.TextXAlignment = Enum.TextXAlignment.Left
+        _statsWinLbl.Parent    = frame
+
+        _statsLossLbl = Instance.new("TextLabel")
+        _statsLossLbl.BackgroundTransparency = 1
+        _statsLossLbl.Size      = UDim2.new(1, -10, 0, 18)
+        _statsLossLbl.Position  = UDim2.fromOffset(8, 45)
+        _statsLossLbl.Text      = "Losses: 0"
+        _statsLossLbl.TextColor3 = Color3.fromRGB(220, 60, 60)
+        _statsLossLbl.Font      = Enum.Font.SourceSans
+        _statsLossLbl.TextSize  = 15
+        _statsLossLbl.TextXAlignment = Enum.TextXAlignment.Left
+        _statsLossLbl.Parent    = frame
+
+        _statsGui = sg
+        return sg
+    end
+    local function updateStatsGui()
+        if not statsGuiOn or not _statsGui then return end
+        if _statsWinLbl  then _statsWinLbl.Text  = "Wins:  " .. stats.wins   end
+        if _statsLossLbl then _statsLossLbl.Text = "Losses: " .. stats.losses end
+    end
+    local function setStatsGui(v)
+        statsGuiOn = v == true
+        if statsGuiOn then
+            ensureStatsGui(); updateStatsGui()
+        else
+            if _statsGui then pcall(function() _statsGui:Destroy() end) end
+            _statsGui, _statsWinLbl, _statsLossLbl = nil, nil, nil
+        end
+    end
+    local function resetStats()
+        stats.wins   = 0
+        stats.losses = 0
+        saveStats(); updateStatsGui()
+    end
+
     -- ---- path preview ----
     -- Glowing neon segments between consecutive tiles on the path the
     -- bot is about to walk. Parts are pooled (reused across ticks) so
@@ -8875,8 +8985,57 @@ F.games.bms = (function()
                     hum.Jump = true
                     task.wait(0.25)
                 elseif name == "jumping off map" then
-                    pcall(function() hrp.CFrame = CFrame.new(0, -500, 0) end)
-                    task.wait(2)
+                    -- Walk to the nearest board corner first, THEN
+                    -- step off the edge. We compute the AABB of the
+                    -- tile field and the board centroid; the corner
+                    -- nearest the player is the destination, and the
+                    -- "off the edge" target is `corner + outward * 20`
+                    -- where outward is corner-from-centroid normalised.
+                    local cornerPt, outwardDir
+                    if #tileList > 0 then
+                        local minX, maxX = math.huge, -math.huge
+                        local minZ, maxZ = math.huge, -math.huge
+                        local cx, cz, n = 0, 0, 0
+                        for _, t in ipairs(tileList) do
+                            local p = t.Position
+                            if p.X < minX then minX = p.X end
+                            if p.X > maxX then maxX = p.X end
+                            if p.Z < minZ then minZ = p.Z end
+                            if p.Z > maxZ then maxZ = p.Z end
+                            cx, cz, n = cx + p.X, cz + p.Z, n + 1
+                        end
+                        cx, cz = cx / n, cz / n
+                        local pos     = hrp.Position
+                        local corners = {
+                            Vector3.new(minX, pos.Y, minZ),
+                            Vector3.new(minX, pos.Y, maxZ),
+                            Vector3.new(maxX, pos.Y, minZ),
+                            Vector3.new(maxX, pos.Y, maxZ),
+                        }
+                        local bestD = math.huge
+                        for _, p in ipairs(corners) do
+                            local d = (p - pos).Magnitude
+                            if d < bestD then cornerPt, bestD = p, d end
+                        end
+                        local outV = Vector3.new(cornerPt.X - cx, 0, cornerPt.Z - cz)
+                        if outV.Magnitude > 0.01 then outwardDir = outV.Unit end
+                    end
+                    if cornerPt then
+                        pcall(function() hum:MoveTo(cornerPt) end)
+                        local deadline = tick() + 8
+                        while tick() < deadline and autoActive do
+                            if (hrp.Position - cornerPt).Magnitude < 4 then break end
+                            task.wait(0.1)
+                        end
+                        if outwardDir then
+                            pcall(function() hum:MoveTo(cornerPt + outwardDir * 20) end)
+                            task.wait(3)
+                        end
+                    else
+                        -- no board found - fall straight down as a fallback
+                        pcall(function() hrp.CFrame = CFrame.new(0, -500, 0) end)
+                        task.wait(2)
+                    end
                     break  -- one-shot
                 elseif name == "walking randomly" then
                     local target = hrp.Position
@@ -8902,10 +9061,14 @@ F.games.bms = (function()
                 if state ~= gameOverState then
                     gameOverState = state
                     if state == "win" then
-                        print("[BMS] win detected; running action:", winAction)
+                        stats.wins = stats.wins + 1
+                        saveStats(); updateStatsGui()
+                        print(("[BMS] win detected (#%d); action: %s"):format(stats.wins, winAction))
                         startAction(winAction)
                     elseif state == "loss" then
-                        print("[BMS] loss detected; running action:", failAction)
+                        stats.losses = stats.losses + 1
+                        saveStats(); updateStatsGui()
+                        print(("[BMS] loss detected (#%d); action: %s"):format(stats.losses, failAction))
                         startAction(failAction)
                     else
                         -- new round started (colours reset) - stop action
@@ -9290,6 +9453,9 @@ F.games.bms = (function()
         gameOverState = nil
         clearPathPreview()
         setFollowCam(false)
+        -- keep stats GUI visible across autoplay toggles - user
+        -- explicitly toggles it via setStatsGui. Stats counts also
+        -- persist via the file on disk.
     end
 
     return {
@@ -9369,6 +9535,10 @@ F.games.bms = (function()
             end,
             getWinAction  = function() return winAction end,
             getFailAction = function() return failAction end,
+            -- stats
+            setStatsGui   = setStatsGui,
+            resetStats    = resetStats,
+            getStats      = function() return stats.wins, stats.losses end,
         },
         hasToken      = function() return getgenv()._BMS_TOKEN ~= nil end,
         setToken      = setManualToken,

@@ -2466,6 +2466,15 @@ do
             Callback = function(v) F.games.bms.autoPlay.setFailAction(v) end,
         })
 
+        BMSAuto:AddToggle("BMSStatsGui", { Text = "Show stats overlay",
+            Default = false,
+            Callback = function(v) F.games.bms.autoPlay.setStatsGui(v) end,
+        })
+        BMSAuto:AddButton({
+            Text = "Reset stats",
+            Func = function() F.games.bms.autoPlay.resetStats() end,
+        })
+
         BMSAuto:AddDivider()
         BMSAuto:AddLabel("Challenges")
         BMSAuto:AddToggle("BMSBullets", { Text = "Auto-destroy 'Bullet-Part' (bullets challenge)",
