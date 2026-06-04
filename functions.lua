@@ -3080,10 +3080,11 @@ F.fov = { set = setFov, get = function() return CUSTOM_FOV end }
 --  character (re-wires on respawn) and tool equip / unequip
 --  so the highlight follows whatever you're holding.
 -- ============================================================
-F.toolGlow = (function()
+F.toolMaterial = (function()
     -- ============================================================
-    -- Strip every texture off the equipped tool and force Neon
-    -- material in `fillColor`. No Highlight - the tool itself glows.
+    -- Strip every texture off the equipped tool and force the
+    -- configured Material (Neon / ForceField / etc) in `color`.
+    -- No Highlight - the tool itself glows.
     --
     -- Mesh texture sources handled:
     --   * MeshPart.TextureID           (string property)
@@ -3093,16 +3094,11 @@ F.toolGlow = (function()
     -- Original property values are stashed per-instance so toggling
     -- off restores the tool exactly (textures back, original material
     -- + colour). Snap is weak-keyed so dropped tools GC freely.
-    --
-    -- Backward-compatible API: setOutlineColor / setOutlineTransparency
-    -- still exist (the loader UI calls them) but are no-ops in neon
-    -- mode. fillTransparency maps to part.Transparency directly.
     -- ============================================================
-    local active        = false
-    local fillColor     = Color3.fromRGB(255, 60, 60)
-    local fillTransp    = 0.0
-    local outlineColor  = Color3.fromRGB(255, 255, 255)
-    local outlineTransp = 0.0
+    local active     = false
+    local color      = Color3.fromRGB(255, 60, 60)
+    local transp     = 0.0
+    local material   = Enum.Material.Neon
     local equipConn, unequipConn, charConn
 
     -- Per-instance snapshot. Keyed by Instance ref (weak), value is a
@@ -3118,9 +3114,9 @@ F.toolGlow = (function()
             transparency = p.Transparency,
             texId        = p:IsA("MeshPart") and p.TextureID or nil,
         }
-        p.Material      = Enum.Material.Neon
-        p.Color         = fillColor
-        p.Transparency  = fillTransp
+        p.Material      = material
+        p.Color         = color
+        p.Transparency  = transp
         if p:IsA("MeshPart") then p.TextureID = "" end
     end
 
@@ -3177,14 +3173,15 @@ F.toolGlow = (function()
         end
     end
 
-    -- Re-push the current colour/transparency onto every snapped part
-    -- (live colour-picker / slider updates).
+    -- Re-push the current material/colour/transparency onto every
+    -- snapped part (live colour-picker / slider / dropdown updates).
     local function pushLiveValues()
         for inst, s in pairs(snap) do
             if inst and inst.Parent and s.kind == "part" then
                 pcall(function()
-                    inst.Color        = fillColor
-                    inst.Transparency = fillTransp
+                    inst.Material     = material
+                    inst.Color        = color
+                    inst.Transparency = transp
                 end)
             end
         end
@@ -3234,26 +3231,44 @@ F.toolGlow = (function()
         if charConn    then charConn:Disconnect();    charConn    = nil end
     end
 
+    -- Material setter: accept Enum.Material directly, or a string
+    -- name (case-insensitive) and map it to the enum. Defaults to
+    -- Neon if the name doesn't match anything sensible.
+    local function setMaterial(m)
+        if typeof(m) == "EnumItem" and m.EnumType == Enum.Material then
+            material = m
+        elseif type(m) == "string" then
+            local norm = m:lower():gsub("%s+", "")
+            if     norm == "neon"       then material = Enum.Material.Neon
+            elseif norm == "forcefield" then material = Enum.Material.ForceField
+            elseif norm == "glass"      then material = Enum.Material.Glass
+            elseif norm == "plastic"    then material = Enum.Material.Plastic
+            elseif norm == "metal"      then material = Enum.Material.Metal
+            elseif norm == "smoothplastic" then material = Enum.Material.SmoothPlastic
+            elseif Enum.Material[m] then material = Enum.Material[m]
+            end
+        end
+        if active then pushLiveValues() end
+    end
+
     return {
         start    = start,
         stop     = stop,
         toggle   = function() if active then stop() else start() end end,
         isActive = function() return active end,
-        setFillColor = function(c)
+        setColor = function(c)
             if typeof(c) == "Color3" then
-                fillColor = c
+                color = c
                 if active then pushLiveValues() end
             end
         end,
-        setFillTransparency = function(n)
-            fillTransp = math.clamp(tonumber(n) or 0, 0, 1)
+        setTransparency = function(n)
+            transp = math.clamp(tonumber(n) or 0, 0, 1)
             if active then pushLiveValues() end
         end,
-        -- legacy no-ops (kept so loader UI doesn't crash on call)
-        setOutlineColor       = function(c) if typeof(c) == "Color3" then outlineColor = c end end,
-        setOutlineTransparency= function(n) outlineTransp = math.clamp(tonumber(n) or 0, 0, 1) end,
-        getFillColor    = function() return fillColor    end,
-        getOutlineColor = function() return outlineColor end,
+        setMaterial  = setMaterial,
+        getColor     = function() return color end,
+        getMaterial  = function() return material end,
     }
 end)()
 

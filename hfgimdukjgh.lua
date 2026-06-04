@@ -967,19 +967,22 @@ do
         Default = F.esp.settings.SelfESP, Callback = F.esp.setSelf })
 
     TabEspWorld:AddDivider()
-    TabEspWorld:AddLabel("Tool glow")
-    TabEspWorld:AddToggle("ToolGlow", { Text = "Tool glow (equipped weapon)",
+    TabEspWorld:AddLabel("Tool material")
+    TabEspWorld:AddToggle("ToolMaterial", { Text = "Tool material (equipped weapon)",
         Default = false,
-        Callback = function(v) if v then F.toolGlow.start() else F.toolGlow.stop() end end })
-    TabEspWorld:AddLabel("Fill"):AddColorPicker("ToolGlowFill", {
-        Default = F.toolGlow.getFillColor(), Title = "Tool glow fill",
-        Callback = F.toolGlow.setFillColor })
-    TabEspWorld:AddLabel("Outline"):AddColorPicker("ToolGlowOutline", {
-        Default = F.toolGlow.getOutlineColor(), Title = "Tool glow outline",
-        Callback = F.toolGlow.setOutlineColor })
-    TabEspWorld:AddSlider("ToolGlowFillT", { Text = "Fill transparency",
-        Default = 0.35, Min = 0, Max = 1, Rounding = 2,
-        Callback = F.toolGlow.setFillTransparency })
+        Callback = function(v) if v then F.toolMaterial.start() else F.toolMaterial.stop() end end })
+    TabEspWorld:AddDropdown("ToolMaterialKind", {
+        Values   = { "Neon", "ForceField" },
+        Default  = "Neon",
+        Text     = "Material",
+        Callback = F.toolMaterial.setMaterial,
+    })
+    TabEspWorld:AddLabel("Color"):AddColorPicker("ToolMaterialColor", {
+        Default = F.toolMaterial.getColor(), Title = "Tool material color",
+        Callback = F.toolMaterial.setColor })
+    TabEspWorld:AddSlider("ToolMaterialTransparency", { Text = "Transparency",
+        Default = 0, Min = 0, Max = 1, Rounding = 2,
+        Callback = F.toolMaterial.setTransparency })
 end
 
 -- ============================================================
