@@ -2216,9 +2216,9 @@ do
         -- This label updates live: shows the captured token (truncated)
         -- once F.games.bms.getToken() returns non-nil.
         local _bmsTokenLbl = BMS:AddLabel(
-            "Place one flag manually first - the token gets\n"
-         .. "captured automatically on the first PlaceFlag call.\n"
-         .. "If autocapture doesn't work, paste it manually below.",
+            "Token autocaptures from the game's local scripts on load.\n"
+         .. "If it fails, hit 'Auto capture now' or place one flag\n"
+         .. "manually. As a last resort paste it below.",
             true)  -- true = DoesWrap
         task.spawn(function()
             local lastShown = nil
@@ -2233,9 +2233,9 @@ do
                             _bmsTokenLbl:SetText("Captured Token: " .. tok:sub(1, 16) .. "...")
                         else
                             _bmsTokenLbl:SetText(
-                                "Place one flag manually first - the token gets\n"
-                             .. "captured automatically on the first PlaceFlag call.\n"
-                             .. "If autocapture doesn't work, paste it manually below.")
+                                "Token autocaptures from the game's local scripts on load.\n"
+                             .. "If it fails, hit 'Auto capture now' or place one flag\n"
+                             .. "manually. As a last resort paste it below.")
                         end
                     end)
                 end
@@ -2254,6 +2254,18 @@ do
                 end
             end,
         })
+        BMS:AddButton({ Text = "Auto capture now", Func = function()
+            if F.games.bms.getToken() then
+                Library:Notify("Token already captured", 3)
+                return
+            end
+            local t = F.games.bms.autoCaptureToken and F.games.bms.autoCaptureToken()
+            if t then
+                Library:Notify("Captured: " .. t:sub(1, 16) .. "...", 4)
+            else
+                Library:Notify("Couldn't auto-capture - place a flag manually OR paste below", 4)
+            end
+        end })
         BMS:AddButton({ Text = "Test token", Func = function()
             local t = F.games.bms.getToken()
             if t then

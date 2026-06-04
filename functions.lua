@@ -7227,6 +7227,74 @@ F.games.bms = (function()
         return false
     end
 
+    -- ============================================================
+    -- Auto-capture the flag token from the GC.
+    -- ============================================================
+    -- The BMS LocalScript that owns PlaceFlag also owns the per-
+    -- session token string - both are upvalues of the same closure.
+    -- Walk every function in getgc(true), look for one that:
+    --   * holds getgenv()._BMS_PLACEFLAG_REF as an upvalue
+    --   * AND has some other long token-shaped string upvalue
+    -- The first such string is the token.
+    --
+    -- Most executors expose getgc + debug.getupvalue (Synapse, Krnl,
+    -- Fluxus, Solara, AWP, Potassium). Bail cleanly when they don't.
+    --
+    -- Re-runs harmlessly: if we already have a token cached we just
+    -- return it, no scan.
+    local function autoCaptureToken()
+        local existing = getgenv()._BMS_TOKEN
+        if existing then return existing end
+        if not getgc or not debug or not debug.getupvalue then
+            return nil
+        end
+        local pf = getgenv()._BMS_PLACEFLAG_REF
+        if not pf then return nil end
+        local ok, gc = pcall(function() return getgc(true) end)
+        if not ok or type(gc) ~= "table" then return nil end
+        for _, v in next, gc do
+            if type(v) == "function" then
+                local hasPF, foundStr = false, nil
+                local i = 1
+                while true do
+                    local got, name, value = pcall(debug.getupvalue, v, i)
+                    if not got or not name then break end
+                    if value == pf then hasPF = true end
+                    if not foundStr and type(value) == "string"
+                       and #value >= 16 and #value <= 256
+                       and value:match("^[%w%-%_%+%/%=]+$") then
+                        foundStr = value
+                    end
+                    if hasPF and foundStr then break end
+                    i = i + 1
+                end
+                if hasPF and foundStr then
+                    getgenv()._BMS_TOKEN = foundStr
+                    print("[BMS] auto-captured token from GC:", foundStr)
+                    return foundStr
+                end
+            end
+        end
+        return nil
+    end
+
+    -- Fire one auto-capture attempt now (PlaceFlag is resolved at
+    -- this point) and a retry loop in case the LocalScript that
+    -- creates the token hasn't run yet. Retries every 2s for up to
+    -- 30s, exits as soon as we get a token.
+    task.spawn(function()
+        local tries = 0
+        while not getgenv()._BMS_TOKEN and tries < 15 do
+            autoCaptureToken()
+            if getgenv()._BMS_TOKEN then return end
+            tries = tries + 1
+            task.wait(2)
+        end
+        if not getgenv()._BMS_TOKEN then
+            warn("[BMS] auto-capture gave up; place one flag manually OR enter the token via the UI.")
+        end
+    end)
+
     -- ---- per-tile helpers ----
     local function tileState(tile)
         for _, ch in ipairs(tile:GetChildren()) do
@@ -9597,6 +9665,7 @@ F.games.bms = (function()
         hasToken      = function() return getgenv()._BMS_TOKEN ~= nil end,
         setToken      = setManualToken,
         getToken      = function() return getgenv()._BMS_TOKEN end,
+        autoCaptureToken = autoCaptureToken,
     }
 end)()
 
