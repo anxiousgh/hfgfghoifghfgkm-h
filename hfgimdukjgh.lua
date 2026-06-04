@@ -2441,10 +2441,10 @@ do
         BMSAuto:AddDivider()
         BMSAuto:AddLabel("Playstyle actions")
         BMSAuto:AddDropdown("BMSPlaystyle", {
-            Values   = { "legit", "logical" },
+            Values   = { "legit", "logical", "flagless" },
             Default  = "legit",
             Text     = "Playstyle",
-            Tooltip  = "logical = small pause after each flag fire so newly exposed bombs get a human-looking beat instead of an instant snap; legit = current behaviour.",
+            Tooltip  = "legit = current behaviour. logical = small pause after each flag fire so newly exposed bombs get a human-looking beat. flagless = never place flags; only walk safes.",
             Callback = function(v) F.games.bms.autoPlay.setPlaystyle(v) end,
         })
         local _bmsActions = {

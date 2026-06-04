@@ -8494,10 +8494,14 @@ F.games.bms = (function()
 
     -- ---- playstyle + win/loss actions ----
     -- playstyleMode:
-    --   'legit'   = current behaviour, no extra pacing
-    --   'logical' = small random delay after each flag fire so newly
-    --               exposed bombs / numbers get acted on with a
-    --               human-looking pause rather than an instant snap
+    --   'legit'    = current behaviour, no extra pacing
+    --   'logical'  = small random delay after each flag fire so newly
+    --                exposed bombs / numbers get acted on with a
+    --                human-looking pause rather than an instant snap
+    --   'flagless' = no flagging at all; the planner skips the
+    --                'flag closest deduced mine' branch entirely and
+    --                only walks to deduced-safe tiles. Mines stay
+    --                visually unflagged.
     -- winAction / failAction: what the bot does once the board ends.
     --   'staying still', 'walking randomly', 'jumping in a circle',
     --   'jumping off map'.
@@ -9177,7 +9181,8 @@ F.games.bms = (function()
                 local token  = getgenv()._BMS_TOKEN
                 local remote = getPlaceFlag()
                 local now    = tick()
-                if token and remote and (now - lastFlagAt) >= flagDelayMin then
+                if playstyleMode ~= "flagless"
+                   and token and remote and (now - lastFlagAt) >= flagDelayMin then
                     -- Auto-play flagging is UNBOUNDED across the whole
                     -- map (no rangeSq check). Aim cone still applies if
                     -- it's enabled. Standalone Legit auto-flag still
@@ -9571,7 +9576,9 @@ F.games.bms = (function()
             end,
             -- playstyle + post-round actions
             setPlaystyle = function(m)
-                if m == "legit" or m == "logical" then playstyleMode = m end
+                if m == "legit" or m == "logical" or m == "flagless" then
+                    playstyleMode = m
+                end
             end,
             getPlaystyle = function() return playstyleMode end,
             setWinAction  = function(a)
