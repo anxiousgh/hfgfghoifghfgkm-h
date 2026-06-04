@@ -9074,6 +9074,34 @@ F.games.bms = (function()
         if actionThread then pcall(task.cancel, actionThread); actionThread = nil end
     end
 
+    -- Pick a random walkable target around `hrp`. Raycasts up to 8
+    -- random directions; returns the first one with > 5 studs of
+    -- clear horizontal space. If a ray hits something with enough
+    -- room behind us, walks to just before the hit (-2 studs buffer)
+    -- so the bot doesn't body-press into invisible walls.
+    -- Returns nil after 8 blocked attempts so the caller can just
+    -- task.wait and retry next tick.
+    local function safeRandomTarget(hrp)
+        if not hrp then return nil end
+        local rp = RaycastParams.new()
+        rp.FilterDescendantsInstances = { lplr.Character }
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        for _ = 1, 8 do
+            local angle = math.random() * math.pi * 2
+            local dist  = 10 + math.random() * 10  -- 10-20 studs
+            local dir   = Vector3.new(math.cos(angle) * dist, 0, math.sin(angle) * dist)
+            local hit   = workspace:Raycast(hrp.Position, dir, rp)
+            if not hit then
+                return hrp.Position + dir
+            end
+            local hd = (hit.Position - hrp.Position).Magnitude
+            if hd > 5 then
+                return hrp.Position + dir.Unit * (hd - 2)
+            end
+        end
+        return nil
+    end
+
     local function startAction(name)
         stopAction()
         -- 'random' rolls one of the four real actions at trigger time
@@ -9203,9 +9231,10 @@ F.games.bms = (function()
                     end
                     break  -- one-shot
                 elseif name == "walking randomly" then
-                    local target = hrp.Position
-                        + Vector3.new(math.random(-20, 20), 0, math.random(-20, 20))
-                    pcall(function() hum:MoveTo(target) end)
+                    local target = safeRandomTarget(hrp)
+                    if target then
+                        pcall(function() hum:MoveTo(target) end)
+                    end
                     task.wait(0.8 + math.random() * 1.5)
                 else
                     break
@@ -9281,9 +9310,10 @@ F.games.bms = (function()
                 if isOnTiles(hrp) then break end
 
                 if name == "walk randomly" then
-                    local target = hrp.Position
-                        + Vector3.new(math.random(-20, 20), 0, math.random(-20, 20))
-                    pcall(function() hum:MoveTo(target) end)
+                    local target = safeRandomTarget(hrp)
+                    if target then
+                        pcall(function() hum:MoveTo(target) end)
+                    end
                     task.wait(0.8 + math.random() * 1.5)
                 elseif name == "sit down" then
                     local seat = findNearestSeat()
