@@ -9467,17 +9467,28 @@ F.games.bms = (function()
                             pcall(function() remote:FireServer(best, token, true) end)
                         end
                         lastFlagAt = now + flagDelayRoll() - flagDelayMin
-                        -- logical playstyle adds a 0.3-0.6s pause after
-                        -- each flag fire so newly exposed bombs / numbers
-                        -- get a human-looking beat instead of an instant
-                        -- snap. legit keeps the original 0.1s tick.
+                        -- logical playstyle takes a longer beat after
+                        -- each flag fire so newly exposed bombs /
+                        -- numbers read like a person studying the
+                        -- board before reacting. legit keeps the
+                        -- original 0.1s tick.
                         if playstyleMode == "logical" then
-                            task.wait(0.3 + math.random() * 0.3)
+                            task.wait(0.8 + math.random() * 0.8)  -- 0.8-1.6s
                         else
                             task.wait(0.1)
                         end
                         continue
                     end
+                end
+
+                -- Logical-mode 'thinking' beat between movements. Once
+                -- per autoplay tick (NOT per step), before we even look
+                -- at the deduced safes, pause briefly so the bot looks
+                -- like it's reading the board instead of snap-chaining
+                -- moves. Skipped during the chain loop further down so
+                -- already-walking momentum isn't interrupted mid-chain.
+                if playstyleMode == "logical" then
+                    task.wait(0.5 + math.random() * 0.6)  -- 0.5-1.1s
                 end
                 -- (b) walk to nearest REACHABLE deduced-safe tile
                 local startTile = findCurrentTile(all, origin)
