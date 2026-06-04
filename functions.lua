@@ -2857,6 +2857,66 @@ F.fullbright= makeToggle(startFullbright,stopFullbright,"fullbrightActive")
 F.freecam   = makeToggle(startFreecam,   stopFreecam,   "freecamActive")
 F.zoom      = makeToggle(startZoom,      stopZoom,      "zoomActive")
 F.spin      = makeToggle(startSpin,      stopSpin,      "spinActive")
+
+-- ============================================================
+--  CSGO HVH MOVEMENT
+--  Always face the camera + jiggle yaw left/right. Same write-
+--  HRP.CFrame-at-Last+1 pattern as ragebot FaceTarget so PlayerModule
+--  shiftlock and the game's own camera scripts can't undo us
+--  mid-frame. AutoRotate is pinned to false while active and restored
+--  on stop.
+-- ============================================================
+F.hvhMovement = (function()
+    local active     = false
+    local jiggleAmt  = 25   -- max ±degrees off camera yaw
+    local jiggleHz   = 8    -- sinusoidal cycles per second
+    local _savedAR   = nil  -- captured Humanoid.AutoRotate
+
+    local function start()
+        if active then return end
+        active = true
+        RunService:BindToRenderStep("decay_hvh", Enum.RenderPriority.Last.Value + 1, function()
+            if not active then
+                RunService:UnbindFromRenderStep("decay_hvh")
+                return
+            end
+            local c = lplr.Character; if not c then return end
+            local hrp = c:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+            local hum = c:FindFirstChildOfClass("Humanoid")
+            if hum then
+                if _savedAR == nil then _savedAR = hum.AutoRotate end
+                if hum.AutoRotate then pcall(function() hum.AutoRotate = false end) end
+            end
+            local cam = workspace.CurrentCamera; if not cam then return end
+            local look = cam.CFrame.LookVector
+            local baseYaw = math.atan2(-look.X, -look.Z)
+            local j = math.sin(tick() * jiggleHz * 2 * math.pi) * math.rad(jiggleAmt)
+            hrp.CFrame = CFrame.new(hrp.Position) * CFrame.fromEulerAnglesYXZ(0, baseYaw + j, 0)
+        end)
+    end
+
+    local function stop()
+        active = false
+        pcall(function() RunService:UnbindFromRenderStep("decay_hvh") end)
+        local c = lplr.Character
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        if hum and _savedAR ~= nil then
+            pcall(function() hum.AutoRotate = _savedAR end)
+        end
+        _savedAR = nil
+    end
+
+    return {
+        start    = start,
+        stop     = stop,
+        toggle   = function() if active then stop() else start() end end,
+        isActive = function() return active end,
+        setJiggleAmount    = function(n) jiggleAmt = math.clamp(tonumber(n) or 25, 0, 180) end,
+        setJiggleFrequency = function(n) jiggleHz  = math.clamp(tonumber(n) or 8,  0.1, 30) end,
+        getJiggleAmount    = function() return jiggleAmt end,
+        getJiggleFrequency = function() return jiggleHz  end,
+    }
+end)()
 F.spin.setSpeed = function(n)
     SPIN_SPEED = tonumber(n) or SPIN_SPEED
     -- live-update the running gyro so the slider takes effect immediately
