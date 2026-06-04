@@ -1107,10 +1107,15 @@ do
         Default  = 25, Min = 0, Max = 180, Rounding = 0, Suffix = " deg",
         Callback = function(v) F.hvhMovement.setJiggleAmount(v) end,
     })
-    Hvh:AddSlider("HvhJiggleFrequency", {
-        Text     = "Jiggle frequency",
-        Default  = 8, Min = 0.1, Max = 30, Rounding = 1, Suffix = " Hz",
-        Callback = function(v) F.hvhMovement.setJiggleFrequency(v) end,
+    Hvh:AddSlider("HvhJiggleFreqMin", {
+        Text     = "Jiggle frequency min",
+        Default  = 1, Min = 0.05, Max = 30, Rounding = 2, Suffix = " Hz",
+        Callback = function(v) F.hvhMovement.setJiggleFreqMin(v) end,
+    })
+    Hvh:AddSlider("HvhJiggleFreqMax", {
+        Text     = "Jiggle frequency max",
+        Default  = 3, Min = 0.05, Max = 30, Rounding = 2, Suffix = " Hz",
+        Callback = function(v) F.hvhMovement.setJiggleFreqMax(v) end,
     })
 
     -- right side: extras (spin/flip/ice + blink)
