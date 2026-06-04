@@ -8581,12 +8581,14 @@ F.games.bms = (function()
     --   any tile R~0, G~0.99, B~0    -> win  (all bombs revealed green)
     -- When detection transitions back to nil (new round started -
     -- tiles repainted), the action stops and autoplay resumes.
-    local playstyleMode = "legit"
-    local winAction     = "staying still"
-    local failAction    = "staying still"
-    local gameOverState = nil
-    local actionThread  = nil
+    local playstyleMode  = "legit"
+    local winAction      = "staying still"
+    local failAction     = "staying still"
+    local respawnAction  = "stay still"   -- stay still | walk randomly | sit down
+    local gameOverState  = nil
+    local actionThread   = nil
     local detectorThread = nil
+    local respawnActionThread, _respawnCharConn
     local _RED   = function(c) return c.R > 0.95 and c.G < 0.05 and c.B < 0.05 end
     local _GREEN = function(c) return c.R < 0.05 and c.G > 0.95 and c.B < 0.05 end
 
@@ -9109,14 +9111,20 @@ F.games.bms = (function()
                         _circleCenter.Z + math.sin(a) * 2.5
                     )
                     pcall(function() hum:MoveTo(target) end)
-                    -- Force a jump every tick. hum.Jump only triggers
-                    -- one jump per state cycle - ChangeState forces it
-                    -- even when the prior Jump hasn't fully completed
-                    -- (this is what HC anti-jump scripts blow past too).
-                    pcall(function()
-                        hum.Jump = true
-                        hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                    end)
+                    -- Only jump while grounded - otherwise ChangeState
+                    -- mid-air re-fires Jump every tick and the character
+                    -- climbs into the sky (user reported 'flying' from
+                    -- the old always-jump version). FloorMaterial = Air
+                    -- means no contact; HumanoidStateType.Freefall or
+                    -- Jumping also means airborne.
+                    local grounded = hum.FloorMaterial ~= Enum.Material.Air
+                    if grounded then
+                        local st = hum:GetState()
+                        if st ~= Enum.HumanoidStateType.Jumping
+                           and st ~= Enum.HumanoidStateType.Freefall then
+                            pcall(function() hum.Jump = true end)
+                        end
+                    end
                     task.wait(0.25)
                 elseif name == "jumping off map" then
                     -- Walk to the nearest POINT on the board's edge
@@ -9167,11 +9175,12 @@ F.games.bms = (function()
                         if outwardDir then
                             -- Walk past the edge AND jump off it - some
                             -- maps have a tiny lip; jumping clears it.
+                            -- Single jump only while grounded so we don't
+                            -- accidentally fly back up.
                             pcall(function() hum:MoveTo(edgePt + outwardDir * 20) end)
-                            pcall(function()
-                                hum.Jump = true
-                                hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                            end)
+                            if hum.FloorMaterial ~= Enum.Material.Air then
+                                pcall(function() hum.Jump = true end)
+                            end
                             task.wait(3)
                         end
                     else
@@ -9193,10 +9202,110 @@ F.games.bms = (function()
         end)
     end
 
+    -- ---- respawn action ----
+    -- Fires after CharacterAdded (death + respawn). Runs the chosen
+    -- behaviour until the character is teleported onto the tile
+    -- field (= isOnTiles returns true), at which point the action
+    -- stops and the normal autoplay loop takes over again.
+    local function isOnTiles(hrp)
+        if not hrp or #tileList == 0 then return false end
+        local minX, maxX = math.huge, -math.huge
+        local minZ, maxZ = math.huge, -math.huge
+        local maxY = -math.huge
+        for _, t in ipairs(tileList) do
+            local p = t.Position
+            if p.X < minX then minX = p.X end
+            if p.X > maxX then maxX = p.X end
+            if p.Z < minZ then minZ = p.Z end
+            if p.Z > maxZ then maxZ = p.Z end
+            if p.Y > maxY then maxY = p.Y end
+        end
+        local pos = hrp.Position
+        return pos.X >= minX and pos.X <= maxX
+           and pos.Z >= minZ and pos.Z <= maxZ
+           and math.abs(pos.Y - maxY) < 15
+    end
+
+    local function findNearestSeat()
+        local hrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return nil end
+        local best, bestD = nil, math.huge
+        for _, inst in ipairs(workspace:GetDescendants()) do
+            if inst:IsA("Seat") or inst:IsA("VehicleSeat") then
+                local d = (inst.Position - hrp.Position).Magnitude
+                if d < bestD then best, bestD = inst, d end
+            end
+        end
+        return best
+    end
+
+    local function stopRespawnAction()
+        if respawnActionThread then
+            pcall(task.cancel, respawnActionThread)
+            respawnActionThread = nil
+        end
+    end
+
+    local function startRespawnAction()
+        stopRespawnAction()
+        if respawnAction == "stay still" then return end
+        respawnActionThread = task.spawn(function()
+            while autoActive do
+                local c   = lplr.Character
+                local hum = c and c:FindFirstChildOfClass("Humanoid")
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if not hum or not hrp or hum.Health <= 0 then
+                    task.wait(0.4)
+                    continue
+                end
+                -- exit as soon as we're back on the board
+                if isOnTiles(hrp) then break end
+
+                if respawnAction == "walk randomly" then
+                    local target = hrp.Position
+                        + Vector3.new(math.random(-20, 20), 0, math.random(-20, 20))
+                    pcall(function() hum:MoveTo(target) end)
+                    task.wait(0.8 + math.random() * 1.5)
+                elseif respawnAction == "sit down" then
+                    local seat = findNearestSeat()
+                    if seat then
+                        pcall(function() hum:MoveTo(seat.Position) end)
+                        -- wait until seated (Sit set by SeatPart touch)
+                        local deadline = tick() + 8
+                        while tick() < deadline and autoActive do
+                            if hum.Sit then break end
+                            if isOnTiles(hrp) then break end
+                            task.wait(0.1)
+                        end
+                        -- stay seated, but bail out if we get teleported
+                        while autoActive and hum.Sit and not isOnTiles(hrp) do
+                            task.wait(0.5)
+                        end
+                    else
+                        task.wait(1)
+                    end
+                else
+                    break
+                end
+            end
+            respawnActionThread = nil
+        end)
+    end
+
     local function autoPlayStart()
         if autoActive then return end
         autoActive = true
         gameOverState = nil
+        -- respawn-action hook: fires the configured respawn behaviour
+        -- after every CharacterAdded (death + respawn). The action
+        -- stops itself once isOnTiles(hrp) becomes true, so the normal
+        -- planner takes over the moment we're teleported back.
+        if _respawnCharConn then _respawnCharConn:Disconnect() end
+        _respawnCharConn = lplr.CharacterAdded:Connect(function()
+            if not autoActive then return end
+            task.wait(0.6)  -- let the spawn animation + char rig settle
+            startRespawnAction()
+        end)
         if detectorThread then pcall(task.cancel, detectorThread) end
         detectorThread = task.spawn(function()
             while autoActive do
@@ -9594,6 +9703,8 @@ F.games.bms = (function()
         if autoThread     then pcall(task.cancel, autoThread);     autoThread     = nil end
         if detectorThread then pcall(task.cancel, detectorThread); detectorThread = nil end
         stopAction()
+        stopRespawnAction()
+        if _respawnCharConn then _respawnCharConn:Disconnect(); _respawnCharConn = nil end
         gameOverState = nil
         clearPathPreview()
         setFollowCam(false)
@@ -9679,8 +9790,12 @@ F.games.bms = (function()
             setFailAction = function(a)
                 if a then failAction = tostring(a) end
             end,
-            getWinAction  = function() return winAction end,
-            getFailAction = function() return failAction end,
+            setRespawnAction = function(a)
+                if a then respawnAction = tostring(a) end
+            end,
+            getWinAction     = function() return winAction end,
+            getFailAction    = function() return failAction end,
+            getRespawnAction = function() return respawnAction end,
             -- stats
             setStatsGui   = setStatsGui,
             resetStats    = resetStats,

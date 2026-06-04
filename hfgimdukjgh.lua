@@ -2478,6 +2478,13 @@ do
             Tooltip  = "Triggered when any tile turns red (255,0,0).",
             Callback = function(v) F.games.bms.autoPlay.setFailAction(v) end,
         })
+        BMSAuto:AddDropdown("BMSRespawnAction", {
+            Values   = { "stay still", "walk randomly", "sit down" },
+            Default  = "stay still",
+            Text     = "Action after respawn",
+            Tooltip  = "Fires on every CharacterAdded (death + respawn). Stops the moment the player gets teleported back onto the tile field.",
+            Callback = function(v) F.games.bms.autoPlay.setRespawnAction(v) end,
+        })
 
         BMSAuto:AddToggle("BMSStatsGui", { Text = "Show stats overlay",
             Default = false,
