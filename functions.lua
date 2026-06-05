@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.25.0"
+local SCRIPT_VERSION = "v1.25.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -9096,6 +9096,12 @@ F.games.bms = (function()
     --   5. return false; caller fires the remote.
     local function preFlagSequence(tile)
         if not tile then return false end
+        -- RMB gate: while the player is panning camera with RMB-hold,
+        -- skip the fire entirely. Old behaviour was to skip just the
+        -- cursor sweep but still fire, which made flags pop onto
+        -- tiles the cursor wasn't even near - the exact giveaway
+        -- the cursor sim is supposed to prevent.
+        if _rmbHeld then return true end
         if stealthMinSecBetween > 0 then
             local elapsed = tick() - _stealthLastFireAt
             if elapsed < stealthMinSecBetween then
@@ -9103,6 +9109,7 @@ F.games.bms = (function()
             end
         end
         task.wait(_reactionDelay())
+        if _rmbHeld then return true end  -- re-check after the wait
         -- Hesitate FIRST. No cursor commitment until we've decided
         -- we're actually going to flag this tile.
         if stealthHesitatePct > 0
