@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.37.0"
+local SCRIPT_VERSION = "v1.37.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12261,14 +12261,20 @@ F.games.prisonLife = (function()
     end
 
     -- ---- auto-reload ----
-    -- Watches Local_CurrentAmmo on the equipped tool. When it hits 0
-    -- (and the gun isn't already reloading), invokes FuncReload.
-    -- InvokeServer() is standard client API - works fine from
-    -- executor scripts, no SUNC wrapper needed.
-    local autoReloadOn        = false
-    local _reloadToolConn     = nil
-    local _reloadChildConn    = nil
-    local _reloadCharAddConn  = nil
+    -- POLLING based (was attribute-event based). The old version
+    -- hooked GetAttributeChangedSignal("CurrentAmmo") and pressed R
+    -- on the 0 transition. That worked for auto guns (AK/MP5) which
+    -- spam ammo changes so a missed press retries, but single-shot /
+    -- low-cap guns (M700 MaxAmmo=1, Revolver) fire the 0-event ONCE -
+    -- if the R press didn't register (sniper charge time, animation,
+    -- mouse still held) there was no further change event, so it
+    -- never retried and the gun sat empty.
+    -- Polling re-checks every tick and re-presses R until the reload
+    -- actually starts, so it's robust across every gun. Also naturally
+    -- survives death (reads the live equipped tool each tick) with no
+    -- per-tool / per-character connections to manage.
+    local autoReloadOn     = false
+    local _reloadThread    = nil
 
     local function _pressR()
         VirtualInputManager:SendKeyEvent(true,  Enum.KeyCode.R, false, game)
@@ -12276,55 +12282,38 @@ F.games.prisonLife = (function()
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.R, false, game)
     end
 
-    local function _hookReload(tool)
-        if _reloadToolConn then _reloadToolConn:Disconnect(); _reloadToolConn = nil end
-        if not tool then return end
-        _reloadToolConn = tool:GetAttributeChangedSignal("CurrentAmmo"):Connect(function()
-            if not autoReloadOn then return end
-            local ammo = tool:GetAttribute("CurrentAmmo") or 1
-            pcall(function() tool:SetAttribute("Local_CurrentAmmo", ammo) end)
-            local reloading = tool:GetAttribute("IsReloading")
-            if ammo <= 0 and not reloading then
-                _pressR()
-            end
-        end)
-    end
-
-    -- (re)hook the tool-equip listener for a given character. Called
-    -- on start AND on every respawn so auto-reload keeps working
-    -- after death.
-    local function _hookReloadChar(char)
-        if _reloadChildConn then _reloadChildConn:Disconnect(); _reloadChildConn = nil end
-        if not char then return end
-        local t = char:FindFirstChildOfClass("Tool")
-        if t then _hookReload(t) end
-        _reloadChildConn = char.ChildAdded:Connect(function(child)
-            if not autoReloadOn then return end
-            if child:IsA("Tool")
-               or (child:IsA("Model") and child:GetAttribute("CurrentAmmo")) then
-                task.wait()
-                _hookReload(child)
-            end
-        end)
-    end
-
     local function autoReloadStart()
         if autoReloadOn then return end
         autoReloadOn = true
-        _hookReloadChar(lplr.Character)
-        if _reloadCharAddConn then _reloadCharAddConn:Disconnect() end
-        _reloadCharAddConn = lplr.CharacterAdded:Connect(function(char)
-            if not autoReloadOn then return end
-            task.wait(0.5)
-            _hookReloadChar(char)
+        _reloadThread = task.spawn(function()
+            local lastPress = 0
+            while autoReloadOn do
+                local tool = equippedTool()
+                if tool then
+                    local ammo = tool:GetAttribute("CurrentAmmo")
+                    if ammo ~= nil then
+                        -- keep client counter in sync
+                        pcall(function() tool:SetAttribute("Local_CurrentAmmo", ammo) end)
+                        local reloading = tool:GetAttribute("IsReloading")
+                        -- press R when empty + not already reloading.
+                        -- 0.6s debounce so we don't machine-gun R while
+                        -- the reload animation hasn't flipped IsReloading.
+                        if ammo <= 0 and not reloading
+                           and (tick() - lastPress) > 0.6 then
+                            lastPress = tick()
+                            _pressR()
+                        end
+                    end
+                end
+                task.wait(0.15)
+            end
+            _reloadThread = nil
         end)
     end
 
     local function autoReloadStop()
         autoReloadOn = false
-        if _reloadToolConn    then _reloadToolConn:Disconnect();    _reloadToolConn    = nil end
-        if _reloadChildConn   then _reloadChildConn:Disconnect();   _reloadChildConn   = nil end
-        if _reloadCharAddConn then _reloadCharAddConn:Disconnect(); _reloadCharAddConn = nil end
+        if _reloadThread then pcall(task.cancel, _reloadThread); _reloadThread = nil end
     end
 
     local function shoot(targetHRP)
