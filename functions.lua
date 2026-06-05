@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.26.1"
+local SCRIPT_VERSION = "v1.26.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -9048,10 +9048,10 @@ F.games.bms = (function()
             return true   -- caller: skip this fire
         end
         -- Committed. Hand the tile to the tracker - it will sweep
-        -- the cursor over to it and then keep tracking it for as
-        -- long as it's the current target. Wait until the cursor
-        -- is on the tile before letting the caller fire so the
-        -- flag never appears before the cursor reaches it.
+        -- the cursor over to it and hold it there until we release.
+        -- Wait until the cursor is on the tile before letting the
+        -- caller fire so the flag never appears before the cursor
+        -- reaches it.
         if stealthCursorOn and _stealthMoveCursor then
             _setCursorTarget(tile)
             local arrived = _waitForCursorOnTile(tile, 1.5)
@@ -9061,6 +9061,13 @@ F.games.bms = (function()
             -- If we never reached the tile (off-screen, etc.) still
             -- fall through and fire - the on-screen filter should
             -- have prevented this case to begin with.
+            -- Release the cursor NOW. Caller fires immediately after
+            -- we return, the flag pops on the tile (cursor's last
+            -- position), and the tracker stops touching the cursor
+            -- until the NEXT preFlagSequence sets a new target. So
+            -- between fires the cursor sits wherever the flag landed
+            -- rather than tracking the tile as the player walks.
+            _clearCursorTarget()
         end
         _stealthLastFireAt = tick()
         return false
