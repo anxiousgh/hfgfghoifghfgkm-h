@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.35.0"
+local SCRIPT_VERSION = "v1.35.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12177,32 +12177,25 @@ F.games.prisonLife = (function()
     -- (and the gun isn't already reloading), invokes FuncReload.
     -- InvokeServer() is standard client API - works fine from
     -- executor scripts, no SUNC wrapper needed.
-    local function _getFuncReload()
-        local rs = game:GetService("ReplicatedStorage")
-        local gr = rs:FindFirstChild("GunRemotes")
-        return gr and gr:FindFirstChild("FuncReload")
-    end
-
     local autoReloadOn      = false
     local _reloadToolConn   = nil
     local _reloadCharConn   = nil
 
+    local function _pressR()
+        VirtualInputManager:SendKeyEvent(true,  Enum.KeyCode.R, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+    end
+
     local function _hookReload(tool)
         if _reloadToolConn then _reloadToolConn:Disconnect(); _reloadToolConn = nil end
         if not tool then return end
-        -- Watch CurrentAmmo - the server-synced value.
         _reloadToolConn = tool:GetAttributeChangedSignal("CurrentAmmo"):Connect(function()
             if not autoReloadOn then return end
             local ammo      = tool:GetAttribute("CurrentAmmo") or 1
             local reloading = tool:GetAttribute("IsReloading")
             if ammo <= 0 and not reloading then
-                local fr = _getFuncReload()
-                if fr then
-                    pcall(function() fr:InvokeServer() end)
-                    -- flag locally so we don't double-fire the reload
-                    -- before the server syncs IsReloading back
-                    pcall(function() tool:SetAttribute("IsReloading", true) end)
-                end
+                _pressR()
             end
         end)
     end
