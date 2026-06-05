@@ -8817,19 +8817,17 @@ F.games.bms = (function()
     -- believable gap instead of a 3-second machinegun burst.
     local stealthMinSecBetween = 0
     local _stealthLastFireAt   = 0
-    -- General cursor speed (px/sec). duration = dist / speed,
-    -- clamped so a 1px move doesn't take 0.001s and a 2000px
-    -- move doesn't take 4 seconds.
+    -- General cursor speed (px/sec). The tracker computes per-
+    -- frame movement as min(1, dist/30) * speed * dt so the
+    -- cursor moves at constant velocity until within 30px of
+    -- the target, then eases out for a clean lock-on.
     local stealthCursorSpeed   = 600    -- px/sec
-    -- Token cancels an in-flight smooth-move when a newer cursor
-    -- task starts, so multiple flag sequences can't fight.
-    local _cursorTaskToken     = 0
     -- Right-mouse-button held detection. Roblox uses RMB-hold for
     -- camera pan in third-person; if we drive mousemoveabs while
     -- the player is panning their camera, our cursor calls fight
     -- the pan and yank the view around. Listen on the input
-    -- service once; smooth-move loops check this each frame and
-    -- bail when the user is panning.
+    -- service once; the tracker step checks this each frame and
+    -- bails (no cursor write) while the user is panning.
     local _rmbHeld = false
     do
         local UIS = game:GetService("UserInputService")
@@ -8843,49 +8841,6 @@ F.games.bms = (function()
                 _rmbHeld = false
             end
         end)
-    end
-
-    local function _tileScreenXY(tile)
-        if not tile then return nil end
-        local cam = workspace.CurrentCamera
-        if not cam then return nil end
-        local sp, on = cam:WorldToViewportPoint(tile.Position)
-        if not on then return nil end
-        return sp
-    end
-
-    -- Smooth cursor movement. mousemoveabs is a one-shot syscall
-    -- that teleports the OS cursor - to actually look like a real
-    -- mouse movement during screenshare we have to step the cursor
-    -- through intermediate positions over many frames ourselves.
-    --
-    -- Motion model (v2):
-    --   * Read current cursor pos via UIS:GetMouseLocation().
-    --   * Duration is TIME-based (not step-count based) so it's
-    --     consistent regardless of frame rate - 60fps and 144fps
-    --     users both see the same 200ms move take 200ms.
-    --   * Path is a cubic Bezier with two control points placed
-    --     1/3 and 2/3 along the straight line, each perturbed
-    --     perpendicularly with independent random magnitudes. This
-    --     produces natural S-curves and arcs instead of the single
-    --     symmetric bow that a sin offset gives.
-    --   * Speed profile is ease-out cubic over the Bezier parameter
-    --     so the cursor decelerates approaching the tile (Fitts).
-    --   * Micro-jitter (sub-pixel scale * 1.5) on each step so the
-    --     path doesn't trace the Bezier perfectly - hands tremble.
-    --   * Lands with a small overshoot ~5-7px, settles 30-70ms,
-    --     then corrects to the exact target - mimics the terminal
-    --     correction at the end of a real mouse landing.
-    --   * Token-cancellable: a newer cursor task (drift -> flag,
-    --     or flag -> flag) bumps _cursorTaskToken; this loop bails
-    --     immediately when it sees its token is stale. No fighting
-    --     between drift and flag sequences for the cursor.
-    -- Compute a Bezier sweep duration for a given pixel distance
-    -- using a px/sec speed. Clamped so a 1px move doesn't take 1ms
-    -- and a screen-traverse doesn't take 4 seconds.
-    local function _durationForDist(dist, speedPxSec)
-        local speed = math.max(50, speedPxSec or stealthCursorSpeed)
-        return math.clamp(dist / speed, 0.08, 1.5)
     end
 
     -- Continuous cursor tracker. Replaces the old sweep-on-demand
