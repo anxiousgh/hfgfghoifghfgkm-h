@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.28.0"
+local SCRIPT_VERSION = "v1.29.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8842,6 +8842,21 @@ F.games.bms = (function()
     -- tile take different amounts of time. Defeats the 'every move
     -- takes the same exact time' tell.
     local stealthSpeedVariance = 0.45
+    -- Flag magnet: only treat a tile as a flag candidate while the
+    -- USER'S cursor is within stealthMagnetRange px of it. Cursor
+    -- still does its smooth sweep + offset + correction, just over
+    -- a much shorter distance. From a screenshare angle this looks
+    -- like the user nearly clicked the tile and the bot finished
+    -- the move.
+    local stealthMagnetOn      = false
+    local stealthMagnetRange   = 80  -- px from cursor
+    -- Triggerbot: fire PlaceFlag the instant the user's cursor is
+    -- within stealthTriggerRange px of a deduced unflagged mine.
+    -- No cursor sweep, no reaction delay - the user is moving the
+    -- cursor themselves, bot just pulls the trigger.
+    local stealthTriggerbotOn  = false
+    local stealthTriggerRange  = 12  -- px from cursor
+    local _triggerThread       = nil
     -- Right-mouse-button held detection. Roblox uses RMB-hold for
     -- camera pan in third-person; if we drive mousemoveabs while
     -- the player is panning their camera, our cursor calls fight
@@ -8861,6 +8876,17 @@ F.games.bms = (function()
                 _rmbHeld = false
             end
         end)
+    end
+
+    -- Read the user's cursor position in viewport coords. Used by
+    -- the magnet filter (find tiles near cursor) and the
+    -- triggerbot loop (fire when cursor is over a deduced mine).
+    -- GetMouseLocation is fine for reading; only the write side
+    -- (mousemoveabs) suffers the GUI-inset disagreement.
+    local function _cursorViewportXY()
+        local UIS = game:GetService("UserInputService")
+        local m   = UIS:GetMouseLocation()
+        return m.X, m.Y
     end
 
     -- Continuous cursor tracker. Replaces the old sweep-on-demand
@@ -9251,16 +9277,41 @@ F.games.bms = (function()
                 -- (within range + aim cone). Simple + predictable - no
                 -- last-flagged chaining.
                 local best, bestD2 = nil, math.huge
+                -- Magnet mode: filter to tiles within N px of the
+                -- USER'S cursor on screen, then pick the closest to
+                -- the cursor (smallest sweep distance). Otherwise
+                -- pick the closest tile to the player in world.
+                local magnetOn = stealthMagnetOn
+                local cmx, cmy, cam
+                if magnetOn then
+                    cmx, cmy = _cursorViewportXY()
+                    cam = workspace.CurrentCamera
+                end
+                local mr2 = stealthMagnetRange * stealthMagnetRange
                 for t in pairs(mines) do
                     if state[t] ~= "flagged"
                        and inAimCone(t)
                        and isTileOnScreen(t) then
-                        local dx = t.Position.X - origin.X
-                        local dy = t.Position.Y - origin.Y
-                        local dz = t.Position.Z - origin.Z
-                        local d2 = dx*dx + dy*dy + dz*dz
-                        if d2 < rangeSq and d2 < bestD2 then
-                            best, bestD2 = t, d2
+                        if magnetOn then
+                            if cam then
+                                local sp, on = cam:WorldToViewportPoint(t.Position)
+                                if on then
+                                    local cdx = sp.X - cmx
+                                    local cdy = sp.Y - cmy
+                                    local cd2 = cdx*cdx + cdy*cdy
+                                    if cd2 <= mr2 and cd2 < bestD2 then
+                                        best, bestD2 = t, cd2
+                                    end
+                                end
+                            end
+                        else
+                            local dx = t.Position.X - origin.X
+                            local dy = t.Position.Y - origin.Y
+                            local dz = t.Position.Z - origin.Z
+                            local d2 = dx*dx + dy*dy + dz*dz
+                            if d2 < rangeSq and d2 < bestD2 then
+                                best, bestD2 = t, d2
+                            end
                         end
                     end
                 end
@@ -9296,6 +9347,69 @@ F.games.bms = (function()
         -- pinned to whichever tile was last targeted, even after the
         -- flag thread is gone.
         _clearCursorTarget()
+    end
+
+    -- ---- triggerbot ----
+    -- Independent of legitFlag: fires PlaceFlag the instant the
+    -- user's cursor is within stealthTriggerRange px of a deduced
+    -- unflagged mine. No cursor sweep, no reaction delay - the
+    -- user moves the cursor manually, bot just pulls the trigger.
+    -- Deduce cache refreshes every ~150ms to keep CPU in check;
+    -- cursor-vs-tile distance check runs every frame.
+    local function _stopTriggerbot()
+        -- thread exits on its own when the flag goes false
+    end
+
+    local function _startTriggerbot()
+        if _triggerThread then return end
+        _triggerThread = task.spawn(function()
+            local lastDeduce = 0
+            local mineCache  = nil
+            while stealthTriggerbotOn do
+                if _rmbHeld then task.wait(); goto continue end
+                local now = tick()
+                if now - lastDeduce >= 0.15 then
+                    lastDeduce = now
+                    local parts = getParts()
+                    if parts then
+                        ensureNeighbors(tileList)
+                        local all   = tileList
+                        local state = {}
+                        for _, t in ipairs(all) do state[t] = tileStateCached(t) end
+                        mineCache = deduce(all, state)
+                    end
+                end
+                local token  = getgenv()._BMS_TOKEN
+                local remote = getPlaceFlag()
+                local cam    = workspace.CurrentCamera
+                if cam and token and remote and mineCache then
+                    local cmx, cmy = _cursorViewportXY()
+                    local tr2 = stealthTriggerRange * stealthTriggerRange
+                    for t in pairs(mineCache) do
+                        if tileStateCached(t) ~= "flagged" then
+                            local sp, on = cam:WorldToViewportPoint(t.Position)
+                            if on then
+                                local dx = sp.X - cmx
+                                local dy = sp.Y - cmy
+                                if dx * dx + dy * dy <= tr2 then
+                                    pcall(function()
+                                        remote:FireServer(t, token, true)
+                                    end)
+                                    -- short debounce so we don't
+                                    -- re-fire on the same tile before
+                                    -- the server marks it flagged
+                                    task.wait(0.25)
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+                ::continue::
+                task.wait()
+            end
+            _triggerThread = nil
+        end)
     end
 
     -- ---- auto-play (walk to safes + flag mines, never step on unknowns) ----
@@ -10768,6 +10882,23 @@ F.games.bms = (function()
             -- doesn't take the same exact time on every sweep.
             setSpeedVariance = function(n)
                 stealthSpeedVariance = math.clamp((tonumber(n) or 45) / 100, 0, 1)
+            end,
+            -- Flag magnet: legitFlag only considers tiles within N
+            -- px of the cursor as candidates, then picks the closest
+            -- one to the cursor. Makes the cursor sweep short.
+            setMagnet      = function(v) stealthMagnetOn = v == true end,
+            setMagnetRange = function(n)
+                stealthMagnetRange = math.clamp(tonumber(n) or 80, 5, 500)
+            end,
+            -- Triggerbot: independent of legitFlag. Fires PlaceFlag
+            -- when cursor is within N px of a deduced unflagged
+            -- mine. No sweep, no reaction delay.
+            setTriggerbot  = function(v)
+                stealthTriggerbotOn = v == true
+                if stealthTriggerbotOn then _startTriggerbot() else _stopTriggerbot() end
+            end,
+            setTriggerRange = function(n)
+                stealthTriggerRange = math.clamp(tonumber(n) or 12, 1, 100)
             end,
             -- Radial over/undershoot range (px). The initial landing
             -- offset is uniform random in [min, max] px from tile
