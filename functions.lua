@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.36.2"
+local SCRIPT_VERSION = "v1.36.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5544,6 +5544,14 @@ F.games.hoodCustoms.forceHit = (function()
     local hitSoundEnabled = true
     local hitSoundId      = 135698842254153  -- "crit" by default
     local hitSoundVolume  = 1.0
+    -- Concurrent-tracer cap. Each tracer spawns a pile of workspace
+    -- parts (start/end anchors, beams, impact flash + ring + sparkle
+    -- emitters, and up to 12 trail anchors). On fast / auto fire
+    -- these stack up unbounded and flood the instance tree, which
+    -- is the "random freeze" players hit. We cap how many can be
+    -- alive at once; over the cap, a new shot just skips its visual.
+    local _activeTracers  = 0
+    local MAX_TRACERS     = 10
 
     local lastFire = 0
 
@@ -5601,6 +5609,15 @@ F.games.hoodCustoms.forceHit = (function()
         if not tracerEnabled then return end
         local dist = (hitPos - origin).Magnitude
         if dist < 0.5 then return end
+        -- bail if too many tracers are already alive (anti-freeze)
+        if _activeTracers >= MAX_TRACERS then return end
+        _activeTracers = _activeTracers + 1
+        -- guaranteed release: even if the animation thread early-returns
+        -- (parts gc'd, etc), decrement after a safe upper bound so the
+        -- counter can never leak and permanently block tracers.
+        task.delay(math.max(1.5, tracerLifetime + 1), function()
+            _activeTracers = math.max(0, _activeTracers - 1)
+        end)
 
         local dir = (hitPos - origin).Unit
 
