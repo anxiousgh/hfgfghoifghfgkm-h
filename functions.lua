@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.27.0"
+local SCRIPT_VERSION = "v1.27.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -9657,6 +9657,11 @@ F.games.bms = (function()
     local _camCharConn   = nil
     local _camTiltAngle  = math.rad(-60)  -- 60 degrees down (default)
     local _camTiltOn     = true  -- whether the periodic tilt is enabled
+    -- Whether autoplay overrides the camera mode to Follow + spawns
+    -- the periodic tilt thread. Default on to preserve the previous
+    -- behaviour; the BMSAuto UI exposes a toggle so the user can
+    -- keep their own camera settings during auto-play.
+    local _followCamOn   = true
 
     local function setFollowCam(enable)
         local ok, ugs = pcall(function()
@@ -10060,7 +10065,7 @@ F.games.bms = (function()
             stopAction()
             detectorThread = nil
         end)
-        setFollowCam(true)
+        if _followCamOn then setFollowCam(true) end
         if autoThread then pcall(task.cancel, autoThread) end
         lastFlagAt = 0  -- reset cooldown so a fresh autoplay session starts immediately
         autoThread = task.spawn(function()
@@ -10529,6 +10534,17 @@ F.games.bms = (function()
             getPathPreviewColor = function() return pathPreviewColor end,
             -- camera tilt
             setCamTilt        = function(v) _camTiltOn = v == true end,
+            -- Whether autoplay overrides the camera mode to Follow.
+            -- Toggled live: if autoplay is already running and the
+            -- user flips this off, the camera mode is restored
+            -- immediately (and re-engaged if they flip it back on).
+            setFollowCam      = function(v)
+                local wasOn = _followCamOn
+                _followCamOn = v == true
+                if autoActive and wasOn ~= _followCamOn then
+                    setFollowCam(_followCamOn)
+                end
+            end,
             setCamTiltAngle   = function(n)
                 local deg = math.clamp(tonumber(n) or 60, 0, 90)
                 _camTiltAngle = math.rad(-deg)

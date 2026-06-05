@@ -2540,6 +2540,10 @@ do
             Default = 0.6, Min = 0, Max = 2, Rounding = 2, Suffix = " studs",
             Callback = function(v) F.games.bms.autoPlay.setLegitJitter(v) end,
         })
+        BMSAuto:AddToggle("BMSAutoFollowCam", { Text = "Follow camera mode",
+            Default = true,
+            Callback = function(v) F.games.bms.autoPlay.setFollowCam(v) end,
+        })
         BMSAuto:AddToggle("BMSAutoCamTilt", { Text = "Camera tilt",
             Default = true,
             Callback = function(v) F.games.bms.autoPlay.setCamTilt(v) end,
