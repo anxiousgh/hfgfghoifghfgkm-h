@@ -1751,6 +1751,7 @@ do
         ["Murder Mystery 2"]          = { 142823291 },
         ["Match the Cards!"]          = { 138397085393482 },
         ["Blockerman's Minesweeper"]  = { 7871169780 },
+        ["Prison Life"]               = { 155615604 },
     }
     local function findCurrentGame()
         for name, ids in pairs(SUPPORTED_GAMES) do
@@ -2736,6 +2737,28 @@ do
                     F.games.matchTheCards.showAll.start()
                 else
                     F.games.matchTheCards.showAll.stop()
+                end
+            end,
+        })
+    end
+
+    -- ---------------- PRISON LIFE ----------------
+    if _currentGame == "Prison Life" then
+        local PL = Tabs.Games:AddLeftGroupbox("Prison Life")
+
+        PL:AddLabel("Escape")
+        PL:AddButton({
+            Text = "Escape (teleport outside)",
+            Func = function() F.games.prisonLife.escape() end,
+        })
+        PL:AddDivider()
+        PL:AddToggle("PLAutoEscape", { Text = "Auto escape (while Inmate)",
+            Default = false,
+            Callback = function(v)
+                if v then
+                    F.games.prisonLife.autoEscape.start()
+                else
+                    F.games.prisonLife.autoEscape.stop()
                 end
             end,
         })

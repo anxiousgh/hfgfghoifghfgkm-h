@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.30.0"
+local SCRIPT_VERSION = "v1.31.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -11799,6 +11799,91 @@ F.whitelist = (function()
         contains = contains,
         list     = list,
         clear    = clear,
+    }
+end)()
+
+-- ============================================================
+--  GAMES: PRISON LIFE
+-- ============================================================
+F.games.prisonLife = (function()
+    local Players = game:GetService("Players")
+
+    -- The target CFrame the player teleports to when escaping.
+    local ESCAPE_CF = CFrame.new(
+        -973.669861, 108.323685, 2043.36267,
+         0, 0, -1,
+         0, 1,  0,
+         1, 0,  0
+    )
+
+    local function getHrp()
+        local char = lplr.Character
+        if not char then return nil end
+        return char:FindFirstChild("HumanoidRootPart")
+    end
+
+    -- One-shot escape: directly set HRP CFrame.
+    local function escape()
+        local hrp = getHrp()
+        if not hrp then return end
+        pcall(function() hrp.CFrame = ESCAPE_CF end)
+    end
+
+    -- Auto escape: watch the player's Team. Fire escape() once
+    -- each time they join the Inmates team and loop until they
+    -- leave it (so a teleport-back by the game is countered).
+    local autoActive   = false
+    local autoThread   = nil
+    local autoTeamConn = nil
+
+    local function _isInmate()
+        local team = lplr.Team
+        return team ~= nil and team.Name == "Inmates"
+    end
+
+    local function _runLoop()
+        while autoActive and _isInmate() do
+            local hrp = getHrp()
+            if hrp then
+                pcall(function() hrp.CFrame = ESCAPE_CF end)
+            end
+            task.wait(0.1)
+        end
+        autoThread = nil
+    end
+
+    local function _onTeamChanged()
+        if not autoActive then return end
+        if _isInmate() then
+            if not autoThread then
+                autoThread = task.spawn(_runLoop)
+            end
+        else
+            if autoThread then
+                pcall(task.cancel, autoThread)
+                autoThread = nil
+            end
+        end
+    end
+
+    local function autoEscapeStart()
+        if autoActive then return end
+        autoActive = true
+        _onTeamChanged()  -- handle already being an inmate on start
+        if autoTeamConn then autoTeamConn:Disconnect() end
+        autoTeamConn = lplr:GetPropertyChangedSignal("Team"):Connect(_onTeamChanged)
+    end
+
+    local function autoEscapeStop()
+        autoActive = false
+        if autoTeamConn then autoTeamConn:Disconnect(); autoTeamConn = nil end
+        if autoThread   then pcall(task.cancel, autoThread); autoThread = nil end
+    end
+
+    return {
+        escape         = escape,
+        autoEscape     = { start = autoEscapeStart, stop = autoEscapeStop,
+                           isActive = function() return autoActive end },
     }
 end)()
 
