@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.33.5"
+local SCRIPT_VERSION = "v1.34.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12113,6 +12113,28 @@ F.games.prisonLife = (function()
         if t then pcall(function() hum:EquipTool(t) end) end
     end
 
+    -- ---- no spread ----
+    local _origSpread   = nil
+    local noSpreadOn    = false
+
+    local function noSpreadStart()
+        local tool = equippedTool(); if not tool then return end
+        _origSpread = tool:GetAttribute("SpreadRadius")
+        pcall(function() tool:SetAttribute("SpreadRadius", 0) end)
+        _requeueTool()
+        noSpreadOn = true
+    end
+
+    local function noSpreadStop()
+        noSpreadOn = false
+        local tool = equippedTool(); if not tool then return end
+        if _origSpread then
+            pcall(function() tool:SetAttribute("SpreadRadius", _origSpread) end)
+            _requeueTool()
+            _origSpread = nil
+        end
+    end
+
     local _origFireRate = nil
     local rapidFireOn   = false
 
@@ -12269,6 +12291,10 @@ F.games.prisonLife = (function()
 
     local function _nearestEnemy()
         local hrp = getHrp(); if not hrp then return nil end
+        -- visibility check fires from the local player's Head
+        local char   = lplr.Character
+        local head   = char and char:FindFirstChild("Head")
+        local origin = head and head.Position or hrp.Position
         local best, bestD2 = nil, auraRange * auraRange
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= lplr and _isEnemy(p) and p.Character then
@@ -12276,7 +12302,14 @@ F.games.prisonLife = (function()
                 local hum = p.Character:FindFirstChildOfClass("Humanoid")
                 if eh and hum and hum.Health > 0 then
                     local d2 = (eh.Position - hrp.Position).Magnitude
-                    if d2 * d2 < bestD2 then best, bestD2 = eh, d2 * d2 end
+                    d2 = d2 * d2
+                    if d2 < bestD2 then
+                        -- strict wall check: ray from our Head to their HRP
+                        local ignore = { lplr.Character, p.Character }
+                        if isReallyVisible(origin, eh.Position, ignore) then
+                            best, bestD2 = eh, d2
+                        end
+                    end
                 end
             end
         end
@@ -12319,6 +12352,11 @@ F.games.prisonLife = (function()
             isActive    = function() return auraActive end,
             setRange    = function(n) auraRange    = math.max(1, tonumber(n) or 100) end,
             setInterval = function(n) auraInterval = math.clamp(tonumber(n) or 0.08, 0.01, 5) end,
+        },
+        noSpread   = {
+            start    = noSpreadStart,
+            stop     = noSpreadStop,
+            isActive = function() return noSpreadOn end,
         },
         rapidFire  = {
             start    = rapidFireStart,

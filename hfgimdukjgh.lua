@@ -2781,6 +2781,13 @@ do
 
         PL:AddDivider()
         PL:AddLabel("Combat extras")
+        PL:AddToggle("PLNoSpread", { Text = "No spread (SpreadRadius = 0)",
+            Default = false,
+            Callback = function(v)
+                if v then F.games.prisonLife.noSpread.start()
+                else F.games.prisonLife.noSpread.stop() end
+            end,
+        })
         PL:AddToggle("PLRapidFire", { Text = "Rapid fire (FireRate = 0.01)",
             Default = false,
             Callback = function(v)
