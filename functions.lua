@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.31.1"
+local SCRIPT_VERSION = "v1.32.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -11808,7 +11808,6 @@ end)()
 F.games.prisonLife = (function()
     local Players = game:GetService("Players")
 
-    -- The target CFrame the player teleports to when escaping.
     local ESCAPE_CF = CFrame.new(
         -973.669861, 108.323685, 2043.36267,
          0, 0, -1,
@@ -11822,31 +11821,39 @@ F.games.prisonLife = (function()
         return char:FindFirstChild("HumanoidRootPart")
     end
 
-    -- One-shot escape: directly set HRP CFrame.
+    -- Returns the name of the local player's current team, or nil.
+    local function myTeamName()
+        local t = lplr.Team
+        return t and t.Name or nil
+    end
+
+    -- Returns the equipped Tool in the character, or nil.
+    local function equippedTool()
+        local char = lplr.Character
+        if not char then return nil end
+        return char:FindFirstChildOfClass("Tool")
+    end
+
+    -- ---- escape ----
     local function escape()
         local hrp = getHrp()
         if not hrp then return end
         pcall(function() hrp.CFrame = ESCAPE_CF end)
     end
 
-    -- Auto escape: watch the player's Team. Fire escape() once
-    -- each time they join the Inmates team and loop until they
-    -- leave it (so a teleport-back by the game is countered).
     local autoActive   = false
     local autoThread   = nil
     local autoTeamConn = nil
 
     local function _isInmate()
-        local team = lplr.Team
-        return team ~= nil and team.Name == "Inmates"
+        local t = myTeamName()
+        return t == "Inmates" or t == "Prisoner"
     end
 
-    local function _runLoop()
+    local function _runEscapeLoop()
         while autoActive and _isInmate() do
             local hrp = getHrp()
-            if hrp then
-                pcall(function() hrp.CFrame = ESCAPE_CF end)
-            end
+            if hrp then pcall(function() hrp.CFrame = ESCAPE_CF end) end
             task.wait(0.1)
         end
         autoThread = nil
@@ -11855,21 +11862,16 @@ F.games.prisonLife = (function()
     local function _onTeamChanged()
         if not autoActive then return end
         if _isInmate() then
-            if not autoThread then
-                autoThread = task.spawn(_runLoop)
-            end
+            if not autoThread then autoThread = task.spawn(_runEscapeLoop) end
         else
-            if autoThread then
-                pcall(task.cancel, autoThread)
-                autoThread = nil
-            end
+            if autoThread then pcall(task.cancel, autoThread); autoThread = nil end
         end
     end
 
     local function autoEscapeStart()
         if autoActive then return end
         autoActive = true
-        _onTeamChanged()  -- handle already being an inmate on start
+        _onTeamChanged()
         if autoTeamConn then autoTeamConn:Disconnect() end
         autoTeamConn = lplr:GetPropertyChangedSignal("Team"):Connect(_onTeamChanged)
     end
@@ -11881,13 +11883,37 @@ F.games.prisonLife = (function()
     end
 
     -- ---- shoot remote ----
-    -- ReplicatedStorage.GunRemotes.ShootEvent:FireServer({
-    --   { fromPos (Vector3), toPos (Vector3), targetHRP (BasePart) }
-    -- })
+    -- ShootEvent:FireServer({ {fromPos, toPos, targetPart}, ... })
+    -- Shotguns send multiple pellets per fire (multiple sub-tables).
+    -- We detect pellet count + spread from the tool's attributes:
+    --   BulletsPerShot / PelletsPerShot / Pellets -> pellet count
+    --   SpreadRadius                               -> spread (studs)
+    -- If none found and tool name contains "Shotgun"/"Pump" etc,
+    -- default to 5 pellets.
+
     local function getShootEvent()
         local rs = game:GetService("ReplicatedStorage")
         local gr = rs:FindFirstChild("GunRemotes")
         return gr and gr:FindFirstChild("ShootEvent")
+    end
+
+    local function _toolPellets(tool)
+        if not tool then return 1 end
+        local n = tool:GetAttribute("BulletsPerShot")
+               or tool:GetAttribute("PelletsPerShot")
+               or tool:GetAttribute("Pellets")
+        if n and n > 1 then return n end
+        local name = tool.Name:lower()
+        if name:find("shotgun") or name:find("pump") or name:find("spas")
+           or name:find("sawed") then
+            return 5
+        end
+        return 1
+    end
+
+    local function _toolSpread(tool)
+        if not tool then return 0 end
+        return tool:GetAttribute("SpreadRadius") or 0
     end
 
     local function shoot(targetHRP)
@@ -11896,30 +11922,68 @@ F.games.prisonLife = (function()
         if not event then return end
         local hrp = getHrp()
         if not hrp then return end
-        local from = hrp.Position
-        local to   = targetHRP.Position
-        pcall(function()
-            event:FireServer({ { from, to, targetHRP } })
-        end)
+        local tool   = equippedTool()
+        local from   = hrp.Position
+        local to     = targetHRP.Position
+        local count  = _toolPellets(tool)
+        local spread = _toolSpread(tool)
+        local pellets = {}
+        for _ = 1, count do
+            local offset = Vector3.new(0, 0, 0)
+            if count > 1 and spread > 0 then
+                offset = Vector3.new(
+                    (math.random() - 0.5) * spread * 80,
+                    (math.random() - 0.5) * spread * 80,
+                    (math.random() - 0.5) * spread * 80
+                )
+            end
+            table.insert(pellets, { from, to + offset, targetHRP })
+        end
+        pcall(function() event:FireServer(pellets) end)
     end
 
-    -- Kill aura: shoot the nearest visible player every interval.
+    -- ---- team-based enemy filter ----
+    -- Criminal  -> enemies: Inmates, Guards
+    -- Inmate    -> enemies: Criminals, Guards
+    -- Prisoner  -> enemies: Criminals, Guards (same as Inmate)
+    -- Guard     -> enemies: Criminals
+    -- (Team names matched case-insensitively)
+    local ENEMY_TEAMS = {
+        ["criminal"]  = { "inmates", "prisoner", "guard", "guards", "police" },
+        ["inmate"]    = { "criminal", "criminals", "guard", "guards", "police" },
+        ["prisoner"]  = { "criminal", "criminals", "guard", "guards", "police" },
+        ["guard"]     = { "criminal", "criminals" },
+        ["guards"]    = { "criminal", "criminals" },
+        ["police"]    = { "criminal", "criminals" },
+    }
+
+    local function _isEnemy(player)
+        local myT    = (myTeamName() or ""):lower()
+        local theirT = (player.Team and player.Team.Name or ""):lower()
+        local enemies = ENEMY_TEAMS[myT]
+        if not enemies then return true end  -- unknown team: shoot everyone
+        for _, e in ipairs(enemies) do
+            if theirT == e then return true end
+        end
+        return false
+    end
+
+    -- ---- kill aura ----
     local auraActive   = false
     local auraThread   = nil
-    local auraRange    = 100   -- studs
-    local auraInterval = 0.08  -- seconds between shots
+    local auraRange    = 100
+    local auraInterval = 0.08
 
     local function _nearestEnemy()
         local hrp = getHrp(); if not hrp then return nil end
         local best, bestD2 = nil, auraRange * auraRange
-        for _, p in ipairs(game:GetService("Players"):GetPlayers()) do
-            if p ~= lplr and p.Character then
-                local eh = p.Character:FindFirstChild("HumanoidRootPart")
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= lplr and _isEnemy(p) and p.Character then
+                local eh  = p.Character:FindFirstChild("HumanoidRootPart")
                 local hum = p.Character:FindFirstChildOfClass("Humanoid")
                 if eh and hum and hum.Health > 0 then
                     local d2 = (eh.Position - hrp.Position).Magnitude
-                    d2 = d2 * d2
-                    if d2 < bestD2 then best, bestD2 = eh, d2 end
+                    if d2 * d2 < bestD2 then best, bestD2 = eh, d2 * d2 end
                 end
             end
         end
@@ -11931,8 +11995,11 @@ F.games.prisonLife = (function()
         auraActive = true
         auraThread = task.spawn(function()
             while auraActive do
-                local target = _nearestEnemy()
-                if target then shoot(target) end
+                -- Only fire when a tool is equipped (gun in hand)
+                if equippedTool() then
+                    local target = _nearestEnemy()
+                    if target then shoot(target) end
+                end
                 task.wait(auraInterval)
             end
             auraThread = nil
@@ -11944,18 +12011,50 @@ F.games.prisonLife = (function()
         if auraThread then pcall(task.cancel, auraThread); auraThread = nil end
     end
 
+    -- ---- gun attribute modifier ----
+    -- SetAttribute on the currently equipped tool.
+    -- To answer the user's question: instance:SetAttribute(name, value)
+    -- and instance:GetAttribute(name). The Dex Explorer shows them
+    -- under the Attributes section of a part/tool.
+    local function modifyGun(attrs)
+        local tool = equippedTool()
+        if not tool then return false end
+        for k, v in pairs(attrs) do
+            pcall(function() tool:SetAttribute(k, v) end)
+        end
+        return true
+    end
+
+    -- Convenience: max ammo + minimal spread + fastest fire rate.
+    local function godGun()
+        local tool = equippedTool()
+        if not tool then return end
+        local maxAmmo = tool:GetAttribute("MaxAmmo") or 9999
+        pcall(function()
+            tool:SetAttribute("CurrentAmmo",   maxAmmo)
+            tool:SetAttribute("MaxAmmo",        maxAmmo)
+            tool:SetAttribute("SpreadRadius",   0)
+            tool:SetAttribute("FireRate",        0.01)
+            tool:SetAttribute("ReloadTime",      0.01)
+            tool:SetAttribute("Damage",
+                (tool:GetAttribute("Damage") or 30) * 10)
+        end)
+    end
+
     return {
-        escape         = escape,
-        autoEscape     = { start = autoEscapeStart, stop = autoEscapeStop,
-                           isActive = function() return autoActive end },
-        shoot          = shoot,
-        killAura       = {
+        escape     = escape,
+        autoEscape = { start = autoEscapeStart, stop = autoEscapeStop,
+                       isActive = function() return autoActive end },
+        shoot      = shoot,
+        killAura   = {
             start       = auraStart,
             stop        = auraStop,
             isActive    = function() return auraActive end,
             setRange    = function(n) auraRange    = math.max(1, tonumber(n) or 100) end,
             setInterval = function(n) auraInterval = math.clamp(tonumber(n) or 0.08, 0.01, 5) end,
         },
+        modifyGun  = modifyGun,
+        godGun     = godGun,
     }
 end)()
 
