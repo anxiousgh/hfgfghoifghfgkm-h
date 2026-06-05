@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.24.0"
+local SCRIPT_VERSION = "v1.24.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8817,25 +8817,36 @@ F.games.bms = (function()
     -- believable gap instead of a 3-second machinegun burst.
     local stealthMinSecBetween = 0
     local _stealthLastFireAt   = 0
+    -- General cursor speed in pixels/second. Applies to all flag
+    -- cursor sweeps (drift has its own min/max range below). The
+    -- old duration formula was distance/2500 + base which gave a
+    -- fixed-feel speed that the user couldn't change. Now duration
+    -- = distance / cursorSpeedPxSec, clamped to a sane range so a
+    -- 1px move doesn't take 0.001s and a 2000px move doesn't take
+    -- 4 seconds.
+    local stealthCursorSpeed   = 600    -- px/sec
     -- Idle cursor drift: while no flag sequence is running, a
-    -- background thread slowly drags the cursor to random nearby
-    -- spots so it doesn't sit perfectly still between fires. Sleeps
-    -- a randomised interval, moves the cursor a random distance
-    -- in a random direction (biased toward viewport centre so it
-    -- doesn't walk off-screen). Drift is fully smooth-move based,
-    -- so it shares the same Bezier engine as flag cursor sweeps.
-    local stealthIdleDriftOn   = false
+    -- background thread slowly drags the cursor to nearby points
+    -- so it doesn't sit perfectly still between fires.
+    local stealthIdleDriftOn      = false
     local stealthDriftIntervalMin = 0.7   -- seconds between drifts
     local stealthDriftIntervalMax = 2.5
-    local stealthDriftDistMin     = 20    -- px per drift
+    local stealthDriftDistMin     = 20    -- px per drift (random mode)
     local stealthDriftDistMax     = 90
+    -- Per-drift speed range, picked uniformly each step. Lets users
+    -- vary the drift pace (slow + fast moves both look natural).
+    local stealthDriftSpeedMin    = 300   -- px/sec
+    local stealthDriftSpeedMax    = 900
+    -- Smart drift: instead of picking random screen points, picks
+    -- from VISIBLE REVEALED-NUMBER tiles so the cursor looks like
+    -- it's reading the board. Falls back to random drift when no
+    -- numbered tiles are on-screen.
+    local stealthDriftSmart       = false
     local _driftThread         = nil
-    -- Token used to cancel an in-flight _smoothMoveCursor when a
-    -- newer cursor task starts. Drift is mid-move when a flag
-    -- sequence triggers? The flag's smoothMove bumps the token,
-    -- drift's loop notices its token is stale and bails, and the
-    -- flag's sweep takes over from wherever the cursor happens
-    -- to be. No fighting / jitter / dual-driver weirdness.
+    -- Token used to cancel an in-flight smooth-move when a newer
+    -- cursor task starts. Drift is mid-move when a flag sequence
+    -- triggers? The flag's smoothMove bumps the token, drift's
+    -- loop notices its token is stale and bails. No fighting.
     local _cursorTaskToken     = 0
 
     local function _tileScreenXY(tile)
@@ -8873,7 +8884,15 @@ F.games.bms = (function()
     --     or flag -> flag) bumps _cursorTaskToken; this loop bails
     --     immediately when it sees its token is stale. No fighting
     --     between drift and flag sequences for the cursor.
-    local function _smoothMoveCursor(targetX, targetY)
+    -- Compute a Bezier sweep duration for a given pixel distance
+    -- using a px/sec speed. Clamped so a 1px move doesn't take 1ms
+    -- and a screen-traverse doesn't take 4 seconds.
+    local function _durationForDist(dist, speedPxSec)
+        local speed = math.max(50, speedPxSec or stealthCursorSpeed)
+        return math.clamp(dist / speed, 0.08, 1.5)
+    end
+
+    local function _smoothMoveCursor(targetX, targetY, durationOverride)
         if not _stealthMoveCursor then return end
         local UIS = game:GetService("UserInputService")
         local s   = UIS:GetMouseLocation()
@@ -8888,14 +8907,9 @@ F.games.bms = (function()
         _cursorTaskToken = _cursorTaskToken + 1
         local myToken = _cursorTaskToken
 
-        -- duration scales with distance, clamped to a believable
-        -- range. dist/2500 + base means a 100px flick takes 140ms,
-        -- a 500px move takes 300ms, a 1200px traverse takes 580ms.
-        local duration = math.clamp(0.10 + dist / 2500, 0.13, 0.60)
+        local duration = durationOverride and math.clamp(durationOverride, 0.05, 3)
+                       or _durationForDist(dist, stealthCursorSpeed)
 
-        -- Bezier control points 1/3 and 2/3 along the line, each
-        -- pushed perpendicular by a random magnitude. Independent
-        -- magnitudes give S-curves; same-sign gives single bows.
         local invDist     = 1 / dist
         local perpX, perpY = -dy * invDist, dx * invDist
         local m1 = (math.random() - 0.5) * dist * 0.18
@@ -8911,7 +8925,7 @@ F.games.bms = (function()
             local elapsed = tick() - startTime
             if elapsed >= duration then break end
             local rawT  = elapsed / duration
-            local te    = 1 - (1 - rawT) ^ 3   -- ease-out cubic
+            local te    = 1 - (1 - rawT) ^ 3
             local omt   = 1 - te
             local b0    = omt * omt * omt
             local b1    = 3 * omt * omt * te
@@ -8919,15 +8933,12 @@ F.games.bms = (function()
             local b3    = te * te * te
             local px = b0 * sx + b1 * c1x + b2 * c2x + b3 * ex
             local py = b0 * sy + b1 * c1y + b2 * c2y + b3 * ey
-            -- micro-jitter ~ +/-0.75px so the path doesn't trace
-            -- the Bezier perfectly
             px = px + (math.random() - 0.5) * 1.5
             py = py + (math.random() - 0.5) * 1.5
             pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
-            task.wait()   -- one frame
+            task.wait()
         end
         if _cursorTaskToken ~= myToken then return end
-        -- overshoot + settle + correction landing
         pcall(_stealthMoveCursor,
             math.floor(ex + (math.random() - 0.5) * 6),
             math.floor(ey + (math.random() - 0.5) * 6))
@@ -8936,33 +8947,189 @@ F.games.bms = (function()
         pcall(_stealthMoveCursor, math.floor(ex), math.floor(ey))
     end
 
-    -- One step of idle cursor drift. Picks a random direction +
-    -- distance, biases the destination weakly toward viewport
-    -- centre so the cursor doesn't walk off the edge of the
-    -- screen, clamps to a 30px inset from the viewport rect, then
-    -- hands off to _smoothMoveCursor (so drift moves are the
-    -- same Bezier-smoothed sweeps as flag cursor moves).
+    -- _smoothMoveCursorToTile: like _smoothMoveCursor but the
+    -- TARGET is a tile Part - re-evaluated every frame so the
+    -- cursor tracks the tile if the player is walking. Without
+    -- this, a slow cursor sweep starts at the tile's screen pos
+    -- at frame 0, runs for ~200-400ms, and lands at the STALE
+    -- position from when the sweep started. By then the player
+    -- has walked a few feet and the tile has slid 20-60 px on
+    -- screen, so the cursor lands short.
+    --
+    -- The Bezier control magnitudes (m1, m2) are baked at sweep
+    -- start so the curve shape stays consistent, but the control
+    -- POINTS are re-derived from (start, current target, magnitudes)
+    -- each frame. Result: a smooth Bezier path that smoothly
+    -- re-aims as the tile moves on screen, and a final landing on
+    -- the tile's actual current pixel position.
+    local function _smoothMoveCursorToTile(tile, durationOverride)
+        if not (_stealthMoveCursor and tile) then return end
+        local UIS = game:GetService("UserInputService")
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local s = UIS:GetMouseLocation()
+        local sx, sy = s.X, s.Y
+
+        local sp0, on0 = cam:WorldToViewportPoint(tile.Position)
+        if not on0 then return end
+        local dx0, dy0 = sp0.X - sx, sp0.Y - sy
+        local dist0    = math.sqrt(dx0 * dx0 + dy0 * dy0)
+        if dist0 < 4 then
+            pcall(_stealthMoveCursor, math.floor(sp0.X), math.floor(sp0.Y))
+            return
+        end
+
+        _cursorTaskToken = _cursorTaskToken + 1
+        local myToken = _cursorTaskToken
+
+        local duration = durationOverride and math.clamp(durationOverride, 0.05, 3)
+                       or _durationForDist(dist0, stealthCursorSpeed)
+
+        -- Curve magnitudes baked from initial distance so shape
+        -- stays sensible even as the target slides.
+        local m1 = (math.random() - 0.5) * dist0 * 0.18
+        local m2 = (math.random() - 0.5) * dist0 * 0.18
+
+        local startTime = tick()
+        local lastEx, lastEy = sp0.X, sp0.Y
+
+        while true do
+            if _cursorTaskToken ~= myToken then return end
+            local elapsed = tick() - startTime
+            if elapsed >= duration then break end
+
+            -- Re-target each frame: tile's current screen pos.
+            local cur, conScreen = cam:WorldToViewportPoint(tile.Position)
+            local ex, ey
+            if conScreen then
+                ex, ey = cur.X, cur.Y
+                lastEx, lastEy = ex, ey
+            else
+                ex, ey = lastEx, lastEy
+            end
+
+            local cdx, cdy = ex - sx, ey - sy
+            local cdist    = math.sqrt(cdx * cdx + cdy * cdy)
+            if cdist < 0.001 then cdist = 1 end
+            local invDist     = 1 / cdist
+            local perpX, perpY = -cdy * invDist, cdx * invDist
+            local c1x = sx + cdx * 0.33 + perpX * m1
+            local c1y = sy + cdy * 0.33 + perpY * m1
+            local c2x = sx + cdx * 0.67 + perpX * m2
+            local c2y = sy + cdy * 0.67 + perpY * m2
+
+            local rawT  = elapsed / duration
+            local te    = 1 - (1 - rawT) ^ 3
+            local omt   = 1 - te
+            local b0    = omt * omt * omt
+            local b1    = 3 * omt * omt * te
+            local b2    = 3 * omt * te * te
+            local b3    = te * te * te
+            local px = b0 * sx + b1 * c1x + b2 * c2x + b3 * ex
+            local py = b0 * sy + b1 * c1y + b2 * c2y + b3 * ey
+            px = px + (math.random() - 0.5) * 1.5
+            py = py + (math.random() - 0.5) * 1.5
+            pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
+            task.wait()
+        end
+        if _cursorTaskToken ~= myToken then return end
+
+        -- Final landing on the tile's CURRENT screen position - this
+        -- is the fix for "cursor lands just short of the tile when
+        -- I'm walking". Re-read at every landing step.
+        local function _curPos()
+            local cur, conScreen = cam:WorldToViewportPoint(tile.Position)
+            if conScreen then return cur.X, cur.Y end
+            return lastEx, lastEy
+        end
+        local fex, fey = _curPos()
+        pcall(_stealthMoveCursor,
+            math.floor(fex + (math.random() - 0.5) * 6),
+            math.floor(fey + (math.random() - 0.5) * 6))
+        task.wait(0.03 + math.random() * 0.04)
+        if _cursorTaskToken ~= myToken then return end
+        fex, fey = _curPos()
+        pcall(_stealthMoveCursor, math.floor(fex), math.floor(fey))
+    end
+
+    -- Collect viewport-visible revealed-number tiles for smart
+    -- drift. Filters covered tiles (no number), flagged tiles,
+    -- and tiles showing a "0" (auto-revealed cascade, nothing to
+    -- read). Inset is wider than the on-screen-only filter so
+    -- drift targets sit comfortably in-view rather than near the
+    -- edge of the screen.
+    local function _findReadableNumberTiles()
+        local out = {}
+        if not (tileList and workspace.CurrentCamera) then return out end
+        local cam = workspace.CurrentCamera
+        local v = cam.ViewportSize
+        for _, t in ipairs(tileList) do
+            if tileStateCached(t) == "revealed" then
+                local n = tileNumberCached(t)
+                if n and n > 0 then
+                    local sp, on = cam:WorldToViewportPoint(t.Position)
+                    if on and sp.X >= 40 and sp.X <= v.X - 40
+                       and sp.Y >= 40 and sp.Y <= v.Y - 40 then
+                        table.insert(out, { x = sp.X, y = sp.Y })
+                    end
+                end
+            end
+        end
+        return out
+    end
+
     local function _idleDriftStep()
         if not _stealthMoveCursor then return end
         local UIS = game:GetService("UserInputService")
         local ok, m = pcall(function() return UIS:GetMouseLocation() end)
         if not ok or not m then return end
-        local cam = workspace.CurrentCamera
-        if not cam then return end
-        local v = cam.ViewportSize
-        local cx, cy = v.X * 0.5, v.Y * 0.5
-        -- weak pull toward centre: pulls ~10% per drift on average
-        local biasX = (cx - m.X) * 0.10
-        local biasY = (cy - m.Y) * 0.10
-        local lo = math.max(0, stealthDriftDistMin)
-        local hi = math.max(lo, stealthDriftDistMax)
-        local d  = lo + math.random() * (hi - lo)
-        local angle = math.random() * math.pi * 2
-        local tx = m.X + math.cos(angle) * d + biasX
-        local ty = m.Y + math.sin(angle) * d + biasY
-        tx = math.clamp(tx, 30, v.X - 30)
-        ty = math.clamp(ty, 30, v.Y - 30)
-        _smoothMoveCursor(tx, ty)
+
+        local tx, ty
+
+        -- Smart mode: pick a visible revealed-number tile so the
+        -- cursor looks like it's reading the board. Falls through
+        -- to random drift if nothing readable is on-screen.
+        if stealthDriftSmart then
+            local nums = _findReadableNumberTiles()
+            if #nums > 0 then
+                local pick = nums[math.random(1, #nums)]
+                -- small jitter around tile centre so we don't snap
+                -- pixel-perfect to every number
+                tx = pick.x + (math.random() - 0.5) * 8
+                ty = pick.y + (math.random() - 0.5) * 8
+            end
+        end
+
+        if not tx then
+            -- random fallback (or smart-off): pick a nearby point
+            -- in a random direction, biased toward viewport centre
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            local v = cam.ViewportSize
+            local cx, cy = v.X * 0.5, v.Y * 0.5
+            local biasX = (cx - m.X) * 0.10
+            local biasY = (cy - m.Y) * 0.10
+            local lo = math.max(0, stealthDriftDistMin)
+            local hi = math.max(lo, stealthDriftDistMax)
+            local d  = lo + math.random() * (hi - lo)
+            local angle = math.random() * math.pi * 2
+            tx = m.X + math.cos(angle) * d + biasX
+            ty = m.Y + math.sin(angle) * d + biasY
+            tx = math.clamp(tx, 30, v.X - 30)
+            ty = math.clamp(ty, 30, v.Y - 30)
+        end
+
+        -- Per-drift speed: uniform random in [min, max] px/sec.
+        -- Compute duration from drift distance + chosen speed so
+        -- short reads of a nearby number are fast, long sweeps
+        -- across the board are slower.
+        local dx, dy = tx - m.X, ty - m.Y
+        local dist = math.sqrt(dx * dx + dy * dy)
+        if dist < 1 then return end
+        local spLo = math.max(50, stealthDriftSpeedMin)
+        local spHi = math.max(spLo, stealthDriftSpeedMax)
+        local speed = spLo + math.random() * (spHi - spLo)
+        _smoothMoveCursor(tx, ty, _durationForDist(dist, speed))
     end
 
     local function _stopDriftThread()
@@ -9046,12 +9213,12 @@ F.games.bms = (function()
             task.wait(0.20 + math.random() * 0.40)  -- 0.2-0.6s pause
             return true   -- caller: skip this fire
         end
-        -- Committed. Sweep cursor to tile.
+        -- Committed. Sweep cursor to tile. Use the tile-tracking
+        -- variant so the cursor re-targets each frame as the player
+        -- walks - otherwise the cursor lands at the tile's STALE
+        -- screen position from when the sweep started.
         if stealthCursorOn and _stealthMoveCursor then
-            local sp = _tileScreenXY(tile)
-            if sp then
-                _smoothMoveCursor(sp.X, sp.Y)
-            end
+            _smoothMoveCursorToTile(tile)
         end
         _stealthLastFireAt = tick()
         return false
@@ -10537,6 +10704,20 @@ F.games.bms = (function()
             setDriftDistMax = function(n)
                 stealthDriftDistMax = math.clamp(tonumber(n) or 90, 1, 500)
             end,
+            -- General cursor speed in px/sec for flag sweeps.
+            setCursorSpeed = function(n)
+                stealthCursorSpeed = math.clamp(tonumber(n) or 600, 50, 5000)
+            end,
+            -- Drift speed min/max in px/sec (picked random per drift).
+            setDriftSpeedMin = function(n)
+                stealthDriftSpeedMin = math.clamp(tonumber(n) or 300, 50, 5000)
+            end,
+            setDriftSpeedMax = function(n)
+                stealthDriftSpeedMax = math.clamp(tonumber(n) or 900, 50, 5000)
+            end,
+            -- Smart drift: target visible revealed-number tiles
+            -- ("read along the board") instead of random points.
+            setDriftSmart = function(v) stealthDriftSmart = v == true end,
             hasCursorAPI = function() return _stealthMoveCursor ~= nil end,
         },
     }

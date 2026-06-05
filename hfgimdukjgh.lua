@@ -2478,14 +2478,30 @@ do
             Default = 0, Min = 0, Max = 5, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.stealth.setMinSecBetween(v) end,
         })
+        -- General cursor speed: applies to every flag sweep. Lower
+        -- = slower / more deliberate cursor; higher = snappier.
+        BMSStealth:AddSlider("BMSCursorSpeed", {
+            Text    = "Cursor speed (flag sweeps)",
+            Default = 600, Min = 100, Max = 3000, Rounding = 0, Suffix = " px/s",
+            Callback = function(v) F.games.bms.stealth.setCursorSpeed(v) end,
+        })
         -- Idle drift: keeps the cursor moving between flag fires so
         -- it doesn't sit perfectly still. Uses the same Bezier
-        -- smooth-move as flag cursor sweeps, biased toward viewport
-        -- centre so it doesn't walk off-screen.
+        -- smooth-move as flag cursor sweeps.
         BMSStealth:AddToggle("BMSIdleDrift", {
             Text    = "Random idle cursor drift",
             Default = false,
             Callback = function(v) F.games.bms.stealth.setIdleDrift(v) end,
+        })
+        -- Smart drift: target visible revealed-NUMBER tiles instead
+        -- of random screen points. Makes the cursor look like the
+        -- player is reading numbers on the board. Falls back to
+        -- random drift when no readable numbers are on-screen
+        -- (start of round, between cascades, etc.).
+        BMSStealth:AddToggle("BMSDriftSmart", {
+            Text    = "Smart drift (read numbers, not random)",
+            Default = false,
+            Callback = function(v) F.games.bms.stealth.setDriftSmart(v) end,
         })
         BMSStealth:AddSlider("BMSDriftIntervalMin", {
             Text    = "Drift interval min",
@@ -2497,13 +2513,23 @@ do
             Default = 2.5, Min = 0.1, Max = 10, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.stealth.setDriftIntervalMax(v) end,
         })
+        BMSStealth:AddSlider("BMSDriftSpeedMin", {
+            Text    = "Drift speed min",
+            Default = 300, Min = 50, Max = 3000, Rounding = 0, Suffix = " px/s",
+            Callback = function(v) F.games.bms.stealth.setDriftSpeedMin(v) end,
+        })
+        BMSStealth:AddSlider("BMSDriftSpeedMax", {
+            Text    = "Drift speed max",
+            Default = 900, Min = 50, Max = 3000, Rounding = 0, Suffix = " px/s",
+            Callback = function(v) F.games.bms.stealth.setDriftSpeedMax(v) end,
+        })
         BMSStealth:AddSlider("BMSDriftDistMin", {
-            Text    = "Drift distance min",
+            Text    = "Drift distance min (random mode only)",
             Default = 20, Min = 1, Max = 400, Rounding = 0, Suffix = " px",
             Callback = function(v) F.games.bms.stealth.setDriftDistMin(v) end,
         })
         BMSStealth:AddSlider("BMSDriftDistMax", {
-            Text    = "Drift distance max",
+            Text    = "Drift distance max (random mode only)",
             Default = 90, Min = 1, Max = 400, Rounding = 0, Suffix = " px",
             Callback = function(v) F.games.bms.stealth.setDriftDistMax(v) end,
         })
@@ -2534,10 +2560,14 @@ do
                     Options.BMSHesitate:SetValue(12)
                     Toggles.BMSOnScreenOnly:SetValue(true)
                     Options.BMSMaxFlagRate:SetValue(0.8)
+                    Options.BMSCursorSpeed:SetValue(550)
                     -- idle drift so cursor doesn't sit still between fires
                     Toggles.BMSIdleDrift:SetValue(true)
+                    Toggles.BMSDriftSmart:SetValue(true)
                     Options.BMSDriftIntervalMin:SetValue(0.9)
                     Options.BMSDriftIntervalMax:SetValue(2.8)
+                    Options.BMSDriftSpeedMin:SetValue(350)
+                    Options.BMSDriftSpeedMax:SetValue(850)
                     Options.BMSDriftDistMin:SetValue(25)
                     Options.BMSDriftDistMax:SetValue(110)
                     -- playstyle: logical adds 'reading the board' beats
