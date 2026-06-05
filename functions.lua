@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.31.0"
+local SCRIPT_VERSION = "v1.31.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -11880,10 +11880,82 @@ F.games.prisonLife = (function()
         if autoThread   then pcall(task.cancel, autoThread); autoThread = nil end
     end
 
+    -- ---- shoot remote ----
+    -- ReplicatedStorage.GunRemotes.ShootEvent:FireServer({
+    --   { fromPos (Vector3), toPos (Vector3), targetHRP (BasePart) }
+    -- })
+    local function getShootEvent()
+        local rs = game:GetService("ReplicatedStorage")
+        local gr = rs:FindFirstChild("GunRemotes")
+        return gr and gr:FindFirstChild("ShootEvent")
+    end
+
+    local function shoot(targetHRP)
+        if not targetHRP then return end
+        local event = getShootEvent()
+        if not event then return end
+        local hrp = getHrp()
+        if not hrp then return end
+        local from = hrp.Position
+        local to   = targetHRP.Position
+        pcall(function()
+            event:FireServer({ { from, to, targetHRP } })
+        end)
+    end
+
+    -- Kill aura: shoot the nearest visible player every interval.
+    local auraActive   = false
+    local auraThread   = nil
+    local auraRange    = 100   -- studs
+    local auraInterval = 0.08  -- seconds between shots
+
+    local function _nearestEnemy()
+        local hrp = getHrp(); if not hrp then return nil end
+        local best, bestD2 = nil, auraRange * auraRange
+        for _, p in ipairs(game:GetService("Players"):GetPlayers()) do
+            if p ~= lplr and p.Character then
+                local eh = p.Character:FindFirstChild("HumanoidRootPart")
+                local hum = p.Character:FindFirstChildOfClass("Humanoid")
+                if eh and hum and hum.Health > 0 then
+                    local d2 = (eh.Position - hrp.Position).Magnitude
+                    d2 = d2 * d2
+                    if d2 < bestD2 then best, bestD2 = eh, d2 end
+                end
+            end
+        end
+        return best
+    end
+
+    local function auraStart()
+        if auraActive then return end
+        auraActive = true
+        auraThread = task.spawn(function()
+            while auraActive do
+                local target = _nearestEnemy()
+                if target then shoot(target) end
+                task.wait(auraInterval)
+            end
+            auraThread = nil
+        end)
+    end
+
+    local function auraStop()
+        auraActive = false
+        if auraThread then pcall(task.cancel, auraThread); auraThread = nil end
+    end
+
     return {
         escape         = escape,
         autoEscape     = { start = autoEscapeStart, stop = autoEscapeStop,
                            isActive = function() return autoActive end },
+        shoot          = shoot,
+        killAura       = {
+            start       = auraStart,
+            stop        = auraStop,
+            isActive    = function() return auraActive end,
+            setRange    = function(n) auraRange    = math.max(1, tonumber(n) or 100) end,
+            setInterval = function(n) auraInterval = math.clamp(tonumber(n) or 0.08, 0.01, 5) end,
+        },
     }
 end)()
 
