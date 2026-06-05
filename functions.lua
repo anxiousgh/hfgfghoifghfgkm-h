@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.26.2"
+local SCRIPT_VERSION = "v1.26.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8884,6 +8884,13 @@ F.games.bms = (function()
     -- only at boundaries (target acquire, RMB release) so user
     -- mouse movements during RMB-pan are picked up.
     local _writeX, _writeY = nil, nil
+    -- Per-target landing offset (px). Re-rolled each time
+    -- _setCursorTarget is called so the cursor lands a few pixels
+    -- off the tile centre - some over-shoots, some under-shoots -
+    -- instead of pixel-perfect dead centre every time. Stays
+    -- constant for the duration of one target so the cursor
+    -- doesn't twitch around AS it approaches.
+    local _targetOffX, _targetOffY = 0, 0
 
     local function _setCursorTarget(tile)
         _currentTarget = tile
@@ -8891,6 +8898,13 @@ F.games.bms = (function()
         -- wherever the cursor actually is (might have been moved
         -- by the user during RMB pan, etc.)
         _writeX, _writeY = nil, nil
+        -- roll a fresh off-centre landing offset. +/-10px in each
+        -- axis with uniform distribution gives a ~14px max radial
+        -- offset which is well inside a typical tile but visibly
+        -- not dead-centre. Sign is random per axis so it lands
+        -- in any of the four quadrants of the tile.
+        _targetOffX = (math.random() - 0.5) * 20
+        _targetOffY = (math.random() - 0.5) * 20
     end
     local function _clearCursorTarget()
         _currentTarget = nil
@@ -8918,7 +8932,11 @@ F.games.bms = (function()
             _writeX, _writeY = m.X, m.Y
         end
 
-        local dx, dy = sp.X - _writeX, sp.Y - _writeY
+        -- Aim at the off-centre landing point, not the tile centre,
+        -- so flags don't all land pixel-perfect on the same spot.
+        local aimX = sp.X + _targetOffX
+        local aimY = sp.Y + _targetOffY
+        local dx, dy = aimX - _writeX, aimY - _writeY
         local dist   = math.sqrt(dx * dx + dy * dy)
         if dist < 1 then return end   -- locked on, nothing to do
 
@@ -8973,8 +8991,11 @@ F.games.bms = (function()
             local sp, on = cam:WorldToViewportPoint(tile.Position)
             if not on then return false end
             if _writeX then
-                local dx = sp.X - _writeX
-                local dy = sp.Y - _writeY
+                -- compare against the off-centre landing point, not
+                -- the tile centre, so the wait completes when the
+                -- cursor reaches WHERE WE'RE AIMING.
+                local dx = (sp.X + _targetOffX) - _writeX
+                local dy = (sp.Y + _targetOffY) - _writeY
                 if dx * dx + dy * dy < 36 then return true end  -- within 6px
             end
             task.wait()
