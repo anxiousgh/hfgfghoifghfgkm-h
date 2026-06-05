@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.24.1"
+local SCRIPT_VERSION = "v1.25.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8817,37 +8817,33 @@ F.games.bms = (function()
     -- believable gap instead of a 3-second machinegun burst.
     local stealthMinSecBetween = 0
     local _stealthLastFireAt   = 0
-    -- General cursor speed in pixels/second. Applies to all flag
-    -- cursor sweeps (drift has its own min/max range below). The
-    -- old duration formula was distance/2500 + base which gave a
-    -- fixed-feel speed that the user couldn't change. Now duration
-    -- = distance / cursorSpeedPxSec, clamped to a sane range so a
-    -- 1px move doesn't take 0.001s and a 2000px move doesn't take
-    -- 4 seconds.
+    -- General cursor speed (px/sec). duration = dist / speed,
+    -- clamped so a 1px move doesn't take 0.001s and a 2000px
+    -- move doesn't take 4 seconds.
     local stealthCursorSpeed   = 600    -- px/sec
-    -- Idle cursor drift: while no flag sequence is running, a
-    -- background thread slowly drags the cursor to nearby points
-    -- so it doesn't sit perfectly still between fires.
-    local stealthIdleDriftOn      = false
-    local stealthDriftIntervalMin = 0.7   -- seconds between drifts
-    local stealthDriftIntervalMax = 2.5
-    local stealthDriftDistMin     = 20    -- px per drift (random mode)
-    local stealthDriftDistMax     = 90
-    -- Per-drift speed range, picked uniformly each step. Lets users
-    -- vary the drift pace (slow + fast moves both look natural).
-    local stealthDriftSpeedMin    = 300   -- px/sec
-    local stealthDriftSpeedMax    = 900
-    -- Smart drift: instead of picking random screen points, picks
-    -- from VISIBLE REVEALED-NUMBER tiles so the cursor looks like
-    -- it's reading the board. Falls back to random drift when no
-    -- numbered tiles are on-screen.
-    local stealthDriftSmart       = false
-    local _driftThread         = nil
-    -- Token used to cancel an in-flight smooth-move when a newer
-    -- cursor task starts. Drift is mid-move when a flag sequence
-    -- triggers? The flag's smoothMove bumps the token, drift's
-    -- loop notices its token is stale and bails. No fighting.
+    -- Token cancels an in-flight smooth-move when a newer cursor
+    -- task starts, so multiple flag sequences can't fight.
     local _cursorTaskToken     = 0
+    -- Right-mouse-button held detection. Roblox uses RMB-hold for
+    -- camera pan in third-person; if we drive mousemoveabs while
+    -- the player is panning their camera, our cursor calls fight
+    -- the pan and yank the view around. Listen on the input
+    -- service once; smooth-move loops check this each frame and
+    -- bail when the user is panning.
+    local _rmbHeld = false
+    do
+        local UIS = game:GetService("UserInputService")
+        UIS.InputBegan:Connect(function(input, gp)
+            if input.UserInputType == Enum.UserInputType.MouseButton2 then
+                _rmbHeld = true
+            end
+        end)
+        UIS.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton2 then
+                _rmbHeld = false
+            end
+        end)
+    end
 
     local function _tileScreenXY(tile)
         if not tile then return nil end
@@ -8894,6 +8890,7 @@ F.games.bms = (function()
 
     local function _smoothMoveCursor(targetX, targetY, durationOverride)
         if not _stealthMoveCursor then return end
+        if _rmbHeld then return end  -- don't fight RMB camera-pan
         local UIS = game:GetService("UserInputService")
         local s   = UIS:GetMouseLocation()
         local sx, sy = s.X, s.Y
@@ -8922,6 +8919,7 @@ F.games.bms = (function()
         local startTime = tick()
         while true do
             if _cursorTaskToken ~= myToken then return end
+            if _rmbHeld then return end
             local elapsed = tick() - startTime
             if elapsed >= duration then break end
             local rawT  = elapsed / duration
@@ -8938,12 +8936,12 @@ F.games.bms = (function()
             pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
             task.wait()
         end
-        if _cursorTaskToken ~= myToken then return end
+        if _cursorTaskToken ~= myToken or _rmbHeld then return end
         pcall(_stealthMoveCursor,
             math.floor(ex + (math.random() - 0.5) * 6),
             math.floor(ey + (math.random() - 0.5) * 6))
         task.wait(0.03 + math.random() * 0.04)
-        if _cursorTaskToken ~= myToken then return end
+        if _cursorTaskToken ~= myToken or _rmbHeld then return end
         pcall(_stealthMoveCursor, math.floor(ex), math.floor(ey))
     end
 
@@ -8964,6 +8962,7 @@ F.games.bms = (function()
     -- the tile's actual current pixel position.
     local function _smoothMoveCursorToTile(tile, durationOverride)
         if not (_stealthMoveCursor and tile) then return end
+        if _rmbHeld then return end  -- don't fight RMB camera-pan
         local UIS = game:GetService("UserInputService")
         local cam = workspace.CurrentCamera
         if not cam then return end
@@ -8995,6 +8994,7 @@ F.games.bms = (function()
 
         while true do
             if _cursorTaskToken ~= myToken then return end
+            if _rmbHeld then return end
             local elapsed = tick() - startTime
             if elapsed >= duration then break end
 
@@ -9032,11 +9032,11 @@ F.games.bms = (function()
             pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
             task.wait()
         end
-        if _cursorTaskToken ~= myToken then return end
+        if _cursorTaskToken ~= myToken or _rmbHeld then return end
 
-        -- Final landing on the tile's CURRENT screen position - this
-        -- is the fix for "cursor lands just short of the tile when
-        -- I'm walking". Re-read at every landing step.
+        -- Final landing on the tile's CURRENT screen position - the
+        -- fix for "cursor lands just short of the tile when I'm
+        -- walking". Re-read at every landing step.
         local function _curPos()
             local cur, conScreen = cam:WorldToViewportPoint(tile.Position)
             if conScreen then return cur.X, cur.Y end
@@ -9047,112 +9047,9 @@ F.games.bms = (function()
             math.floor(fex + (math.random() - 0.5) * 6),
             math.floor(fey + (math.random() - 0.5) * 6))
         task.wait(0.03 + math.random() * 0.04)
-        if _cursorTaskToken ~= myToken then return end
+        if _cursorTaskToken ~= myToken or _rmbHeld then return end
         fex, fey = _curPos()
         pcall(_stealthMoveCursor, math.floor(fex), math.floor(fey))
-    end
-
-    -- Collect viewport-visible revealed-number tiles for smart
-    -- drift. Filters covered tiles (no number), flagged tiles,
-    -- and tiles showing a "0" (auto-revealed cascade, nothing to
-    -- read). Inset is wider than the on-screen-only filter so
-    -- drift targets sit comfortably in-view rather than near the
-    -- edge of the screen.
-    local function _findReadableNumberTiles()
-        local out = {}
-        if not (tileList and workspace.CurrentCamera) then return out end
-        local cam = workspace.CurrentCamera
-        local v = cam.ViewportSize
-        for _, t in ipairs(tileList) do
-            if tileStateCached(t) == "revealed" then
-                local n = tileNumberCached(t)
-                if n and n > 0 then
-                    local sp, on = cam:WorldToViewportPoint(t.Position)
-                    if on and sp.X >= 40 and sp.X <= v.X - 40
-                       and sp.Y >= 40 and sp.Y <= v.Y - 40 then
-                        table.insert(out, { x = sp.X, y = sp.Y })
-                    end
-                end
-            end
-        end
-        return out
-    end
-
-    local function _idleDriftStep()
-        if not _stealthMoveCursor then return end
-        local UIS = game:GetService("UserInputService")
-        local ok, m = pcall(function() return UIS:GetMouseLocation() end)
-        if not ok or not m then return end
-
-        local tx, ty
-
-        -- Smart mode: pick a visible revealed-number tile so the
-        -- cursor looks like it's reading the board. Falls through
-        -- to random drift if nothing readable is on-screen.
-        if stealthDriftSmart then
-            local nums = _findReadableNumberTiles()
-            if #nums > 0 then
-                local pick = nums[math.random(1, #nums)]
-                -- small jitter around tile centre so we don't snap
-                -- pixel-perfect to every number
-                tx = pick.x + (math.random() - 0.5) * 8
-                ty = pick.y + (math.random() - 0.5) * 8
-            end
-        end
-
-        if not tx then
-            -- random fallback (or smart-off): pick a nearby point
-            -- in a random direction, biased toward viewport centre
-            local cam = workspace.CurrentCamera
-            if not cam then return end
-            local v = cam.ViewportSize
-            local cx, cy = v.X * 0.5, v.Y * 0.5
-            local biasX = (cx - m.X) * 0.10
-            local biasY = (cy - m.Y) * 0.10
-            local lo = math.max(0, stealthDriftDistMin)
-            local hi = math.max(lo, stealthDriftDistMax)
-            local d  = lo + math.random() * (hi - lo)
-            local angle = math.random() * math.pi * 2
-            tx = m.X + math.cos(angle) * d + biasX
-            ty = m.Y + math.sin(angle) * d + biasY
-            tx = math.clamp(tx, 30, v.X - 30)
-            ty = math.clamp(ty, 30, v.Y - 30)
-        end
-
-        -- Per-drift speed: uniform random in [min, max] px/sec.
-        -- Compute duration from drift distance + chosen speed so
-        -- short reads of a nearby number are fast, long sweeps
-        -- across the board are slower.
-        local dx, dy = tx - m.X, ty - m.Y
-        local dist = math.sqrt(dx * dx + dy * dy)
-        if dist < 1 then return end
-        local spLo = math.max(50, stealthDriftSpeedMin)
-        local spHi = math.max(spLo, stealthDriftSpeedMax)
-        local speed = spLo + math.random() * (spHi - spLo)
-        _smoothMoveCursor(tx, ty, _durationForDist(dist, speed))
-    end
-
-    local function _stopDriftThread()
-        -- Loop exits on its own when stealthIdleDriftOn flips false.
-        -- We don't task.cancel because the thread may be mid-
-        -- _smoothMoveCursor and we don't want to leave the cursor
-        -- frozen in a half-move state.
-        _driftThread = nil
-    end
-
-    local function _startDriftThread()
-        if _driftThread then return end
-        if not (stealthIdleDriftOn and _stealthMoveCursor) then return end
-        _driftThread = task.spawn(function()
-            while stealthIdleDriftOn do
-                local lo = math.max(0.05, stealthDriftIntervalMin)
-                local hi = math.max(lo, stealthDriftIntervalMax)
-                task.wait(lo + math.random() * (hi - lo))
-                if not stealthIdleDriftOn then break end
-                _idleDriftStep()
-            end
-            _driftThread = nil
-        end)
     end
 
     -- Returns true if the tile is allowed by the on-screen-only
@@ -10215,13 +10112,13 @@ F.games.bms = (function()
                     -- it's enabled. Standalone Legit auto-flag still
                     -- respects its range slider.
                     --
-                    -- Candidates include BOTH:
-                    --   * unflagged deduced mines (PlaceFlag adds the flag)
-                    --   * false-flagged tiles (PlaceFlag on an already-
-                    --     flagged tile removes it - the remote toggles)
-                    -- Picking the closest to player from the combined
-                    -- set means we'll alternate between adding correct
-                    -- flags and yanking wrong ones, whichever is nearest.
+                    -- Closest-bomb priority: ALWAYS prefer the closest
+                    -- unflagged deduced mine to the player. Only fall
+                    -- back to falseFlag corrections when there are no
+                    -- mine candidates - otherwise the bot would
+                    -- sometimes 'flag' the closest falseFlag (which
+                    -- actually removes the flag) instead of arming
+                    -- the closest real bomb.
                     local best, bestD2 = nil, math.huge
                     for t in pairs(mines) do
                         if state[t] ~= "flagged"
@@ -10233,12 +10130,14 @@ F.games.bms = (function()
                             if d2 < bestD2 then best, bestD2 = t, d2 end
                         end
                     end
-                    for t in pairs(falseFlags) do
-                        if inAimCone(t) and isTileOnScreen(t) then
-                            local dx = t.Position.X - origin.X
-                            local dz = t.Position.Z - origin.Z
-                            local d2 = dx*dx + dz*dz
-                            if d2 < bestD2 then best, bestD2 = t, d2 end
+                    if not best then
+                        for t in pairs(falseFlags) do
+                            if inAimCone(t) and isTileOnScreen(t) then
+                                local dx = t.Position.X - origin.X
+                                local dz = t.Position.Z - origin.Z
+                                local d2 = dx*dx + dz*dz
+                                if d2 < bestD2 then best, bestD2 = t, d2 end
+                            end
                         end
                     end
                     if best then
@@ -10680,44 +10579,10 @@ F.games.bms = (function()
             setMinSecBetween = function(n)
                 stealthMinSecBetween = math.clamp(tonumber(n) or 0, 0, 10)
             end,
-            -- Idle cursor drift: background thread that slowly
-            -- drags the cursor to random nearby spots when nothing
-            -- else is moving it. Defeats the 'cursor sits perfectly
-            -- still between fires' tell.
-            setIdleDrift = function(v)
-                stealthIdleDriftOn = v == true
-                if stealthIdleDriftOn then
-                    _startDriftThread()
-                else
-                    _stopDriftThread()
-                end
-            end,
-            setDriftIntervalMin = function(n)
-                stealthDriftIntervalMin = math.clamp(tonumber(n) or 0.7, 0.1, 30)
-            end,
-            setDriftIntervalMax = function(n)
-                stealthDriftIntervalMax = math.clamp(tonumber(n) or 2.5, 0.1, 30)
-            end,
-            setDriftDistMin = function(n)
-                stealthDriftDistMin = math.clamp(tonumber(n) or 20, 1, 500)
-            end,
-            setDriftDistMax = function(n)
-                stealthDriftDistMax = math.clamp(tonumber(n) or 90, 1, 500)
-            end,
             -- General cursor speed in px/sec for flag sweeps.
             setCursorSpeed = function(n)
                 stealthCursorSpeed = math.clamp(tonumber(n) or 600, 50, 5000)
             end,
-            -- Drift speed min/max in px/sec (picked random per drift).
-            setDriftSpeedMin = function(n)
-                stealthDriftSpeedMin = math.clamp(tonumber(n) or 300, 50, 5000)
-            end,
-            setDriftSpeedMax = function(n)
-                stealthDriftSpeedMax = math.clamp(tonumber(n) or 900, 50, 5000)
-            end,
-            -- Smart drift: target visible revealed-number tiles
-            -- ("read along the board") instead of random points.
-            setDriftSmart = function(v) stealthDriftSmart = v == true end,
             hasCursorAPI = function() return _stealthMoveCursor ~= nil end,
         },
     }

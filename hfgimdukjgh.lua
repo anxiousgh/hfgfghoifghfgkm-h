@@ -2414,38 +2414,13 @@ do
             Text     = "Playstyle",
             Callback = function(v) F.games.bms.setPlaystyle(v) end,
         })
-        BMSStyle:AddLabel(
-            "legit = current behaviour\n" ..
-            "logical = longer 'reading' beats between fires + moves",
-            true
-        )
-
         -- ---- Screenshare stealth ----
-        -- Visually hardens the bot for screenshare scenarios. Doesn't
-        -- change deduction or planning; just makes flag fires LOOK
-        -- like a person clicked them. Three layers:
-        --   * cursor sim: OS-level cursor sweeps to each tile before
-        --     the flag appears (executor needs mousemoveabs)
-        --   * reaction time: variable pause before every fire
-        --   * fake hesitation: % chance to hover a tile then NOT flag
         local BMSStealth = Tabs.Games:AddRightGroupbox("Screenshare stealth")
-        local _hasCursor = false
-        pcall(function()
-            _hasCursor = F.games.bms.stealth and F.games.bms.stealth.hasCursorAPI()
-        end)
         BMSStealth:AddToggle("BMSCursorSim", {
             Text    = "Move OS cursor to tile before flagging",
             Default = false,
             Callback = function(v) F.games.bms.stealth.setCursorSim(v) end,
         })
-        if not _hasCursor then
-            BMSStealth:AddLabel(
-                "[!] this executor doesn't expose mousemoveabs / mouse_moveabs;\n" ..
-                "    cursor sim toggle is a no-op. Reaction time +\n" ..
-                "    hesitation below still work.",
-                true
-            )
-        end
         BMSStealth:AddSlider("BMSReactionMean", {
             Text    = "Reaction time",
             Default = 350, Min = 0, Max = 1500, Rounding = 0, Suffix = " ms",
@@ -2461,86 +2436,21 @@ do
             Default = 0, Min = 0, Max = 100, Rounding = 0, Suffix = " %",
             Callback = function(v) F.games.bms.stealth.setHesitate(v) end,
         })
-        -- Manual-play-critical: stops flags from popping on the far
-        -- side of the map while the player's camera is pointed
-        -- elsewhere. Stricter than the aim cone (which is a 3D angle
-        -- check) - this gates on actual viewport pixel coordinates.
         BMSStealth:AddToggle("BMSOnScreenOnly", {
             Text    = "Only flag tiles visible on screen",
             Default = false,
             Callback = function(v) F.games.bms.stealth.setOnScreenOnly(v) end,
         })
-        -- Hard rate cap on flag fires regardless of how many mines
-        -- got deduced this tick. Defeats the 'machinegun flag burst'
-        -- tell when multiple deductions resolve simultaneously.
         BMSStealth:AddSlider("BMSMaxFlagRate", {
             Text    = "Min time between flags",
             Default = 0, Min = 0, Max = 5, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.stealth.setMinSecBetween(v) end,
         })
-        -- General cursor speed: applies to every flag sweep. Lower
-        -- = slower / more deliberate cursor; higher = snappier.
         BMSStealth:AddSlider("BMSCursorSpeed", {
-            Text    = "Cursor speed (flag sweeps)",
+            Text    = "Cursor speed",
             Default = 600, Min = 100, Max = 3000, Rounding = 0, Suffix = " px/s",
             Callback = function(v) F.games.bms.stealth.setCursorSpeed(v) end,
         })
-        -- Idle drift: keeps the cursor moving between flag fires so
-        -- it doesn't sit perfectly still. Uses the same Bezier
-        -- smooth-move as flag cursor sweeps.
-        BMSStealth:AddToggle("BMSIdleDrift", {
-            Text    = "Random idle cursor drift",
-            Default = false,
-            Callback = function(v) F.games.bms.stealth.setIdleDrift(v) end,
-        })
-        -- Smart drift: target visible revealed-NUMBER tiles instead
-        -- of random screen points. Makes the cursor look like the
-        -- player is reading numbers on the board. Falls back to
-        -- random drift when no readable numbers are on-screen
-        -- (start of round, between cascades, etc.).
-        BMSStealth:AddToggle("BMSDriftSmart", {
-            Text    = "Smart drift (read numbers, not random)",
-            Default = false,
-            Callback = function(v) F.games.bms.stealth.setDriftSmart(v) end,
-        })
-        BMSStealth:AddSlider("BMSDriftIntervalMin", {
-            Text    = "Drift interval min",
-            Default = 0.7, Min = 0.1, Max = 10, Rounding = 2, Suffix = " s",
-            Callback = function(v) F.games.bms.stealth.setDriftIntervalMin(v) end,
-        })
-        BMSStealth:AddSlider("BMSDriftIntervalMax", {
-            Text    = "Drift interval max",
-            Default = 2.5, Min = 0.1, Max = 10, Rounding = 2, Suffix = " s",
-            Callback = function(v) F.games.bms.stealth.setDriftIntervalMax(v) end,
-        })
-        BMSStealth:AddSlider("BMSDriftSpeedMin", {
-            Text    = "Drift speed min",
-            Default = 300, Min = 50, Max = 3000, Rounding = 0, Suffix = " px/s",
-            Callback = function(v) F.games.bms.stealth.setDriftSpeedMin(v) end,
-        })
-        BMSStealth:AddSlider("BMSDriftSpeedMax", {
-            Text    = "Drift speed max",
-            Default = 900, Min = 50, Max = 3000, Rounding = 0, Suffix = " px/s",
-            Callback = function(v) F.games.bms.stealth.setDriftSpeedMax(v) end,
-        })
-        BMSStealth:AddSlider("BMSDriftDistMin", {
-            Text    = "Drift distance min (random mode only)",
-            Default = 20, Min = 1, Max = 400, Rounding = 0, Suffix = " px",
-            Callback = function(v) F.games.bms.stealth.setDriftDistMin(v) end,
-        })
-        BMSStealth:AddSlider("BMSDriftDistMax", {
-            Text    = "Drift distance max (random mode only)",
-            Default = 90, Min = 1, Max = 400, Rounding = 0, Suffix = " px",
-            Callback = function(v) F.games.bms.stealth.setDriftDistMax(v) end,
-        })
-        BMSStealth:AddLabel(
-            "Hesitation now decides BEFORE the cursor moves - if the bot\n" ..
-            "is going to skip a tile, the cursor never sweeps to it.\n" ..
-            "Idle drift uses the same Bezier sweep engine and yields to\n" ..
-            "flag sweeps via a cancel token, so the two never fight.\n" ..
-            "Cursor sim only works while Roblox is the focused window.",
-            true
-        )
         -- One-shot preset that wires the entire stealth stack to a
         -- known-good configuration for screenshare while the user
         -- moves the character themselves (no auto-play). Touches
@@ -2553,7 +2463,6 @@ do
             Text = "Apply 'manual play' preset",
             Func = function()
                 pcall(function()
-                    -- stealth layer
                     Toggles.BMSCursorSim:SetValue(true)
                     Options.BMSReactionMean:SetValue(450)
                     Options.BMSReactionJitter:SetValue(250)
@@ -2561,29 +2470,13 @@ do
                     Toggles.BMSOnScreenOnly:SetValue(true)
                     Options.BMSMaxFlagRate:SetValue(0.8)
                     Options.BMSCursorSpeed:SetValue(550)
-                    -- idle drift so cursor doesn't sit still between fires
-                    Toggles.BMSIdleDrift:SetValue(true)
-                    Toggles.BMSDriftSmart:SetValue(true)
-                    Options.BMSDriftIntervalMin:SetValue(0.9)
-                    Options.BMSDriftIntervalMax:SetValue(2.8)
-                    Options.BMSDriftSpeedMin:SetValue(350)
-                    Options.BMSDriftSpeedMax:SetValue(850)
-                    Options.BMSDriftDistMin:SetValue(25)
-                    Options.BMSDriftDistMax:SetValue(110)
-                    -- playstyle: logical adds 'reading the board' beats
                     Options.BMSPlaystyle:SetValue("logical")
-                    -- aim cone binds flag selection to the camera
                     Toggles.BMSFlagAimCone:SetValue(true)
                     Options.BMSFlagAimAngle:SetValue(45)
-                    -- mild miss chance so flagging isn't 100% accurate
                     Options.BMSFlagMissChance:SetValue(5)
-                    -- arm the standalone auto-flag (NOT auto-play)
                     Toggles.BMSLegitFlag:SetValue(true)
                 end)
-                Library:Notify(
-                    "Manual-play stealth preset applied. Walk around;\n" ..
-                    "only tiles in your camera will be flagged.", 4
-                )
+                Library:Notify("Manual-play stealth preset applied.", 3)
             end,
         })
 
