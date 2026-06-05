@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.29.0"
+local SCRIPT_VERSION = "v1.29.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -9366,7 +9366,9 @@ F.games.bms = (function()
             local lastDeduce = 0
             local mineCache  = nil
             while stealthTriggerbotOn do
-                if _rmbHeld then task.wait(); goto continue end
+                if _rmbHeld then
+                    task.wait(); continue
+                end
                 local now = tick()
                 if now - lastDeduce >= 0.15 then
                     lastDeduce = now
@@ -9405,7 +9407,6 @@ F.games.bms = (function()
                         end
                     end
                 end
-                ::continue::
                 task.wait()
             end
             _triggerThread = nil
