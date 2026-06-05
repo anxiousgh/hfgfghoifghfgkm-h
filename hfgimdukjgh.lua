@@ -2478,9 +2478,40 @@ do
             Default = 0, Min = 0, Max = 5, Rounding = 2, Suffix = " s",
             Callback = function(v) F.games.bms.stealth.setMinSecBetween(v) end,
         })
+        -- Idle drift: keeps the cursor moving between flag fires so
+        -- it doesn't sit perfectly still. Uses the same Bezier
+        -- smooth-move as flag cursor sweeps, biased toward viewport
+        -- centre so it doesn't walk off-screen.
+        BMSStealth:AddToggle("BMSIdleDrift", {
+            Text    = "Random idle cursor drift",
+            Default = false,
+            Callback = function(v) F.games.bms.stealth.setIdleDrift(v) end,
+        })
+        BMSStealth:AddSlider("BMSDriftIntervalMin", {
+            Text    = "Drift interval min",
+            Default = 0.7, Min = 0.1, Max = 10, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.bms.stealth.setDriftIntervalMin(v) end,
+        })
+        BMSStealth:AddSlider("BMSDriftIntervalMax", {
+            Text    = "Drift interval max",
+            Default = 2.5, Min = 0.1, Max = 10, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.bms.stealth.setDriftIntervalMax(v) end,
+        })
+        BMSStealth:AddSlider("BMSDriftDistMin", {
+            Text    = "Drift distance min",
+            Default = 20, Min = 1, Max = 400, Rounding = 0, Suffix = " px",
+            Callback = function(v) F.games.bms.stealth.setDriftDistMin(v) end,
+        })
+        BMSStealth:AddSlider("BMSDriftDistMax", {
+            Text    = "Drift distance max",
+            Default = 90, Min = 1, Max = 400, Rounding = 0, Suffix = " px",
+            Callback = function(v) F.games.bms.stealth.setDriftDistMax(v) end,
+        })
         BMSStealth:AddLabel(
-            "Hesitation = hover a tile, wait ~0.25-0.7s, then DON'T flag it.\n" ..
-            "Re-deduced next tick. Looks like real second-guessing.\n" ..
+            "Hesitation now decides BEFORE the cursor moves - if the bot\n" ..
+            "is going to skip a tile, the cursor never sweeps to it.\n" ..
+            "Idle drift uses the same Bezier sweep engine and yields to\n" ..
+            "flag sweeps via a cancel token, so the two never fight.\n" ..
             "Cursor sim only works while Roblox is the focused window.",
             true
         )
@@ -2503,6 +2534,12 @@ do
                     Options.BMSHesitate:SetValue(12)
                     Toggles.BMSOnScreenOnly:SetValue(true)
                     Options.BMSMaxFlagRate:SetValue(0.8)
+                    -- idle drift so cursor doesn't sit still between fires
+                    Toggles.BMSIdleDrift:SetValue(true)
+                    Options.BMSDriftIntervalMin:SetValue(0.9)
+                    Options.BMSDriftIntervalMax:SetValue(2.8)
+                    Options.BMSDriftDistMin:SetValue(25)
+                    Options.BMSDriftDistMax:SetValue(110)
                     -- playstyle: logical adds 'reading the board' beats
                     Options.BMSPlaystyle:SetValue("logical")
                     -- aim cone binds flag selection to the camera

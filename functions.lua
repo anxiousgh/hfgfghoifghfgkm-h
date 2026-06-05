@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.23.2"
+local SCRIPT_VERSION = "v1.24.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8817,6 +8817,26 @@ F.games.bms = (function()
     -- believable gap instead of a 3-second machinegun burst.
     local stealthMinSecBetween = 0
     local _stealthLastFireAt   = 0
+    -- Idle cursor drift: while no flag sequence is running, a
+    -- background thread slowly drags the cursor to random nearby
+    -- spots so it doesn't sit perfectly still between fires. Sleeps
+    -- a randomised interval, moves the cursor a random distance
+    -- in a random direction (biased toward viewport centre so it
+    -- doesn't walk off-screen). Drift is fully smooth-move based,
+    -- so it shares the same Bezier engine as flag cursor sweeps.
+    local stealthIdleDriftOn   = false
+    local stealthDriftIntervalMin = 0.7   -- seconds between drifts
+    local stealthDriftIntervalMax = 2.5
+    local stealthDriftDistMin     = 20    -- px per drift
+    local stealthDriftDistMax     = 90
+    local _driftThread         = nil
+    -- Token used to cancel an in-flight _smoothMoveCursor when a
+    -- newer cursor task starts. Drift is mid-move when a flag
+    -- sequence triggers? The flag's smoothMove bumps the token,
+    -- drift's loop notices its token is stale and bails, and the
+    -- flag's sweep takes over from wherever the cursor happens
+    -- to be. No fighting / jitter / dual-driver weirdness.
+    local _cursorTaskToken     = 0
 
     local function _tileScreenXY(tile)
         if not tile then return nil end
@@ -8832,62 +8852,140 @@ F.games.bms = (function()
     -- mouse movement during screenshare we have to step the cursor
     -- through intermediate positions over many frames ourselves.
     --
-    -- Motion model:
-    --   * Read current cursor pos (UIS:GetMouseLocation()).
-    --   * Compute distance to target. Duration scales with distance
-    --     (Fitts's law) clamped to a believable [130, 400] ms.
-    --   * Step count ~ one per frame for smoothness. task.wait()
-    --     with no arg yields exactly one frame regardless of FPS.
-    --   * Position on each step = lerp(start, target, ease-out-cubic(t))
-    --     so the cursor decelerates as it approaches the tile.
-    --   * Add a perpendicular sin-bell offset so the path BOWS
-    --     instead of going dead-straight (real hand movements have
-    --     a slight arc). Sign random per call so successive moves
-    --     alternate curving left vs right.
-    --   * Land with a small overshoot, brief settle, then correct
-    --     to the actual target - matches the small hand-tremor
+    -- Motion model (v2):
+    --   * Read current cursor pos via UIS:GetMouseLocation().
+    --   * Duration is TIME-based (not step-count based) so it's
+    --     consistent regardless of frame rate - 60fps and 144fps
+    --     users both see the same 200ms move take 200ms.
+    --   * Path is a cubic Bezier with two control points placed
+    --     1/3 and 2/3 along the straight line, each perturbed
+    --     perpendicularly with independent random magnitudes. This
+    --     produces natural S-curves and arcs instead of the single
+    --     symmetric bow that a sin offset gives.
+    --   * Speed profile is ease-out cubic over the Bezier parameter
+    --     so the cursor decelerates approaching the tile (Fitts).
+    --   * Micro-jitter (sub-pixel scale * 1.5) on each step so the
+    --     path doesn't trace the Bezier perfectly - hands tremble.
+    --   * Lands with a small overshoot ~5-7px, settles 30-70ms,
+    --     then corrects to the exact target - mimics the terminal
     --     correction at the end of a real mouse landing.
+    --   * Token-cancellable: a newer cursor task (drift -> flag,
+    --     or flag -> flag) bumps _cursorTaskToken; this loop bails
+    --     immediately when it sees its token is stale. No fighting
+    --     between drift and flag sequences for the cursor.
     local function _smoothMoveCursor(targetX, targetY)
         if not _stealthMoveCursor then return end
         local UIS = game:GetService("UserInputService")
         local s   = UIS:GetMouseLocation()
         local sx, sy = s.X, s.Y
-        local dx, dy = targetX - sx, targetY - sy
+        local ex, ey = targetX, targetY
+        local dx, dy = ex - sx, ey - sy
         local dist   = math.sqrt(dx * dx + dy * dy)
         if dist < 4 then
-            -- already there; nothing to interpolate
-            pcall(_stealthMoveCursor,
-                math.floor(targetX), math.floor(targetY))
+            pcall(_stealthMoveCursor, math.floor(ex), math.floor(ey))
             return
         end
-        -- step count: roughly one per frame. Short flicks get 8
-        -- steps, long screen-traverses get up to 24. Going higher
-        -- than 24 doesn't add visible smoothness, going lower than
-        -- 8 starts to look jumpy.
-        local steps = math.clamp(math.floor(dist / 25), 8, 24)
-        -- perpendicular curvature: bell-shaped offset along the
-        -- direction perpendicular to (start -> target). Max in the
-        -- middle of the path (sin(pi/2) = 1), zero at endpoints.
-        local curve   = (math.random() - 0.5) * dist * 0.08
-        local invDist = 1 / dist
+        _cursorTaskToken = _cursorTaskToken + 1
+        local myToken = _cursorTaskToken
+
+        -- duration scales with distance, clamped to a believable
+        -- range. dist/2500 + base means a 100px flick takes 140ms,
+        -- a 500px move takes 300ms, a 1200px traverse takes 580ms.
+        local duration = math.clamp(0.10 + dist / 2500, 0.13, 0.60)
+
+        -- Bezier control points 1/3 and 2/3 along the line, each
+        -- pushed perpendicular by a random magnitude. Independent
+        -- magnitudes give S-curves; same-sign gives single bows.
+        local invDist     = 1 / dist
         local perpX, perpY = -dy * invDist, dx * invDist
-        for i = 1, steps do
-            local t = i / steps
-            local e = 1 - (1 - t) ^ 3            -- ease-out cubic
-            local p = math.sin(t * math.pi) * curve
-            local px = sx + dx * e + perpX * p
-            local py = sy + dy * e + perpY * p
+        local m1 = (math.random() - 0.5) * dist * 0.18
+        local m2 = (math.random() - 0.5) * dist * 0.18
+        local c1x = sx + dx * 0.33 + perpX * m1
+        local c1y = sy + dy * 0.33 + perpY * m1
+        local c2x = sx + dx * 0.67 + perpX * m2
+        local c2y = sy + dy * 0.67 + perpY * m2
+
+        local startTime = tick()
+        while true do
+            if _cursorTaskToken ~= myToken then return end
+            local elapsed = tick() - startTime
+            if elapsed >= duration then break end
+            local rawT  = elapsed / duration
+            local te    = 1 - (1 - rawT) ^ 3   -- ease-out cubic
+            local omt   = 1 - te
+            local b0    = omt * omt * omt
+            local b1    = 3 * omt * omt * te
+            local b2    = 3 * omt * te * te
+            local b3    = te * te * te
+            local px = b0 * sx + b1 * c1x + b2 * c2x + b3 * ex
+            local py = b0 * sy + b1 * c1y + b2 * c2y + b3 * ey
+            -- micro-jitter ~ +/-0.75px so the path doesn't trace
+            -- the Bezier perfectly
+            px = px + (math.random() - 0.5) * 1.5
+            py = py + (math.random() - 0.5) * 1.5
             pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
             task.wait()   -- one frame
         end
-        -- overshoot + correction landing. Real cursor lands NEAR
-        -- the target, settles for ~30-70ms, then snaps to centre.
+        if _cursorTaskToken ~= myToken then return end
+        -- overshoot + settle + correction landing
         pcall(_stealthMoveCursor,
-            math.floor(targetX + (math.random() - 0.5) * 6),
-            math.floor(targetY + (math.random() - 0.5) * 6))
+            math.floor(ex + (math.random() - 0.5) * 6),
+            math.floor(ey + (math.random() - 0.5) * 6))
         task.wait(0.03 + math.random() * 0.04)
-        pcall(_stealthMoveCursor,
-            math.floor(targetX), math.floor(targetY))
+        if _cursorTaskToken ~= myToken then return end
+        pcall(_stealthMoveCursor, math.floor(ex), math.floor(ey))
+    end
+
+    -- One step of idle cursor drift. Picks a random direction +
+    -- distance, biases the destination weakly toward viewport
+    -- centre so the cursor doesn't walk off the edge of the
+    -- screen, clamps to a 30px inset from the viewport rect, then
+    -- hands off to _smoothMoveCursor (so drift moves are the
+    -- same Bezier-smoothed sweeps as flag cursor moves).
+    local function _idleDriftStep()
+        if not _stealthMoveCursor then return end
+        local UIS = game:GetService("UserInputService")
+        local ok, m = pcall(function() return UIS:GetMouseLocation() end)
+        if not ok or not m then return end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local v = cam.ViewportSize
+        local cx, cy = v.X * 0.5, v.Y * 0.5
+        -- weak pull toward centre: pulls ~10% per drift on average
+        local biasX = (cx - m.X) * 0.10
+        local biasY = (cy - m.Y) * 0.10
+        local lo = math.max(0, stealthDriftDistMin)
+        local hi = math.max(lo, stealthDriftDistMax)
+        local d  = lo + math.random() * (hi - lo)
+        local angle = math.random() * math.pi * 2
+        local tx = m.X + math.cos(angle) * d + biasX
+        local ty = m.Y + math.sin(angle) * d + biasY
+        tx = math.clamp(tx, 30, v.X - 30)
+        ty = math.clamp(ty, 30, v.Y - 30)
+        _smoothMoveCursor(tx, ty)
+    end
+
+    local function _stopDriftThread()
+        -- Loop exits on its own when stealthIdleDriftOn flips false.
+        -- We don't task.cancel because the thread may be mid-
+        -- _smoothMoveCursor and we don't want to leave the cursor
+        -- frozen in a half-move state.
+        _driftThread = nil
+    end
+
+    local function _startDriftThread()
+        if _driftThread then return end
+        if not (stealthIdleDriftOn and _stealthMoveCursor) then return end
+        _driftThread = task.spawn(function()
+            while stealthIdleDriftOn do
+                local lo = math.max(0.05, stealthDriftIntervalMin)
+                local hi = math.max(lo, stealthDriftIntervalMax)
+                task.wait(lo + math.random() * (hi - lo))
+                if not stealthIdleDriftOn then break end
+                _idleDriftStep()
+            end
+            _driftThread = nil
+        end)
     end
 
     -- Returns true if the tile is allowed by the on-screen-only
@@ -8921,18 +9019,19 @@ F.games.bms = (function()
     -- the caller should skip this fire (re-deduce next tick); returns
     -- false if the caller should go ahead and fire normally.
     --
-    -- Sequence:
-    --   1. reaction delay (humans don't snap-react to deductions)
-    --   2. cursor sweep toward tile + small 'hand jitter' correction
-    --      so the pointer doesn't land pixel-perfect
-    --   3. optional hesitation roll - if it hits, hover for a beat
-    --      then return true so caller skips firing
+    -- Sequence (v3 - hesitate BEFORE moving):
+    --   1. wait out the rate cap if we fired too recently
+    --   2. reaction delay (humans don't snap-react)
+    --   3. hesitation roll - decided BEFORE we touch the cursor.
+    --      If we're going to skip, just wait a beat in place and
+    --      return - never move the cursor for a tile we won't
+    --      flag. (The old order moved-then-hesitated, which made
+    --      the cursor sweep to a tile and then nothing happen -
+    --      a dead giveaway on screenshare.)
+    --   4. cursor sweep to the tile (committed to firing now)
+    --   5. return false; caller fires the remote.
     local function preFlagSequence(tile)
         if not tile then return false end
-        -- Hard rate cap: even with reaction-time variance, multiple
-        -- mines deducing simultaneously can produce a burst of fires
-        -- within a few hundred ms. Block here until enough wall-clock
-        -- time has elapsed since the previous successful fire.
         if stealthMinSecBetween > 0 then
             local elapsed = tick() - _stealthLastFireAt
             if elapsed < stealthMinSecBetween then
@@ -8940,26 +9039,20 @@ F.games.bms = (function()
             end
         end
         task.wait(_reactionDelay())
+        -- Hesitate FIRST. No cursor commitment until we've decided
+        -- we're actually going to flag this tile.
+        if stealthHesitatePct > 0
+           and math.random(1, 100) <= stealthHesitatePct then
+            task.wait(0.20 + math.random() * 0.40)  -- 0.2-0.6s pause
+            return true   -- caller: skip this fire
+        end
+        -- Committed. Sweep cursor to tile.
         if stealthCursorOn and _stealthMoveCursor then
             local sp = _tileScreenXY(tile)
             if sp then
-                -- _smoothMoveCursor does the multi-frame interpolated
-                -- sweep (ease-out cubic + curved path + overshoot
-                -- correction) so the cursor LOOKS like it's moving
-                -- instead of teleporting. Don't replace this with a
-                -- single mousemoveabs - that's the original bug.
                 _smoothMoveCursor(sp.X, sp.Y)
             end
         end
-        if stealthHesitatePct > 0
-           and math.random(1, 100) <= stealthHesitatePct then
-            task.wait(0.25 + math.random() * 0.45)  -- 0.25-0.7s hover
-            return true   -- caller: skip this fire
-        end
-        -- We're about to return false, so the caller will fire. Stamp
-        -- now so the rate cap on the NEXT call sees the right value.
-        -- Slight approximation - caller may still no-op due to other
-        -- guards - but accurate enough for rate-limit purposes.
         _stealthLastFireAt = tick()
         return false
     end
@@ -10419,6 +10512,30 @@ F.games.bms = (function()
             -- Min seconds between fires (hard rate cap). 0 = off.
             setMinSecBetween = function(n)
                 stealthMinSecBetween = math.clamp(tonumber(n) or 0, 0, 10)
+            end,
+            -- Idle cursor drift: background thread that slowly
+            -- drags the cursor to random nearby spots when nothing
+            -- else is moving it. Defeats the 'cursor sits perfectly
+            -- still between fires' tell.
+            setIdleDrift = function(v)
+                stealthIdleDriftOn = v == true
+                if stealthIdleDriftOn then
+                    _startDriftThread()
+                else
+                    _stopDriftThread()
+                end
+            end,
+            setDriftIntervalMin = function(n)
+                stealthDriftIntervalMin = math.clamp(tonumber(n) or 0.7, 0.1, 30)
+            end,
+            setDriftIntervalMax = function(n)
+                stealthDriftIntervalMax = math.clamp(tonumber(n) or 2.5, 0.1, 30)
+            end,
+            setDriftDistMin = function(n)
+                stealthDriftDistMin = math.clamp(tonumber(n) or 20, 1, 500)
+            end,
+            setDriftDistMax = function(n)
+                stealthDriftDistMax = math.clamp(tonumber(n) or 90, 1, 500)
             end,
             hasCursorAPI = function() return _stealthMoveCursor ~= nil end,
         },
