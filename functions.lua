@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.35.2"
+local SCRIPT_VERSION = "v1.35.3"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12324,7 +12324,9 @@ F.games.prisonLife = (function()
         auraActive = true
         auraThread = task.spawn(function()
             while auraActive do
-                if hasGunEquipped() then
+                local _auraTool = equippedTool()
+                local _reloading = _auraTool and _auraTool:GetAttribute("IsReloading")
+                if hasGunEquipped() and not _reloading then
                     local target = _nearestEnemy()
                     if target then shoot(target) end
                 end
