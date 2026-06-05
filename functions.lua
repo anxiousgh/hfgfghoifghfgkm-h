@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.36.0"
+local SCRIPT_VERSION = "v1.36.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12279,7 +12279,7 @@ F.games.prisonLife = (function()
     end
 
     -- ---- team-based enemy filter ----
-    -- Criminal -> Inmates, Guards
+    -- Criminal -> Guards (always) + hostile Inmates (conditional)
     -- Inmate   -> Criminals, Guards
     -- Guard    -> Criminals (always) + hostile Inmates (conditional)
     -- Same-team is never targeted. Team names normalized to a
@@ -12319,7 +12319,11 @@ F.games.prisonLife = (function()
         if myCat == theirCat then return false end  -- same category
 
         if myCat == "criminal" then
-            return theirCat == "inmate" or theirCat == "guard"
+            -- guards always; inmates only if they turned hostile
+            -- (punched someone -> Hostile attribute set)
+            if theirCat == "guard" then return true end
+            if theirCat == "inmate" then return _isHostileInmate(player) end
+            return false
         elseif myCat == "inmate" then
             return theirCat == "criminal" or theirCat == "guard"
         elseif myCat == "guard" then
