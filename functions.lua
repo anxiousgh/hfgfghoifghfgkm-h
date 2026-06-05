@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.34.0"
+local SCRIPT_VERSION = "v1.35.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12100,7 +12100,6 @@ F.games.prisonLife = (function()
         return tool:GetAttribute("SpreadRadius") or 0
     end
 
-    -- ---- rapid fire ----
     local function _requeueTool()
         local char = lplr.Character; if not char then return end
         local hum  = char:FindFirstChildOfClass("Humanoid"); if not hum then return end
@@ -12113,49 +12112,48 @@ F.games.prisonLife = (function()
         if t then pcall(function() hum:EquipTool(t) end) end
     end
 
-    -- ---- no spread ----
-    local _origSpread   = nil
-    local noSpreadOn    = false
+    -- ---- no spread (survives death) ----
+    local noSpreadOn        = false
+    local _noSpreadCharConn = nil
+    local _noSpreadToolConn = nil
 
-    local function noSpreadStart()
-        local tool = equippedTool(); if not tool then return end
-        _origSpread = tool:GetAttribute("SpreadRadius")
+    local function _applyNoSpread(tool)
+        if not (noSpreadOn and tool) then return end
         pcall(function() tool:SetAttribute("SpreadRadius", 0) end)
         _requeueTool()
+    end
+
+    local function _hookNoSpreadChar(char)
+        if _noSpreadToolConn then _noSpreadToolConn:Disconnect(); _noSpreadToolConn = nil end
+        if not char then return end
+        -- apply to already-equipped tool
+        local t = char:FindFirstChildOfClass("Tool")
+        if t then _applyNoSpread(t) end
+        _noSpreadToolConn = char.ChildAdded:Connect(function(child)
+            if not noSpreadOn then return end
+            if child:IsA("Tool")
+               or (child:IsA("Model") and child:GetAttribute("SpreadRadius")) then
+                task.wait(0.1)
+                _applyNoSpread(child)
+            end
+        end)
+    end
+
+    local function noSpreadStart()
         noSpreadOn = true
+        _hookNoSpreadChar(lplr.Character)
+        if _noSpreadCharConn then _noSpreadCharConn:Disconnect() end
+        _noSpreadCharConn = lplr.CharacterAdded:Connect(function(char)
+            if not noSpreadOn then return end
+            task.wait(0.5) -- let character + backpack load
+            _hookNoSpreadChar(char)
+        end)
     end
 
     local function noSpreadStop()
         noSpreadOn = false
-        local tool = equippedTool(); if not tool then return end
-        if _origSpread then
-            pcall(function() tool:SetAttribute("SpreadRadius", _origSpread) end)
-            _requeueTool()
-            _origSpread = nil
-        end
-    end
-
-    local _origFireRate = nil
-    local rapidFireOn   = false
-
-    local function rapidFireStart()
-        local tool = equippedTool()
-        if not tool then return end
-        _origFireRate = tool:GetAttribute("FireRate")
-        pcall(function() tool:SetAttribute("FireRate", 0.01) end)
-        _requeueTool()
-        rapidFireOn = true
-    end
-
-    local function rapidFireStop()
-        rapidFireOn = false
-        local tool = equippedTool()
-        if not tool then return end
-        if _origFireRate then
-            pcall(function() tool:SetAttribute("FireRate", _origFireRate) end)
-            _requeueTool()
-            _origFireRate = nil
-        end
+        if _noSpreadCharConn then _noSpreadCharConn:Disconnect(); _noSpreadCharConn = nil end
+        if _noSpreadToolConn then _noSpreadToolConn:Disconnect(); _noSpreadToolConn = nil end
     end
 
     -- ---- hit sound ----
@@ -12199,7 +12197,12 @@ F.games.prisonLife = (function()
             local reloading = tool:GetAttribute("IsReloading")
             if ammo <= 0 and not reloading then
                 local fr = _getFuncReload()
-                if fr then pcall(function() fr:InvokeServer() end) end
+                if fr then
+                    pcall(function() fr:InvokeServer() end)
+                    -- flag locally so we don't double-fire the reload
+                    -- before the server syncs IsReloading back
+                    pcall(function() tool:SetAttribute("IsReloading", true) end)
+                end
             end
         end)
     end
@@ -12284,18 +12287,23 @@ F.games.prisonLife = (function()
     end
 
     -- ---- kill aura ----
-    local auraActive   = false
-    local auraThread   = nil
-    local auraRange    = 100
-    local auraInterval = 0.08
+    local auraActive = false
+    local auraThread = nil
+    -- Range and fire rate are read from the equipped tool's attributes
+    -- each tick so they always match the gun. These fallbacks are used
+    -- when no tool is equipped.
+    local _auraRangeFallback    = 500
+    local _auraIntervalFallback = 0.1
 
     local function _nearestEnemy()
         local hrp = getHrp(); if not hrp then return nil end
-        -- visibility check fires from the local player's Head
         local char   = lplr.Character
         local head   = char and char:FindFirstChild("Head")
         local origin = head and head.Position or hrp.Position
-        local best, bestD2 = nil, auraRange * auraRange
+        -- read range from the equipped tool's Range attribute
+        local tool  = equippedTool()
+        local range = (tool and tool:GetAttribute("Range")) or _auraRangeFallback
+        local best, bestD2 = nil, range * range
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= lplr and _isEnemy(p) and p.Character then
                 local eh  = p.Character:FindFirstChild("HumanoidRootPart")
@@ -12321,15 +12329,14 @@ F.games.prisonLife = (function()
         auraActive = true
         auraThread = task.spawn(function()
             while auraActive do
-                -- Gate: only shoot when a gun is in hand.
-                -- hasGunEquipped() tries Tool class first, then
-                -- falls back to any Model with gun attributes so
-                -- custom Prison Life gun systems still pass.
                 if hasGunEquipped() then
                     local target = _nearestEnemy()
                     if target then shoot(target) end
                 end
-                task.wait(auraInterval)
+                -- read FireRate from tool each tick
+                local t        = equippedTool()
+                local fireRate = (t and t:GetAttribute("FireRate")) or _auraIntervalFallback
+                task.wait(math.max(0.01, fireRate))
             end
             auraThread = nil
         end)
@@ -12347,21 +12354,14 @@ F.games.prisonLife = (function()
                        isActive = function() return autoActive end },
         shoot      = shoot,
         killAura   = {
-            start       = auraStart,
-            stop        = auraStop,
-            isActive    = function() return auraActive end,
-            setRange    = function(n) auraRange    = math.max(1, tonumber(n) or 100) end,
-            setInterval = function(n) auraInterval = math.clamp(tonumber(n) or 0.08, 0.01, 5) end,
+            start    = auraStart,
+            stop     = auraStop,
+            isActive = function() return auraActive end,
         },
         noSpread   = {
             start    = noSpreadStart,
             stop     = noSpreadStop,
             isActive = function() return noSpreadOn end,
-        },
-        rapidFire  = {
-            start    = rapidFireStart,
-            stop     = rapidFireStop,
-            isActive = function() return rapidFireOn end,
         },
         autoReload = {
             start    = autoReloadStart,

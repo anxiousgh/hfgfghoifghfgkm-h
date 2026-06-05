@@ -2761,22 +2761,12 @@ do
 
         PL:AddDivider()
         PL:AddLabel("Combat")
-        PL:AddToggle("PLKillAura", { Text = "Kill aura (requires tool equipped)",
+        PL:AddToggle("PLKillAura", { Text = "Kill aura (uses gun Range + FireRate)",
             Default = false,
             Callback = function(v)
                 if v then F.games.prisonLife.killAura.start()
                 else F.games.prisonLife.killAura.stop() end
             end,
-        })
-        PL:AddSlider("PLKillAuraRange", {
-            Text    = "Kill aura range",
-            Default = 100, Min = 5, Max = 500, Rounding = 0, Suffix = " studs",
-            Callback = function(v) F.games.prisonLife.killAura.setRange(v) end,
-        })
-        PL:AddSlider("PLKillAuraInterval", {
-            Text    = "Kill aura fire rate",
-            Default = 0.08, Min = 0.01, Max = 2, Rounding = 2, Suffix = " s",
-            Callback = function(v) F.games.prisonLife.killAura.setInterval(v) end,
         })
 
         PL:AddDivider()
@@ -2786,13 +2776,6 @@ do
             Callback = function(v)
                 if v then F.games.prisonLife.noSpread.start()
                 else F.games.prisonLife.noSpread.stop() end
-            end,
-        })
-        PL:AddToggle("PLRapidFire", { Text = "Rapid fire (FireRate = 0.01)",
-            Default = false,
-            Callback = function(v)
-                if v then F.games.prisonLife.rapidFire.start()
-                else F.games.prisonLife.rapidFire.stop() end
             end,
         })
         PL:AddToggle("PLAutoReload", { Text = "Auto reload (when ammo hits 0)",
