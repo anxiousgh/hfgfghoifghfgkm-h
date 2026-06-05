@@ -2461,12 +2461,64 @@ do
             Default = 0, Min = 0, Max = 100, Rounding = 0, Suffix = " %",
             Callback = function(v) F.games.bms.stealth.setHesitate(v) end,
         })
+        -- Manual-play-critical: stops flags from popping on the far
+        -- side of the map while the player's camera is pointed
+        -- elsewhere. Stricter than the aim cone (which is a 3D angle
+        -- check) - this gates on actual viewport pixel coordinates.
+        BMSStealth:AddToggle("BMSOnScreenOnly", {
+            Text    = "Only flag tiles visible on screen",
+            Default = false,
+            Callback = function(v) F.games.bms.stealth.setOnScreenOnly(v) end,
+        })
+        -- Hard rate cap on flag fires regardless of how many mines
+        -- got deduced this tick. Defeats the 'machinegun flag burst'
+        -- tell when multiple deductions resolve simultaneously.
+        BMSStealth:AddSlider("BMSMaxFlagRate", {
+            Text    = "Min time between flags",
+            Default = 0, Min = 0, Max = 5, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.bms.stealth.setMinSecBetween(v) end,
+        })
         BMSStealth:AddLabel(
             "Hesitation = hover a tile, wait ~0.25-0.7s, then DON'T flag it.\n" ..
             "Re-deduced next tick. Looks like real second-guessing.\n" ..
             "Cursor sim only works while Roblox is the focused window.",
             true
         )
+        -- One-shot preset that wires the entire stealth stack to a
+        -- known-good configuration for screenshare while the user
+        -- moves the character themselves (no auto-play). Touches
+        -- toggles outside BMSStealth too (aim cone + range + start
+        -- the legit auto-flag) since stealth is only one half of
+        -- the story - the aim cone is what binds flags to the
+        -- camera direction, and the auto-flag toggle is what
+        -- actually starts the flag thread.
+        BMSStealth:AddButton({
+            Text = "Apply 'manual play' preset",
+            Func = function()
+                pcall(function()
+                    -- stealth layer
+                    Toggles.BMSCursorSim:SetValue(true)
+                    Options.BMSReactionMean:SetValue(450)
+                    Options.BMSReactionJitter:SetValue(250)
+                    Options.BMSHesitate:SetValue(12)
+                    Toggles.BMSOnScreenOnly:SetValue(true)
+                    Options.BMSMaxFlagRate:SetValue(0.8)
+                    -- playstyle: logical adds 'reading the board' beats
+                    Options.BMSPlaystyle:SetValue("logical")
+                    -- aim cone binds flag selection to the camera
+                    Toggles.BMSFlagAimCone:SetValue(true)
+                    Options.BMSFlagAimAngle:SetValue(45)
+                    -- mild miss chance so flagging isn't 100% accurate
+                    Options.BMSFlagMissChance:SetValue(5)
+                    -- arm the standalone auto-flag (NOT auto-play)
+                    Toggles.BMSLegitFlag:SetValue(true)
+                end)
+                Library:Notify(
+                    "Manual-play stealth preset applied. Walk around;\n" ..
+                    "only tiles in your camera will be flagged.", 4
+                )
+            end,
+        })
 
         -- ---- Auto play groupbox (right side, separate from Mine ESP /
         -- Legit auto-flag so it can't be missed) ----

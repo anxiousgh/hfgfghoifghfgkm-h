@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.23.0"
+local SCRIPT_VERSION = "v1.23.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8798,10 +8798,25 @@ F.games.bms = (function()
             or rawget(_G, "mousemoveabs") or rawget(_G, "mouse_moveabs")
     end)()
 
-    local stealthCursorOn    = false
-    local stealthReactMs     = 350  -- mean reaction time
-    local stealthReactJitter = 250  -- +/- around mean
-    local stealthHesitatePct = 0    -- 0-100% chance to hover and skip
+    local stealthCursorOn      = false
+    local stealthReactMs       = 350  -- mean reaction time
+    local stealthReactJitter   = 250  -- +/- around mean
+    local stealthHesitatePct   = 0    -- 0-100% chance to hover and skip
+    -- On-screen-only filter: when on, flag candidates are filtered
+    -- to tiles whose viewport coords are inside the actual screen
+    -- rectangle. Stricter than the aim cone (which is a 3D angle
+    -- check) - this rejects tiles that are behind the camera, off
+    -- the edges of the screen, or otherwise not in the visible
+    -- viewport. Critical for manual-play screenshare safety: stops
+    -- flags from popping on the far side of the map while the
+    -- player's camera is pointed elsewhere.
+    local stealthOnScreenOnly  = false
+    -- Max flag rate cap: minimum seconds between fires. Hard limit
+    -- on top of reaction-time variance so even if the deducer finds
+    -- five mines at once they're flagged one-by-one with a human-
+    -- believable gap instead of a 3-second machinegun burst.
+    local stealthMinSecBetween = 0
+    local _stealthLastFireAt   = 0
 
     local function _tileScreenXY(tile)
         if not tile then return nil end
@@ -8810,6 +8825,26 @@ F.games.bms = (function()
         local sp, on = cam:WorldToViewportPoint(tile.Position)
         if not on then return nil end
         return sp
+    end
+
+    -- Returns true if the tile is allowed by the on-screen-only
+    -- filter (or the filter is off, in which case every tile is
+    -- allowed). Used by both legitFlag and auto-play to prune flag
+    -- candidates BEFORE the closest-tile selection, so we never
+    -- pick an off-screen tile and then try to flag it.
+    local function isTileOnScreen(tile)
+        if not stealthOnScreenOnly then return true end
+        if not tile then return false end
+        local cam = workspace.CurrentCamera
+        if not cam then return true end
+        local sp, on = cam:WorldToViewportPoint(tile.Position)
+        if not on then return false end
+        local v = cam.ViewportSize
+        -- small inset (16 px) so tiles half-clipped at the edge of
+        -- the screen still don't qualify - a real player wouldn't
+        -- flag a tile whose icon is half off-screen
+        return sp.X >= 16 and sp.X <= (v.X - 16)
+           and sp.Y >= 16 and sp.Y <= (v.Y - 16)
     end
 
     local function _reactionDelay()
@@ -8831,6 +8866,16 @@ F.games.bms = (function()
     --      then return true so caller skips firing
     local function preFlagSequence(tile)
         if not tile then return false end
+        -- Hard rate cap: even with reaction-time variance, multiple
+        -- mines deducing simultaneously can produce a burst of fires
+        -- within a few hundred ms. Block here until enough wall-clock
+        -- time has elapsed since the previous successful fire.
+        if stealthMinSecBetween > 0 then
+            local elapsed = tick() - _stealthLastFireAt
+            if elapsed < stealthMinSecBetween then
+                task.wait(stealthMinSecBetween - elapsed)
+            end
+        end
         task.wait(_reactionDelay())
         if stealthCursorOn and _stealthMoveCursor then
             local sp = _tileScreenXY(tile)
@@ -8849,6 +8894,11 @@ F.games.bms = (function()
             task.wait(0.25 + math.random() * 0.45)  -- 0.25-0.7s hover
             return true   -- caller: skip this fire
         end
+        -- We're about to return false, so the caller will fire. Stamp
+        -- now so the rate cap on the NEXT call sees the right value.
+        -- Slight approximation - caller may still no-op due to other
+        -- guards - but accurate enough for rate-limit purposes.
+        _stealthLastFireAt = tick()
         return false
     end
 
@@ -8884,7 +8934,9 @@ F.games.bms = (function()
                 -- last-flagged chaining.
                 local best, bestD2 = nil, math.huge
                 for t in pairs(mines) do
-                    if state[t] ~= "flagged" and inAimCone(t) then
+                    if state[t] ~= "flagged"
+                       and inAimCone(t)
+                       and isTileOnScreen(t) then
                         local dx = t.Position.X - origin.X
                         local dy = t.Position.Y - origin.Y
                         local dz = t.Position.Z - origin.Z
@@ -9850,7 +9902,9 @@ F.games.bms = (function()
                     -- flags and yanking wrong ones, whichever is nearest.
                     local best, bestD2 = nil, math.huge
                     for t in pairs(mines) do
-                        if state[t] ~= "flagged" and inAimCone(t) then
+                        if state[t] ~= "flagged"
+                           and inAimCone(t)
+                           and isTileOnScreen(t) then
                             local dx = t.Position.X - origin.X
                             local dz = t.Position.Z - origin.Z
                             local d2 = dx*dx + dz*dz
@@ -9858,7 +9912,7 @@ F.games.bms = (function()
                         end
                     end
                     for t in pairs(falseFlags) do
-                        if inAimCone(t) then
+                        if inAimCone(t) and isTileOnScreen(t) then
                             local dx = t.Position.X - origin.X
                             local dz = t.Position.Z - origin.Z
                             local d2 = dx*dx + dz*dz
@@ -10294,6 +10348,15 @@ F.games.bms = (function()
             end,
             setHesitate = function(n)
                 stealthHesitatePct = math.clamp(tonumber(n) or 0, 0, 100)
+            end,
+            -- On-screen filter: prune flag candidates to tiles whose
+            -- viewport coords are inside the visible screen rect.
+            -- Critical for manual-play screenshare safety so flags
+            -- don't pop on parts of the map you're not looking at.
+            setOnScreenOnly = function(v) stealthOnScreenOnly = v == true end,
+            -- Min seconds between fires (hard rate cap). 0 = off.
+            setMinSecBetween = function(n)
+                stealthMinSecBetween = math.clamp(tonumber(n) or 0, 0, 10)
             end,
             hasCursorAPI = function() return _stealthMoveCursor ~= nil end,
         },
