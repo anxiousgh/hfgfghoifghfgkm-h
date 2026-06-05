@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.32.1"
+local SCRIPT_VERSION = "v1.32.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12038,16 +12038,30 @@ F.games.prisonLife = (function()
     end
 
     -- ---- gun attribute modifier ----
-    -- SetAttribute on the currently equipped tool.
-    -- To answer the user's question: instance:SetAttribute(name, value)
-    -- and instance:GetAttribute(name). The Dex Explorer shows them
-    -- under the Attributes section of a part/tool.
+
+    -- Unequip the current tool, wait one frame, then re-equip it.
+    -- Needed so the game's LocalScript picks up attribute changes
+    -- (many games only read attributes on equip, not live).
+    local function _requeueTool()
+        local char = lplr.Character; if not char then return end
+        local hum  = char:FindFirstChildOfClass("Humanoid"); if not hum then return end
+        local tool = equippedTool(); if not tool then return end
+        local name = tool.Name
+        pcall(function() hum:UnequipTools() end)
+        task.wait(0.15)
+        -- Tool is now in the Backpack - find it and re-equip
+        local bp = lplr:FindFirstChild("Backpack")
+        local t  = bp and bp:FindFirstChild(name)
+        if t then pcall(function() hum:EquipTool(t) end) end
+    end
+
     local function modifyGun(attrs)
         local tool = equippedTool()
         if not tool then return false end
         for k, v in pairs(attrs) do
             pcall(function() tool:SetAttribute(k, v) end)
         end
+        _requeueTool()
         return true
     end
 
@@ -12056,18 +12070,17 @@ F.games.prisonLife = (function()
         local tool = equippedTool()
         if not tool then return end
         pcall(function()
-            -- math.huge for both so ReloadTime can't drain them
             tool:SetAttribute("CurrentAmmo",  math.huge)
             tool:SetAttribute("MaxAmmo",       math.huge)
             tool:SetAttribute("SpreadRadius",  0)
             tool:SetAttribute("FireRate",       0.01)
             tool:SetAttribute("ReloadTime",     0.01)
             local baseDmg = tool:GetAttribute("Damage") or 30
-            -- cap base at 9999 so we don't multiply already-huge values
             if baseDmg ~= math.huge then
                 tool:SetAttribute("Damage", math.min(baseDmg, 9999) * 20)
             end
         end)
+        _requeueTool()
     end
 
     return {
