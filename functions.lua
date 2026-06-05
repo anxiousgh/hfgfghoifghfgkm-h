@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.33.3"
+local SCRIPT_VERSION = "v1.33.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12100,6 +12100,42 @@ F.games.prisonLife = (function()
         return tool:GetAttribute("SpreadRadius") or 0
     end
 
+    -- ---- rapid fire ----
+    local function _requeueTool()
+        local char = lplr.Character; if not char then return end
+        local hum  = char:FindFirstChildOfClass("Humanoid"); if not hum then return end
+        local tool = equippedTool(); if not tool then return end
+        local name = tool.Name
+        pcall(function() hum:UnequipTools() end)
+        task.wait(0.15)
+        local bp = lplr:FindFirstChild("Backpack")
+        local t  = bp and bp:FindFirstChild(name)
+        if t then pcall(function() hum:EquipTool(t) end) end
+    end
+
+    local _origFireRate = nil
+    local rapidFireOn   = false
+
+    local function rapidFireStart()
+        local tool = equippedTool()
+        if not tool then return end
+        _origFireRate = tool:GetAttribute("FireRate")
+        pcall(function() tool:SetAttribute("FireRate", 0.01) end)
+        _requeueTool()
+        rapidFireOn = true
+    end
+
+    local function rapidFireStop()
+        rapidFireOn = false
+        local tool = equippedTool()
+        if not tool then return end
+        if _origFireRate then
+            pcall(function() tool:SetAttribute("FireRate", _origFireRate) end)
+            _requeueTool()
+            _origFireRate = nil
+        end
+    end
+
     -- ---- hit sound ----
     local plHitSoundOn  = false
     local plHitSoundId  = 135698842254153
@@ -12284,6 +12320,11 @@ F.games.prisonLife = (function()
             isActive    = function() return auraActive end,
             setRange    = function(n) auraRange    = math.max(1, tonumber(n) or 100) end,
             setInterval = function(n) auraInterval = math.clamp(tonumber(n) or 0.08, 0.01, 5) end,
+        },
+        rapidFire  = {
+            start    = rapidFireStart,
+            stop     = rapidFireStop,
+            isActive = function() return rapidFireOn end,
         },
         autoReload = {
             start    = autoReloadStart,

@@ -2781,6 +2781,13 @@ do
 
         PL:AddDivider()
         PL:AddLabel("Combat extras")
+        PL:AddToggle("PLRapidFire", { Text = "Rapid fire (FireRate = 0.01)",
+            Default = false,
+            Callback = function(v)
+                if v then F.games.prisonLife.rapidFire.start()
+                else F.games.prisonLife.rapidFire.stop() end
+            end,
+        })
         PL:AddToggle("PLAutoReload", { Text = "Auto reload (when ammo hits 0)",
             Default = false,
             Callback = function(v)
