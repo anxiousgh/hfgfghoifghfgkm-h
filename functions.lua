@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.35.5"
+local SCRIPT_VERSION = "v1.36.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12116,18 +12116,20 @@ F.games.prisonLife = (function()
     local noSpreadOn        = false
     local _noSpreadCharConn = nil
     local _noSpreadToolConn = nil
-    -- Guard: _requeueTool re-equips the gun which fires ChildAdded,
-    -- which would call _applyNoSpread again -> infinite loop.
-    -- While this flag is set, _applyNoSpread is a no-op.
-    local _noSpreadBusy     = false
+    -- Suppression window: _requeueTool re-equips the gun which fires
+    -- ChildAdded, which would call _applyNoSpread -> requeue again ->
+    -- infinite loop. A flag doesn't work because the ChildAdded
+    -- handler waits 0.1s before applying (so the flag clears first).
+    -- Instead, stamp a deadline; the handler ignores any equip that
+    -- happens before the deadline (i.e. our own requeue's re-equip).
+    local _noSpreadSuppressUntil = 0
 
     local function _applyNoSpread(tool)
         if not (noSpreadOn and tool) then return end
-        if _noSpreadBusy then return end
-        _noSpreadBusy = true
         pcall(function() tool:SetAttribute("SpreadRadius", 0) end)
+        -- our re-equip below will fire ChildAdded; ignore it for 1.5s
+        _noSpreadSuppressUntil = tick() + 1.5
         _requeueTool()
-        _noSpreadBusy = false
     end
 
     local function _hookNoSpreadChar(char)
@@ -12137,6 +12139,8 @@ F.games.prisonLife = (function()
         if t then _applyNoSpread(t) end
         _noSpreadToolConn = char.ChildAdded:Connect(function(child)
             if not noSpreadOn then return end
+            -- ignore the equip our own requeue just triggered
+            if tick() < _noSpreadSuppressUntil then return end
             if child:IsA("Tool")
                or (child:IsA("Model") and child:GetAttribute("SpreadRadius")) then
                 task.wait(0.1)
@@ -12183,9 +12187,10 @@ F.games.prisonLife = (function()
     -- (and the gun isn't already reloading), invokes FuncReload.
     -- InvokeServer() is standard client API - works fine from
     -- executor scripts, no SUNC wrapper needed.
-    local autoReloadOn      = false
-    local _reloadToolConn   = nil
-    local _reloadCharConn   = nil
+    local autoReloadOn        = false
+    local _reloadToolConn     = nil
+    local _reloadChildConn    = nil
+    local _reloadCharAddConn  = nil
 
     local function _pressR()
         VirtualInputManager:SendKeyEvent(true,  Enum.KeyCode.R, false, game)
@@ -12199,7 +12204,6 @@ F.games.prisonLife = (function()
         _reloadToolConn = tool:GetAttributeChangedSignal("CurrentAmmo"):Connect(function()
             if not autoReloadOn then return end
             local ammo = tool:GetAttribute("CurrentAmmo") or 1
-            -- keep Local_CurrentAmmo in sync with the server value
             pcall(function() tool:SetAttribute("Local_CurrentAmmo", ammo) end)
             local reloading = tool:GetAttribute("IsReloading")
             if ammo <= 0 and not reloading then
@@ -12208,28 +12212,41 @@ F.games.prisonLife = (function()
         end)
     end
 
+    -- (re)hook the tool-equip listener for a given character. Called
+    -- on start AND on every respawn so auto-reload keeps working
+    -- after death.
+    local function _hookReloadChar(char)
+        if _reloadChildConn then _reloadChildConn:Disconnect(); _reloadChildConn = nil end
+        if not char then return end
+        local t = char:FindFirstChildOfClass("Tool")
+        if t then _hookReload(t) end
+        _reloadChildConn = char.ChildAdded:Connect(function(child)
+            if not autoReloadOn then return end
+            if child:IsA("Tool")
+               or (child:IsA("Model") and child:GetAttribute("CurrentAmmo")) then
+                task.wait()
+                _hookReload(child)
+            end
+        end)
+    end
+
     local function autoReloadStart()
         if autoReloadOn then return end
         autoReloadOn = true
-        _hookReload(equippedTool())
-        if _reloadCharConn then _reloadCharConn:Disconnect() end
-        local char = lplr.Character
-        if char then
-            _reloadCharConn = char.ChildAdded:Connect(function(child)
-                if not autoReloadOn then return end
-                if child:IsA("Tool")
-                   or (child:IsA("Model") and child:GetAttribute("CurrentAmmo")) then
-                    task.wait()  -- let attributes load
-                    _hookReload(child)
-                end
-            end)
-        end
+        _hookReloadChar(lplr.Character)
+        if _reloadCharAddConn then _reloadCharAddConn:Disconnect() end
+        _reloadCharAddConn = lplr.CharacterAdded:Connect(function(char)
+            if not autoReloadOn then return end
+            task.wait(0.5)
+            _hookReloadChar(char)
+        end)
     end
 
     local function autoReloadStop()
         autoReloadOn = false
-        if _reloadToolConn then _reloadToolConn:Disconnect(); _reloadToolConn = nil end
-        if _reloadCharConn then _reloadCharConn:Disconnect(); _reloadCharConn = nil end
+        if _reloadToolConn    then _reloadToolConn:Disconnect();    _reloadToolConn    = nil end
+        if _reloadChildConn   then _reloadChildConn:Disconnect();   _reloadChildConn   = nil end
+        if _reloadCharAddConn then _reloadCharAddConn:Disconnect(); _reloadCharAddConn = nil end
     end
 
     local function shoot(targetHRP)
@@ -12262,20 +12279,11 @@ F.games.prisonLife = (function()
     end
 
     -- ---- team-based enemy filter ----
-    -- Criminal  -> enemies: Inmates, Guards
-    -- Inmate    -> enemies: Criminals, Guards
-    -- Prisoner  -> enemies: Criminals, Guards (same as Inmate)
-    -- Guard     -> enemies: Criminals
-    -- (Team names matched case-insensitively)
-    local ENEMY_TEAMS = {
-        ["criminal"]  = { "inmates", "prisoner", "guard", "guards", "police" },
-        ["inmate"]    = { "criminal", "criminals", "guard", "guards", "police" },
-        ["prisoner"]  = { "criminal", "criminals", "guard", "guards", "police" },
-        ["guard"]     = { "criminal", "criminals" },
-        ["guards"]    = { "criminal", "criminals" },
-        ["police"]    = { "criminal", "criminals" },
-    }
-
+    -- Criminal -> Inmates, Guards
+    -- Inmate   -> Criminals, Guards
+    -- Guard    -> Criminals (always) + hostile Inmates (conditional)
+    -- Same-team is never targeted. Team names normalized to a
+    -- category so singular/plural ("Criminal"/"Criminals") match.
     -- Returns true if a Prisoner/Inmate player has any of the
     -- attributes that make them a valid guard target.
     local function _isHostileInmate(player)
@@ -12289,22 +12297,39 @@ F.games.prisonLife = (function()
     local function _isEnemy(player)
         local myT    = (myTeamName() or ""):lower()
         local theirT = (player.Team and player.Team.Name or ""):lower()
-        local enemies = ENEMY_TEAMS[myT]
-        if not enemies then return true end  -- unknown team: shoot everyone
 
-        -- Standard team check
-        for _, e in ipairs(enemies) do
-            if theirT == e then return true end
+        -- Never target someone on our OWN team. This is the primary
+        -- guard against criminal-vs-criminal (the Hostile attribute
+        -- is true for ALL criminals, so without this check a criminal
+        -- with no ENEMY_TEAMS entry would shoot teammates).
+        if myT ~= "" and myT == theirT then return false end
+
+        -- Normalize: treat singular/plural team names as the same
+        -- category so a missing table key doesn't fall through to
+        -- "shoot everyone".
+        local function cat(name)
+            if name:find("criminal") then return "criminal" end
+            if name:find("inmate") or name:find("prisoner") then return "inmate" end
+            if name:find("guard") or name:find("police") then return "guard" end
+            return name
+        end
+        local myCat    = cat(myT)
+        local theirCat = cat(theirT)
+
+        if myCat == theirCat then return false end  -- same category
+
+        if myCat == "criminal" then
+            return theirCat == "inmate" or theirCat == "guard"
+        elseif myCat == "inmate" then
+            return theirCat == "criminal" or theirCat == "guard"
+        elseif myCat == "guard" then
+            -- criminals always; hostile inmates conditionally
+            if theirCat == "criminal" then return true end
+            if theirCat == "inmate" then return _isHostileInmate(player) end
+            return false
         end
 
-        -- Guards can also shoot Prisoners/Inmates who are flagged
-        -- as hostile, trespassing, or carrying a hostile tool.
-        if myT == "guard" or myT == "guards" or myT == "police" then
-            if theirT == "prisoner" or theirT == "inmate" or theirT == "inmates" then
-                return _isHostileInmate(player)
-            end
-        end
-
+        -- unknown team category: don't shoot (safer than shoot-all)
         return false
     end
 
