@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.27.2"
+local SCRIPT_VERSION = "v1.28.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8831,6 +8831,17 @@ F.games.bms = (function()
     -- a single dead-centre landing.
     local stealthOffsetMin     = 5
     local stealthOffsetMax     = 15
+    -- Path curvature (0..1). Scales how far the Bezier control
+    -- points sit from the straight line - 0 = pure straight, 1 =
+    -- exaggerated arc. Magnitude is random per sweep, multiplied
+    -- by this; the SIGN is random too so paths alternate curving
+    -- left and right naturally.
+    local stealthCurveAmount   = 0.35
+    -- Per-sweep speed variance (0..1). Each sweep rolls a speed
+    -- multiplier in [1 - v, 1 + v] so different sweeps to the same
+    -- tile take different amounts of time. Defeats the 'every move
+    -- takes the same exact time' tell.
+    local stealthSpeedVariance = 0.45
     -- Right-mouse-button held detection. Roblox uses RMB-hold for
     -- camera pan in third-person; if we drive mousemoveabs while
     -- the player is panning their camera, our cursor calls fight
@@ -8893,43 +8904,100 @@ F.games.bms = (function()
     -- only at boundaries (target acquire, RMB release) so user
     -- mouse movements during RMB-pan are picked up.
     local _writeX, _writeY = nil, nil
-    -- Per-target landing offset (px). Re-rolled each time
-    -- _setCursorTarget is called so the cursor lands a few pixels
-    -- off the tile centre - some over-shoots, some under-shoots -
-    -- instead of pixel-perfect dead centre every time. Stays
-    -- constant for the duration of one target so the cursor
-    -- doesn't twitch around AS it approaches.
+    -- Per-target landing offset (px).
     local _targetOffX, _targetOffY = 0, 0
+    -- Per-sweep state. On each new target we roll a Bezier curve +
+    -- random speed multiplier; the tracker step computes the cursor
+    -- pos along that curve over [start, start+duration]. Once the
+    -- sweep elapses, _sweepActive flips false and the tracker
+    -- switches to lock-on mode (gentle constant-speed follow of the
+    -- tile's current screen pos) for the rest of the target's life.
+    local _sweepActive   = false
+    local _sweepStartX, _sweepStartY = 0, 0
+    local _sweepC1X, _sweepC1Y       = 0, 0
+    local _sweepC2X, _sweepC2Y       = 0, 0
+    local _sweepStartTime            = 0
+    local _sweepDuration             = 0
+
+    local function _beginSweep()
+        _sweepActive = false
+        if not _currentTarget then return end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local sp, on = cam:WorldToViewportPoint(_currentTarget.Position)
+        if not on then return end
+
+        -- Source position: prefer our tracked _writeX/_writeY if
+        -- we have one, else resync from the OS cursor.
+        local sx, sy
+        if _writeX then
+            sx, sy = _writeX, _writeY
+        else
+            local UIS = game:GetService("UserInputService")
+            local m   = UIS:GetMouseLocation()
+            sx, sy   = m.X, m.Y
+            _writeX, _writeY = sx, sy
+        end
+
+        local ex = sp.X + _targetOffX
+        local ey = sp.Y + _targetOffY
+        local dx, dy = ex - sx, ey - sy
+        local dist   = math.sqrt(dx * dx + dy * dy)
+        if dist < 4 then return end   -- already close; let lock-on handle it
+
+        -- Per-sweep speed multiplier in [1 - v, 1 + v]. Inverted
+        -- into the duration so higher multiplier = faster sweep.
+        local v = math.clamp(stealthSpeedVariance, 0, 1)
+        local mult = 1 + (math.random() * 2 - 1) * v
+        mult = math.max(0.25, mult)
+        local rawDur = dist / math.max(50, stealthCursorSpeed)
+        _sweepDuration  = math.clamp(rawDur / mult, 0.10, 2.0)
+        _sweepStartTime = tick()
+        _sweepStartX, _sweepStartY = sx, sy
+
+        -- Bezier control points 1/3 and 2/3 along the line, each
+        -- pushed perpendicular by a random distance scaled by the
+        -- user's curve amount. Independent magnitudes give natural
+        -- S-curves rather than always-symmetric bows.
+        local invDist = 1 / dist
+        local perpX, perpY = -dy * invDist, dx * invDist
+        local curve = math.clamp(stealthCurveAmount, 0, 2)
+        local m1 = (math.random() - 0.5) * dist * 0.4 * curve
+        local m2 = (math.random() - 0.5) * dist * 0.4 * curve
+        _sweepC1X = sx + dx * 0.33 + perpX * m1
+        _sweepC1Y = sy + dy * 0.33 + perpY * m1
+        _sweepC2X = sx + dx * 0.67 + perpX * m2
+        _sweepC2Y = sy + dy * 0.67 + perpY * m2
+        _sweepActive = true
+    end
 
     local function _setCursorTarget(tile)
         _currentTarget = tile
-        -- resync from real cursor so the approach starts from
-        -- wherever the cursor actually is (might have been moved
-        -- by the user during RMB pan, etc.)
+        -- resync source pos so the sweep starts from wherever the
+        -- cursor actually is
         _writeX, _writeY = nil, nil
-        -- roll a fresh radial offset. Uniform random angle 0..2pi
-        -- gives a uniform direction; uniform random distance in
-        -- [min, max] gives a controllable amount of overshoot.
-        -- This is the INITIAL landing offset - it'll be shrunk
-        -- (corrected) right before the flag fires.
+        -- roll a fresh radial landing offset
         local lo = math.max(0, stealthOffsetMin)
         local hi = math.max(lo, stealthOffsetMax)
         local d  = lo + math.random() * (hi - lo)
         local a  = math.random() * math.pi * 2
         _targetOffX = math.cos(a) * d
         _targetOffY = math.sin(a) * d
+        -- bake the Bezier sweep
+        _beginSweep()
     end
+
     local function _clearCursorTarget()
         _currentTarget = nil
         _writeX, _writeY = nil, nil
+        _sweepActive = false
     end
 
     local function _trackerStep(dt)
         if not _stealthMoveCursor then return end
         if _rmbHeld then
-            -- forget tracked pos so we resync from the real cursor
-            -- after the user releases RMB
             _writeX, _writeY = nil, nil
+            _sweepActive = false
             return
         end
         local target = _currentTarget
@@ -8939,24 +9007,51 @@ F.games.bms = (function()
         local sp, on = cam:WorldToViewportPoint(target.Position)
         if not on then return end
 
+        local aimX = sp.X + _targetOffX
+        local aimY = sp.Y + _targetOffY
+
+        -- Phase 1: Bezier sweep. Active until elapsed >= duration.
+        -- Position along the Bezier uses smoothstep on raw t for
+        -- ease-in-out (slow start, accelerate through middle, slow
+        -- end) instead of constant velocity. End-point is read each
+        -- frame from the tile's CURRENT screen pos so if the player
+        -- is walking the curve smoothly re-aims toward where the
+        -- tile ended up.
+        if _sweepActive then
+            local elapsed = tick() - _sweepStartTime
+            local rawT    = elapsed / _sweepDuration
+            if rawT >= 1 then
+                _sweepActive = false
+                -- fall through into lock-on phase below
+            else
+                local te  = rawT * rawT * (3 - 2 * rawT)  -- smoothstep
+                local omt = 1 - te
+                local b0  = omt * omt * omt
+                local b1  = 3 * omt * omt * te
+                local b2  = 3 * omt * te * te
+                local b3  = te * te * te
+                local px = b0 * _sweepStartX + b1 * _sweepC1X
+                         + b2 * _sweepC2X     + b3 * aimX
+                local py = b0 * _sweepStartY + b1 * _sweepC1Y
+                         + b2 * _sweepC2Y     + b3 * aimY
+                pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
+                _writeX, _writeY = px, py
+                return
+            end
+        end
+
+        -- Phase 2: lock-on / passive follow. Used after the sweep
+        -- completes and for correction sweeps (small offset shrink
+        -- before fire). Constant speed with ease-out within 30px
+        -- so the cursor doesn't overshoot the lock point.
         if not _writeX then
             local UIS = game:GetService("UserInputService")
             local m   = UIS:GetMouseLocation()
             _writeX, _writeY = m.X, m.Y
         end
-
-        -- Aim at the off-centre landing point, not the tile centre,
-        -- so flags don't all land pixel-perfect on the same spot.
-        local aimX = sp.X + _targetOffX
-        local aimY = sp.Y + _targetOffY
         local dx, dy = aimX - _writeX, aimY - _writeY
         local dist   = math.sqrt(dx * dx + dy * dy)
-        if dist < 1 then return end   -- locked on, nothing to do
-
-        -- ease-out approach: constant velocity at full speed when
-        -- far, slowing within 30px so the cursor doesn't overshoot
-        -- the lock-on. No jitter - the per-frame sub-pixel jitter
-        -- was producing visible oscillation around the target.
+        if dist < 1 then return end
         local easeFactor = math.min(1, dist / 30)
         local frameMove  = stealthCursorSpeed * easeFactor * dt
         local alpha      = math.min(1, frameMove / dist)
@@ -10661,6 +10756,18 @@ F.games.bms = (function()
             -- General cursor speed in px/sec for flag sweeps.
             setCursorSpeed = function(n)
                 stealthCursorSpeed = math.clamp(tonumber(n) or 600, 50, 5000)
+            end,
+            -- Bezier curve magnitude (0..200 %). Scales how far
+            -- the path bows from a straight line. 0 = straight,
+            -- ~30-50 = subtle arc, 100+ = exaggerated.
+            setCurveAmount = function(n)
+                stealthCurveAmount = math.clamp((tonumber(n) or 35) / 100, 0, 2)
+            end,
+            -- Per-sweep speed variance (0..100 %). Each sweep
+            -- rolls a speed multiplier in [1-v, 1+v] so the cursor
+            -- doesn't take the same exact time on every sweep.
+            setSpeedVariance = function(n)
+                stealthSpeedVariance = math.clamp((tonumber(n) or 45) / 100, 0, 1)
             end,
             -- Radial over/undershoot range (px). The initial landing
             -- offset is uniform random in [min, max] px from tile

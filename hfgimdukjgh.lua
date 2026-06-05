@@ -2451,6 +2451,16 @@ do
             Default = 600, Min = 100, Max = 3000, Rounding = 0, Suffix = " px/s",
             Callback = function(v) F.games.bms.stealth.setCursorSpeed(v) end,
         })
+        BMSStealth:AddSlider("BMSCurveAmount", {
+            Text    = "Path curve amount",
+            Default = 35, Min = 0, Max = 200, Rounding = 0, Suffix = " %",
+            Callback = function(v) F.games.bms.stealth.setCurveAmount(v) end,
+        })
+        BMSStealth:AddSlider("BMSSpeedVariance", {
+            Text    = "Speed variance",
+            Default = 45, Min = 0, Max = 100, Rounding = 0, Suffix = " %",
+            Callback = function(v) F.games.bms.stealth.setSpeedVariance(v) end,
+        })
         BMSStealth:AddSlider("BMSOffsetMin", {
             Text    = "Over/undershoot min",
             Default = 5, Min = 0, Max = 50, Rounding = 0, Suffix = " px",
