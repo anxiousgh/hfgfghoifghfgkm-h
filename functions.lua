@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.36.3"
+local SCRIPT_VERSION = "v1.36.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -5552,6 +5552,13 @@ F.games.hoodCustoms.forceHit = (function()
     -- alive at once; over the cap, a new shot just skips its visual.
     local _activeTracers  = 0
     local MAX_TRACERS     = 10
+    -- Minimum seconds between tracer spawns. Even under the
+    -- concurrent cap, a high fire rate would still pay the
+    -- synchronous part/beam creation burst every shot. This
+    -- throttle skips the visual for shots that land within
+    -- MIN_TRACER_GAP of the previous one (the bullet still fires).
+    local _lastTracerAt   = 0
+    local MIN_TRACER_GAP  = 0.05
 
     local lastFire = 0
 
@@ -5609,8 +5616,12 @@ F.games.hoodCustoms.forceHit = (function()
         if not tracerEnabled then return end
         local dist = (hitPos - origin).Magnitude
         if dist < 0.5 then return end
-        -- bail if too many tracers are already alive (anti-freeze)
+        -- anti-freeze gates: skip the visual (not the shot) when
+        -- firing too fast or when too many tracers are already alive
+        local nowT = tick()
+        if nowT - _lastTracerAt < MIN_TRACER_GAP then return end
         if _activeTracers >= MAX_TRACERS then return end
+        _lastTracerAt  = nowT
         _activeTracers = _activeTracers + 1
         -- guaranteed release: even if the animation thread early-returns
         -- (parts gc'd, etc), decrement after a safe upper bound so the
@@ -5736,7 +5747,7 @@ F.games.hoodCustoms.forceHit = (function()
         -- TRAIL PARTICLES: sparkles along the bullet path that linger
         -- ~500ms. Anchored midpoint parts each emit once.
         if trailEnabled then
-            local TRAIL_PARTS = math.clamp(math.floor(dist / 6), 3, 12)
+            local TRAIL_PARTS = math.clamp(math.floor(dist / 10), 2, 6)
             task.spawn(function()
                 for i = 1, TRAIL_PARTS do
                     local pos = origin + dir * (dist * (i / TRAIL_PARTS))
