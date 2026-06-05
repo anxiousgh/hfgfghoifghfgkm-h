@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.38.0"
+local SCRIPT_VERSION = "v1.39.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12244,7 +12244,103 @@ F.games.prisonLife = (function()
         if _autoFireToolConn then _autoFireToolConn:Disconnect(); _autoFireToolConn = nil end
     end
 
+    -- ---- fast fire (survives death) ----
+    -- Sets FireRate low on the equipped gun so it shoots faster.
+    -- Same equip-on-spawn + suppression-window pattern as the others.
+    -- Rate is configurable; setRate re-applies live if the toggle
+    -- is on.
+    local fastFireOn        = false
+    local fastFireRate      = 0.05
+    local _fastFireCharConn = nil
+    local _fastFireToolConn = nil
+    local _fastFireSuppress = 0
+
+    local function _applyFastFire(tool)
+        if not (fastFireOn and tool) then return end
+        pcall(function() tool:SetAttribute("FireRate", fastFireRate) end)
+        _fastFireSuppress = tick() + 1.5
+        _requeueTool()
+    end
+
+    local function _hookFastFireChar(char)
+        if _fastFireToolConn then _fastFireToolConn:Disconnect(); _fastFireToolConn = nil end
+        if not char then return end
+        local t = char:FindFirstChildOfClass("Tool")
+        if t then _applyFastFire(t) end
+        _fastFireToolConn = char.ChildAdded:Connect(function(child)
+            if not fastFireOn then return end
+            if tick() < _fastFireSuppress then return end
+            if child:IsA("Tool")
+               or (child:IsA("Model") and child:GetAttribute("FireRate") ~= nil) then
+                task.wait(0.1)
+                _applyFastFire(child)
+            end
+        end)
+    end
+
+    local function fastFireStart()
+        fastFireOn = true
+        _hookFastFireChar(lplr.Character)
+        if _fastFireCharConn then _fastFireCharConn:Disconnect() end
+        _fastFireCharConn = lplr.CharacterAdded:Connect(function(char)
+            if not fastFireOn then return end
+            task.wait(0.5)
+            _hookFastFireChar(char)
+        end)
+    end
+
+    local function fastFireStop()
+        fastFireOn = false
+        if _fastFireCharConn then _fastFireCharConn:Disconnect(); _fastFireCharConn = nil end
+        if _fastFireToolConn then _fastFireToolConn:Disconnect(); _fastFireToolConn = nil end
+    end
+
+    -- ---- gun grabber ----
+    -- Gun pickups are Models named "TouchGiver" directly under
+    -- workspace, each with a ToolName attribute (e.g. "M700") and a
+    -- child BasePart also named "TouchGiver" that holds the
+    -- TouchInterest. Firing that touch interest gives you the gun.
+    local function _fireGiver(part)
+        local hrp = getHrp()
+        if not (hrp and part) then return end
+        local ft = firetouchinterest or fire_touch_interest
+        if not ft then return end
+        pcall(function()
+            ft(hrp, part, 0)
+            task.wait()
+            ft(hrp, part, 1)
+        end)
+    end
+
+    -- list available gun names from the touch givers in workspace
+    local function listGunGivers()
+        local out = {}
+        for _, m in ipairs(workspace:GetChildren()) do
+            if m.Name == "TouchGiver" then
+                local nm = m:GetAttribute("ToolName")
+                if nm then table.insert(out, nm) end
+            end
+        end
+        return out
+    end
+
+    local function grabGun(toolName)
+        for _, m in ipairs(workspace:GetChildren()) do
+            if m.Name == "TouchGiver"
+               and (not toolName or m:GetAttribute("ToolName") == toolName) then
+                local part = m:FindFirstChild("TouchGiver")
+                if part and part:IsA("BasePart") then _fireGiver(part) end
+                if toolName then return end  -- grabbed the requested one
+            end
+        end
+    end
+
+    local function grabAllGuns()
+        grabGun(nil)  -- nil = every giver
+    end
+
     -- ---- hit sound ----
+    local plHitSoundOn  = false
     local plHitSoundOn  = false
     local plHitSoundId  = 135698842254153
     local plHitSoundVol = 1.0
@@ -12596,6 +12692,20 @@ F.games.prisonLife = (function()
             start    = autoFireStart,
             stop     = autoFireStop,
             isActive = function() return autoFireOn end,
+        },
+        fastFire   = {
+            start    = fastFireStart,
+            stop     = fastFireStop,
+            isActive = function() return fastFireOn end,
+            setRate  = function(n)
+                fastFireRate = math.clamp(tonumber(n) or 0.05, 0.01, 1)
+                if fastFireOn then _applyFastFire(equippedTool()) end
+            end,
+        },
+        guns = {
+            grabAll = grabAllGuns,
+            grab    = grabGun,
+            list    = listGunGivers,
         },
         autoReload = {
             start    = autoReloadStart,

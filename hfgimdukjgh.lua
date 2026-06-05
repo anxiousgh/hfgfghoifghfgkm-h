@@ -2785,11 +2785,30 @@ do
                 else F.games.prisonLife.autoFire.stop() end
             end,
         })
+        PL:AddToggle("PLFastFire", { Text = "Fast fire (low FireRate)",
+            Default = false,
+            Callback = function(v)
+                if v then F.games.prisonLife.fastFire.start()
+                else F.games.prisonLife.fastFire.stop() end
+            end,
+        })
+        PL:AddSlider("PLFastFireRate", {
+            Text    = "Fast fire rate",
+            Default = 0.05, Min = 0.01, Max = 0.5, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.prisonLife.fastFire.setRate(v) end,
+        })
         PL:AddToggle("PLAutoReload", { Text = "Auto reload (when ammo hits 0)",
             Default = false,
             Callback = function(v)
                 if v then F.games.prisonLife.autoReload.start()
                 else F.games.prisonLife.autoReload.stop() end
+            end,
+        })
+        PL:AddButton({
+            Text = "Grab all guns",
+            Func = function()
+                F.games.prisonLife.guns.grabAll()
+                Library:Notify("Grabbed all gun pickups.", 2)
             end,
         })
         PL:AddToggle("PLHitSound", { Text = "Hit sound",
