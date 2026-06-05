@@ -2517,6 +2517,41 @@ do
         })
 
         BMSAuto:AddDivider()
+        BMSAuto:AddLabel("Auto-rejoin")
+        BMSAuto:AddToggle("BMSAutoRejoin", { Text = "Auto-rejoin on kick / votekick",
+            Default = false,
+            Callback = function(v)
+                if v then
+                    -- queue this exact bootstrap to run after the teleport.
+                    -- mirrors what the user pastes into their executor, so
+                    -- the new server boots straight back into decay.lua.
+                    F.autoRejoin.setLoaderSrc(
+                        'loadstring(game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/hfgimdukjgh.lua"))()'
+                    )
+                    -- right before teleport: dump the live config + mark it
+                    -- as autoload so the next session restores every toggle
+                    -- (BMSAutoPlay, BMSAutoRejoin itself, playstyle, etc.).
+                    F.autoRejoin.setOnKick(function()
+                        local name = (Options.SaveManager_ConfigList
+                                      and Options.SaveManager_ConfigList.Value) or ""
+                        if name == "" or name == nil then name = "_autorejoin" end
+                        pcall(function() SaveManager:Save(name) end)
+                        pcall(function()
+                            writefile(SaveManager.Folder .. "/settings/autoload.txt", name)
+                        end)
+                    end)
+                    F.autoRejoin.setEnabled(true)
+                else
+                    F.autoRejoin.setEnabled(false)
+                end
+            end,
+        })
+        BMSAuto:AddButton({
+            Text = "Test rejoin now",
+            Func = function() F.autoRejoin.rejoinNow() end,
+        })
+
+        BMSAuto:AddDivider()
         BMSAuto:AddLabel("Challenges")
         BMSAuto:AddToggle("BMSBullets", { Text = "Auto-destroy 'Bullet-Part' (bullets challenge)",
             Default = false,

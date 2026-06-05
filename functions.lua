@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.22.0"
+local SCRIPT_VERSION = "v1.22.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -4817,6 +4817,114 @@ F.servers = {
         return F.servers.join(pick.jobId), pick
     end,
 }
+
+-- ============================================================
+--  AUTO-REJOIN ON KICK / VOTEKICK
+--  Detects the LocalPlayer being kicked (vote, manual, idle, etc.)
+--  and replays the loader bootstrap in a fresh server. Generic,
+--  not BMS-specific, but the toggle lives in the BMS groupbox
+--  since that's where the request came from.
+--
+--  Caller (loader) wires this up via:
+--    F.autoRejoin.setLoaderSrc("loadstring(game:HttpGet(...))()")
+--    F.autoRejoin.setOnKick(function() ... save config ... end)
+--    F.autoRejoin.setEnabled(true)
+--
+--  Detection sources (any one trips the rejoin):
+--    * Players.PlayerRemoving for LocalPlayer  -> player:Kick()
+--    * GuiService.ErrorMessageChanged          -> disconnect prompt
+--    * CoreGui RobloxPromptGui ErrorPrompt     -> votekick popup
+-- ============================================================
+F.autoRejoin = (function()
+    local Players     = game:GetService("Players")
+    local GuiService  = game:GetService("GuiService")
+    local LocalPlayer = Players.LocalPlayer
+
+    -- public main-branch loader URL as the fallback bootstrap so
+    -- the rejoin still works if the caller never set a custom one
+    local DEFAULT_LOADER =
+        [[loadstring(game:HttpGet("https://raw.githubusercontent.com/anxiousgh/hfgfghoifghfgkm-h/main/hfgimdukjgh.lua"))()]]
+
+    local enabled    = false
+    local fired      = false   -- one-shot; PlayerRemoving + ErrorMsg can both fire
+    local onKick     = nil
+    local loaderSrc  = nil
+    local _conns     = {}
+
+    local function _disconnect()
+        for _, c in ipairs(_conns) do pcall(function() c:Disconnect() end) end
+        _conns = {}
+    end
+
+    local function rejoinNow()
+        if fired then return end
+        fired = true
+        -- give caller a chance to persist live state (SaveManager:Save, etc.)
+        if onKick then pcall(onKick) end
+        local src = loaderSrc or DEFAULT_LOADER
+        if queue_on_teleport then
+            pcall(queue_on_teleport, src)
+        end
+        -- Teleport to PlaceId without a JobId so we get matchmade into
+        -- a brand-new server; we explicitly do NOT want to be put back
+        -- into the server that just kicked us.
+        task.spawn(function()
+            pcall(function()
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            end)
+        end)
+    end
+
+    local function _connect()
+        _disconnect()
+
+        -- Primary signal: LocalPlayer being removed. Fires for
+        -- player:Kick(), AFK timeouts, manual leave, and most
+        -- forms of votekick implementations.
+        table.insert(_conns, Players.PlayerRemoving:Connect(function(p)
+            if enabled and p == LocalPlayer then rejoinNow() end
+        end))
+
+        -- Secondary: disconnect / error prompt. Roblox surfaces a
+        -- "You were kicked" or generic disconnect dialog before the
+        -- player object is removed; catch it here so we don't have
+        -- to wait for the removal event.
+        local okMsg, msgConn = pcall(function()
+            return GuiService.ErrorMessageChanged:Connect(function()
+                if enabled then rejoinNow() end
+            end)
+        end)
+        if okMsg and msgConn then table.insert(_conns, msgConn) end
+
+        -- Tertiary: CoreGui ErrorPrompt. Some custom votekick scripts
+        -- pop the prompt without going through GuiService, so watch
+        -- the prompt UI directly.
+        local okGui, coreGui = pcall(function()
+            return (gethui and gethui()) or game:GetService("CoreGui")
+        end)
+        if okGui and coreGui then
+            table.insert(_conns, coreGui.DescendantAdded:Connect(function(d)
+                if not enabled then return end
+                local n = d.Name
+                if n == "ErrorPrompt" or n == "ErrorTitle"
+                   or (typeof(n) == "string" and n:lower():find("kick")) then
+                    rejoinNow()
+                end
+            end))
+        end
+    end
+
+    return {
+        setEnabled = function(v)
+            enabled = v and true or false
+            if enabled then fired = false; _connect() else _disconnect() end
+        end,
+        isEnabled    = function() return enabled end,
+        setOnKick    = function(fn)  onKick    = (type(fn) == "function") and fn or nil end,
+        setLoaderSrc = function(src) loaderSrc = (type(src) == "string")  and src or nil end,
+        rejoinNow    = rejoinNow,
+    }
+end)()
 
 -- ============================================================
 --  GAMES: HOOD CUSTOMS - AUTO STOMP
