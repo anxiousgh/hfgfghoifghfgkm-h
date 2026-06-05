@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.29.1"
+local SCRIPT_VERSION = "v1.29.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8798,82 +8798,78 @@ F.games.bms = (function()
             or rawget(_G, "mousemoveabs") or rawget(_G, "mouse_moveabs")
     end)()
 
-    local stealthCursorOn      = false
-    local stealthReactMs       = 350  -- mean reaction time
-    local stealthReactJitter   = 250  -- +/- around mean
-    local stealthHesitatePct   = 0    -- 0-100% chance to hover and skip
-    -- On-screen-only filter: when on, flag candidates are filtered
-    -- to tiles whose viewport coords are inside the actual screen
-    -- rectangle. Stricter than the aim cone (which is a 3D angle
-    -- check) - this rejects tiles that are behind the camera, off
-    -- the edges of the screen, or otherwise not in the visible
-    -- viewport. Critical for manual-play screenshare safety: stops
-    -- flags from popping on the far side of the map while the
-    -- player's camera is pointed elsewhere.
-    local stealthOnScreenOnly  = false
-    -- Max flag rate cap: minimum seconds between fires. Hard limit
-    -- on top of reaction-time variance so even if the deducer finds
-    -- five mines at once they're flagged one-by-one with a human-
-    -- believable gap instead of a 3-second machinegun burst.
-    local stealthMinSecBetween = 0
-    local _stealthLastFireAt   = 0
-    -- General cursor speed (px/sec). The tracker computes per-
-    -- frame movement as min(1, dist/30) * speed * dt so the
-    -- cursor moves at constant velocity until within 30px of
-    -- the target, then eases out for a clean lock-on.
-    local stealthCursorSpeed   = 600    -- px/sec
-    -- Off-centre landing offset, in px. The cursor first lands at
-    -- a RADIAL offset uniformly random in [min, max] px from tile
-    -- centre with a uniform random angle, then corrects to a
-    -- smaller offset right before firing. So the screenshare
-    -- viewer sees: cursor approaches tile, lands a few px off,
-    -- micro-correction toward centre, click. Way more human than
-    -- a single dead-centre landing.
-    local stealthOffsetMin     = 5
-    local stealthOffsetMax     = 15
-    -- Path curvature (0..1). Scales how far the Bezier control
-    -- points sit from the straight line - 0 = pure straight, 1 =
-    -- exaggerated arc. Magnitude is random per sweep, multiplied
-    -- by this; the SIGN is random too so paths alternate curving
-    -- left and right naturally.
-    local stealthCurveAmount   = 0.35
-    -- Per-sweep speed variance (0..1). Each sweep rolls a speed
-    -- multiplier in [1 - v, 1 + v] so different sweeps to the same
-    -- tile take different amounts of time. Defeats the 'every move
-    -- takes the same exact time' tell.
-    local stealthSpeedVariance = 0.45
-    -- Flag magnet: only treat a tile as a flag candidate while the
-    -- USER'S cursor is within stealthMagnetRange px of it. Cursor
-    -- still does its smooth sweep + offset + correction, just over
-    -- a much shorter distance. From a screenshare angle this looks
-    -- like the user nearly clicked the tile and the bot finished
-    -- the move.
-    local stealthMagnetOn      = false
-    local stealthMagnetRange   = 80  -- px from cursor
-    -- Triggerbot: fire PlaceFlag the instant the user's cursor is
-    -- within stealthTriggerRange px of a deduced unflagged mine.
-    -- No cursor sweep, no reaction delay - the user is moving the
-    -- cursor themselves, bot just pulls the trigger.
-    local stealthTriggerbotOn  = false
-    local stealthTriggerRange  = 12  -- px from cursor
-    local _triggerThread       = nil
-    -- Right-mouse-button held detection. Roblox uses RMB-hold for
-    -- camera pan in third-person; if we drive mousemoveabs while
-    -- the player is panning their camera, our cursor calls fight
-    -- the pan and yank the view around. Listen on the input
-    -- service once; the tracker step checks this each frame and
-    -- bails (no cursor write) while the user is panning.
-    local _rmbHeld = false
+    -- All stealth state consolidated into one table to stay under
+    -- Luau's 200 locals-per-function limit. The BMS IIFE was hitting
+    -- it after the magnet + triggerbot were added; bundling these
+    -- 30+ values into one local got us back under.
+    --
+    -- Field roles:
+    --   cursorOn          - master toggle for cursor sim
+    --   reactMs / Jitter  - reaction-time pause before each fire (ms)
+    --   hesitatePct       - 0-100% chance to hover-and-skip a fire
+    --   onScreenOnly      - filter flag candidates to viewport rect
+    --   minSecBetween     - hard rate cap (seconds between fires)
+    --   lastFireAt        - tick() of last fire, used by rate cap
+    --   cursorSpeed       - px/sec, base sweep speed
+    --   offsetMin/Max     - radial over/undershoot range (px)
+    --   curveAmount       - 0..1, Bezier perpendicular magnitude
+    --   speedVariance     - 0..1, per-sweep speed multiplier range
+    --   magnetOn / Range  - only fire on tiles near cursor (px)
+    --   triggerbotOn/Range- auto-fire when cursor is over a mine
+    --   triggerThread     - bg thread driving the triggerbot
+    --   rmbHeld           - RMB-pan gate; set by UIS listeners
+    --   target            - current cursor tracker target tile
+    --   trackerThread     - bg thread driving the cursor sweep
+    --   lastTrackerTick   - dt source for the tracker
+    --   writeX/Y          - tracked cursor pos (not polled)
+    --   offX/Y            - per-target landing offset, rolled fresh
+    --   sweep*            - Bezier sweep bake (start/control/dur/t)
+    local _st = {
+        cursorOn        = false,
+        reactMs         = 350,
+        reactJitter     = 250,
+        hesitatePct     = 0,
+        onScreenOnly    = false,
+        minSecBetween   = 0,
+        lastFireAt      = 0,
+        cursorSpeed     = 600,
+        offsetMin       = 5,
+        offsetMax       = 15,
+        curveAmount     = 0.35,
+        speedVariance   = 0.45,
+        magnetOn        = false,
+        magnetRange     = 80,
+        triggerbotOn    = false,
+        triggerRange    = 12,
+        triggerThread   = nil,
+        rmbHeld         = false,
+        target          = nil,
+        trackerThread   = nil,
+        lastTrackerTick = 0,
+        writeX          = nil,
+        writeY          = nil,
+        offX            = 0,
+        offY            = 0,
+        sweepActive     = false,
+        sweepStartX     = 0,
+        sweepStartY     = 0,
+        sweepC1X        = 0,
+        sweepC1Y        = 0,
+        sweepC2X        = 0,
+        sweepC2Y        = 0,
+        sweepStartTime  = 0,
+        sweepDuration   = 0,
+    }
     do
         local UIS = game:GetService("UserInputService")
         UIS.InputBegan:Connect(function(input, gp)
             if input.UserInputType == Enum.UserInputType.MouseButton2 then
-                _rmbHeld = true
+                _st.rmbHeld = true
             end
         end)
         UIS.InputEnded:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton2 then
-                _rmbHeld = false
+                _st.rmbHeld = false
             end
         end)
     end
@@ -8898,7 +8894,7 @@ F.games.bms = (function()
     -- NEW position, repeat.
     --
     -- New model: a single background thread owns the cursor. It
-    -- consults _currentTarget every frame:
+    -- consults _st.target every frame:
     --   * no target          -> do nothing, cursor sits wherever
     --   * RMB held           -> do nothing (don't fight camera pan)
     --   * target off-screen  -> do nothing, cursor sits wherever
@@ -8914,72 +8910,43 @@ F.games.bms = (function()
     -- target stays set so the cursor keeps tracking that tile until
     -- the bot picks a NEW one - exactly what 'stay on the tile until
     -- it moves away' asks for.
-    local _currentTarget   = nil
-    local _trackerThread   = nil
-    local _lastTrackerTick = 0
-    -- We track our OWN cursor position rather than polling
-    -- UIS:GetMouseLocation() every frame. Reason: the read API
-    -- (GetMouseLocation) and the write API (mousemoveabs) don't
-    -- always agree on coord space (one accounts for GUI inset,
-    -- the other uses raw screen px on some executors). Polling
-    -- + writing creates a per-frame feedback loop where the
-    -- read returns coords ~36px off from what we wrote, the
-    -- next-frame correction overshoots, the read again disagrees,
-    -- and the cursor visibly oscillates / glitches.
-    -- Solution: own the cursor pos. Resync from GetMouseLocation
-    -- only at boundaries (target acquire, RMB release) so user
-    -- mouse movements during RMB-pan are picked up.
-    local _writeX, _writeY = nil, nil
-    -- Per-target landing offset (px).
-    local _targetOffX, _targetOffY = 0, 0
-    -- Per-sweep state. On each new target we roll a Bezier curve +
-    -- random speed multiplier; the tracker step computes the cursor
-    -- pos along that curve over [start, start+duration]. Once the
-    -- sweep elapses, _sweepActive flips false and the tracker
-    -- switches to lock-on mode (gentle constant-speed follow of the
-    -- tile's current screen pos) for the rest of the target's life.
-    local _sweepActive   = false
-    local _sweepStartX, _sweepStartY = 0, 0
-    local _sweepC1X, _sweepC1Y       = 0, 0
-    local _sweepC2X, _sweepC2Y       = 0, 0
-    local _sweepStartTime            = 0
-    local _sweepDuration             = 0
+    -- (target/tracker/cursor/sweep state lives in _st declared above)
 
     local function _beginSweep()
-        _sweepActive = false
-        if not _currentTarget then return end
+        _st.sweepActive = false
+        if not _st.target then return end
         local cam = workspace.CurrentCamera
         if not cam then return end
-        local sp, on = cam:WorldToViewportPoint(_currentTarget.Position)
+        local sp, on = cam:WorldToViewportPoint(_st.target.Position)
         if not on then return end
 
-        -- Source position: prefer our tracked _writeX/_writeY if
+        -- Source position: prefer our tracked _st.writeX/_st.writeY if
         -- we have one, else resync from the OS cursor.
         local sx, sy
-        if _writeX then
-            sx, sy = _writeX, _writeY
+        if _st.writeX then
+            sx, sy = _st.writeX, _st.writeY
         else
             local UIS = game:GetService("UserInputService")
             local m   = UIS:GetMouseLocation()
             sx, sy   = m.X, m.Y
-            _writeX, _writeY = sx, sy
+            _st.writeX, _st.writeY = sx, sy
         end
 
-        local ex = sp.X + _targetOffX
-        local ey = sp.Y + _targetOffY
+        local ex = sp.X + _st.offX
+        local ey = sp.Y + _st.offY
         local dx, dy = ex - sx, ey - sy
         local dist   = math.sqrt(dx * dx + dy * dy)
         if dist < 4 then return end   -- already close; let lock-on handle it
 
         -- Per-sweep speed multiplier in [1 - v, 1 + v]. Inverted
         -- into the duration so higher multiplier = faster sweep.
-        local v = math.clamp(stealthSpeedVariance, 0, 1)
+        local v = math.clamp(_st.speedVariance, 0, 1)
         local mult = 1 + (math.random() * 2 - 1) * v
         mult = math.max(0.25, mult)
-        local rawDur = dist / math.max(50, stealthCursorSpeed)
-        _sweepDuration  = math.clamp(rawDur / mult, 0.10, 2.0)
-        _sweepStartTime = tick()
-        _sweepStartX, _sweepStartY = sx, sy
+        local rawDur = dist / math.max(50, _st.cursorSpeed)
+        _st.sweepDuration  = math.clamp(rawDur / mult, 0.10, 2.0)
+        _st.sweepStartTime = tick()
+        _st.sweepStartX, _st.sweepStartY = sx, sy
 
         -- Bezier control points 1/3 and 2/3 along the line, each
         -- pushed perpendicular by a random distance scaled by the
@@ -8987,54 +8954,54 @@ F.games.bms = (function()
         -- S-curves rather than always-symmetric bows.
         local invDist = 1 / dist
         local perpX, perpY = -dy * invDist, dx * invDist
-        local curve = math.clamp(stealthCurveAmount, 0, 2)
+        local curve = math.clamp(_st.curveAmount, 0, 2)
         local m1 = (math.random() - 0.5) * dist * 0.4 * curve
         local m2 = (math.random() - 0.5) * dist * 0.4 * curve
-        _sweepC1X = sx + dx * 0.33 + perpX * m1
-        _sweepC1Y = sy + dy * 0.33 + perpY * m1
-        _sweepC2X = sx + dx * 0.67 + perpX * m2
-        _sweepC2Y = sy + dy * 0.67 + perpY * m2
-        _sweepActive = true
+        _st.sweepC1X = sx + dx * 0.33 + perpX * m1
+        _st.sweepC1Y = sy + dy * 0.33 + perpY * m1
+        _st.sweepC2X = sx + dx * 0.67 + perpX * m2
+        _st.sweepC2Y = sy + dy * 0.67 + perpY * m2
+        _st.sweepActive = true
     end
 
     local function _setCursorTarget(tile)
-        _currentTarget = tile
+        _st.target = tile
         -- resync source pos so the sweep starts from wherever the
         -- cursor actually is
-        _writeX, _writeY = nil, nil
+        _st.writeX, _st.writeY = nil, nil
         -- roll a fresh radial landing offset
-        local lo = math.max(0, stealthOffsetMin)
-        local hi = math.max(lo, stealthOffsetMax)
+        local lo = math.max(0, _st.offsetMin)
+        local hi = math.max(lo, _st.offsetMax)
         local d  = lo + math.random() * (hi - lo)
         local a  = math.random() * math.pi * 2
-        _targetOffX = math.cos(a) * d
-        _targetOffY = math.sin(a) * d
+        _st.offX = math.cos(a) * d
+        _st.offY = math.sin(a) * d
         -- bake the Bezier sweep
         _beginSweep()
     end
 
     local function _clearCursorTarget()
-        _currentTarget = nil
-        _writeX, _writeY = nil, nil
-        _sweepActive = false
+        _st.target = nil
+        _st.writeX, _st.writeY = nil, nil
+        _st.sweepActive = false
     end
 
     local function _trackerStep(dt)
         if not _stealthMoveCursor then return end
-        if _rmbHeld then
-            _writeX, _writeY = nil, nil
-            _sweepActive = false
+        if _st.rmbHeld then
+            _st.writeX, _st.writeY = nil, nil
+            _st.sweepActive = false
             return
         end
-        local target = _currentTarget
+        local target = _st.target
         if not target then return end
         local cam = workspace.CurrentCamera
         if not cam then return end
         local sp, on = cam:WorldToViewportPoint(target.Position)
         if not on then return end
 
-        local aimX = sp.X + _targetOffX
-        local aimY = sp.Y + _targetOffY
+        local aimX = sp.X + _st.offX
+        local aimY = sp.Y + _st.offY
 
         -- Phase 1: Bezier sweep. Active until elapsed >= duration.
         -- Position along the Bezier uses smoothstep on raw t for
@@ -9043,11 +9010,11 @@ F.games.bms = (function()
         -- frame from the tile's CURRENT screen pos so if the player
         -- is walking the curve smoothly re-aims toward where the
         -- tile ended up.
-        if _sweepActive then
-            local elapsed = tick() - _sweepStartTime
-            local rawT    = elapsed / _sweepDuration
+        if _st.sweepActive then
+            local elapsed = tick() - _st.sweepStartTime
+            local rawT    = elapsed / _st.sweepDuration
             if rawT >= 1 then
-                _sweepActive = false
+                _st.sweepActive = false
                 -- fall through into lock-on phase below
             else
                 local te  = rawT * rawT * (3 - 2 * rawT)  -- smoothstep
@@ -9056,12 +9023,12 @@ F.games.bms = (function()
                 local b1  = 3 * omt * omt * te
                 local b2  = 3 * omt * te * te
                 local b3  = te * te * te
-                local px = b0 * _sweepStartX + b1 * _sweepC1X
-                         + b2 * _sweepC2X     + b3 * aimX
-                local py = b0 * _sweepStartY + b1 * _sweepC1Y
-                         + b2 * _sweepC2Y     + b3 * aimY
+                local px = b0 * _st.sweepStartX + b1 * _st.sweepC1X
+                         + b2 * _st.sweepC2X     + b3 * aimX
+                local py = b0 * _st.sweepStartY + b1 * _st.sweepC1Y
+                         + b2 * _st.sweepC2Y     + b3 * aimY
                 pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
-                _writeX, _writeY = px, py
+                _st.writeX, _st.writeY = px, py
                 return
             end
         end
@@ -9070,42 +9037,42 @@ F.games.bms = (function()
         -- completes and for correction sweeps (small offset shrink
         -- before fire). Constant speed with ease-out within 30px
         -- so the cursor doesn't overshoot the lock point.
-        if not _writeX then
+        if not _st.writeX then
             local UIS = game:GetService("UserInputService")
             local m   = UIS:GetMouseLocation()
-            _writeX, _writeY = m.X, m.Y
+            _st.writeX, _st.writeY = m.X, m.Y
         end
-        local dx, dy = aimX - _writeX, aimY - _writeY
+        local dx, dy = aimX - _st.writeX, aimY - _st.writeY
         local dist   = math.sqrt(dx * dx + dy * dy)
         if dist < 1 then return end
         local easeFactor = math.min(1, dist / 30)
-        local frameMove  = stealthCursorSpeed * easeFactor * dt
+        local frameMove  = _st.cursorSpeed * easeFactor * dt
         local alpha      = math.min(1, frameMove / dist)
-        local nx = _writeX + dx * alpha
-        local ny = _writeY + dy * alpha
+        local nx = _st.writeX + dx * alpha
+        local ny = _st.writeY + dy * alpha
         pcall(_stealthMoveCursor, math.floor(nx), math.floor(ny))
-        _writeX, _writeY = nx, ny
+        _st.writeX, _st.writeY = nx, ny
     end
 
     local function _stopTracker()
-        -- Loop exits on its own when stealthCursorOn flips false.
-        _currentTarget = nil
+        -- Loop exits on its own when _st.cursorOn flips false.
+        _st.target = nil
     end
 
     local function _startTracker()
-        if _trackerThread then return end
-        if not (stealthCursorOn and _stealthMoveCursor) then return end
-        _lastTrackerTick = tick()
-        _trackerThread = task.spawn(function()
-            while stealthCursorOn do
+        if _st.trackerThread then return end
+        if not (_st.cursorOn and _stealthMoveCursor) then return end
+        _st.lastTrackerTick = tick()
+        _st.trackerThread = task.spawn(function()
+            while _st.cursorOn do
                 local now = tick()
-                local dt  = math.max(0.001, math.min(0.1, now - _lastTrackerTick))
-                _lastTrackerTick = now
+                local dt  = math.max(0.001, math.min(0.1, now - _st.lastTrackerTick))
+                _st.lastTrackerTick = now
                 _trackerStep(dt)
                 task.wait()
             end
-            _trackerThread = nil
-            _currentTarget = nil
+            _st.trackerThread = nil
+            _st.target = nil
         end)
     end
 
@@ -9113,7 +9080,7 @@ F.games.bms = (function()
     -- by preFlagSequence after setting the target, so the FireServer
     -- call only happens once the cursor is actually on the tile -
     -- otherwise a viewer would see the flag appear before the
-    -- cursor reaches it. Compares against _writeX/_writeY (our own
+    -- cursor reaches it. Compares against _st.writeX/_st.writeY (our own
     -- tracked cursor pos) instead of GetMouseLocation, same reason
     -- as _trackerStep: the two APIs disagree about GUI inset.
     local function _waitForCursorOnTile(tile, timeoutSec)
@@ -9121,15 +9088,15 @@ F.games.bms = (function()
         if not cam then return end
         local deadline = tick() + (timeoutSec or 1.5)
         while tick() < deadline do
-            if _rmbHeld then return false end
+            if _st.rmbHeld then return false end
             local sp, on = cam:WorldToViewportPoint(tile.Position)
             if not on then return false end
-            if _writeX then
+            if _st.writeX then
                 -- compare against the off-centre landing point, not
                 -- the tile centre, so the wait completes when the
                 -- cursor reaches WHERE WE'RE AIMING.
-                local dx = (sp.X + _targetOffX) - _writeX
-                local dy = (sp.Y + _targetOffY) - _writeY
+                local dx = (sp.X + _st.offX) - _st.writeX
+                local dy = (sp.Y + _st.offY) - _st.writeY
                 if dx * dx + dy * dy < 36 then return true end  -- within 6px
             end
             task.wait()
@@ -9143,7 +9110,7 @@ F.games.bms = (function()
     -- candidates BEFORE the closest-tile selection, so we never
     -- pick an off-screen tile and then try to flag it.
     local function isTileOnScreen(tile)
-        if not stealthOnScreenOnly then return true end
+        if not _st.onScreenOnly then return true end
         if not tile then return false end
         local cam = workspace.CurrentCamera
         if not cam then return true end
@@ -9158,8 +9125,8 @@ F.games.bms = (function()
     end
 
     local function _reactionDelay()
-        local lo = math.max(0, (stealthReactMs - stealthReactJitter) / 1000)
-        local hi = math.max(lo, (stealthReactMs + stealthReactJitter) / 1000)
+        local lo = math.max(0, (_st.reactMs - _st.reactJitter) / 1000)
+        local hi = math.max(lo, (_st.reactMs + _st.reactJitter) / 1000)
         return lo + math.random() * (hi - lo)
     end
 
@@ -9190,7 +9157,7 @@ F.games.bms = (function()
         -- separate flagDelayMin/Max cooldown and miss-roll, so
         -- it doesn't need the stealth pacing on top.
         if opts.bypass then
-            if _rmbHeld then return true end
+            if _st.rmbHeld then return true end
             return false
         end
         -- RMB gate: while the player is panning camera with RMB-hold,
@@ -9198,19 +9165,19 @@ F.games.bms = (function()
         -- cursor sweep but still fire, which made flags pop onto
         -- tiles the cursor wasn't even near - the exact giveaway
         -- the cursor sim is supposed to prevent.
-        if _rmbHeld then return true end
-        if stealthMinSecBetween > 0 then
-            local elapsed = tick() - _stealthLastFireAt
-            if elapsed < stealthMinSecBetween then
-                task.wait(stealthMinSecBetween - elapsed)
+        if _st.rmbHeld then return true end
+        if _st.minSecBetween > 0 then
+            local elapsed = tick() - _st.lastFireAt
+            if elapsed < _st.minSecBetween then
+                task.wait(_st.minSecBetween - elapsed)
             end
         end
         task.wait(_reactionDelay())
-        if _rmbHeld then return true end  -- re-check after the wait
+        if _st.rmbHeld then return true end  -- re-check after the wait
         -- Hesitate FIRST. No cursor commitment until we've decided
         -- we're actually going to flag this tile.
-        if stealthHesitatePct > 0
-           and math.random(1, 100) <= stealthHesitatePct then
+        if _st.hesitatePct > 0
+           and math.random(1, 100) <= _st.hesitatePct then
             task.wait(0.20 + math.random() * 0.40)  -- 0.2-0.6s pause
             return true   -- caller: skip this fire
         end
@@ -9224,25 +9191,25 @@ F.games.bms = (function()
         --      landing.
         -- Only runs when stealth cursor sim is on; otherwise the
         -- caller fires immediately with no cursor movement.
-        if stealthCursorOn and _stealthMoveCursor then
+        if _st.cursorOn and _stealthMoveCursor then
             _setCursorTarget(tile)
             local arrived = _waitForCursorOnTile(tile, 1.5)
-            if _rmbHeld then return true end
-            if arrived and (stealthOffsetMax > 0 or stealthOffsetMin > 0) then
+            if _st.rmbHeld then return true end
+            if arrived and (_st.offsetMax > 0 or _st.offsetMin > 0) then
                 -- visible-pause + correction
                 task.wait(0.05 + math.random() * 0.10)
-                if _rmbHeld then return true end
-                _targetOffX = _targetOffX * 0.3
-                _targetOffY = _targetOffY * 0.3
+                if _st.rmbHeld then return true end
+                _st.offX = _st.offX * 0.3
+                _st.offY = _st.offY * 0.3
                 _waitForCursorOnTile(tile, 0.5)
-                if _rmbHeld then return true end
+                if _st.rmbHeld then return true end
             end
             -- Release cursor right before the caller fires. Tracker
             -- stops driving it; cursor stays where it landed. Next
             -- preFlagSequence sets a new target and the cycle repeats.
             _clearCursorTarget()
         end
-        _stealthLastFireAt = tick()
+        _st.lastFireAt = tick()
         return false
     end
 
@@ -9281,13 +9248,13 @@ F.games.bms = (function()
                 -- USER'S cursor on screen, then pick the closest to
                 -- the cursor (smallest sweep distance). Otherwise
                 -- pick the closest tile to the player in world.
-                local magnetOn = stealthMagnetOn
+                local magnetOn = _st.magnetOn
                 local cmx, cmy, cam
                 if magnetOn then
                     cmx, cmy = _cursorViewportXY()
                     cam = workspace.CurrentCamera
                 end
-                local mr2 = stealthMagnetRange * stealthMagnetRange
+                local mr2 = _st.magnetRange * _st.magnetRange
                 for t in pairs(mines) do
                     if state[t] ~= "flagged"
                        and inAimCone(t)
@@ -9351,7 +9318,7 @@ F.games.bms = (function()
 
     -- ---- triggerbot ----
     -- Independent of legitFlag: fires PlaceFlag the instant the
-    -- user's cursor is within stealthTriggerRange px of a deduced
+    -- user's cursor is within _st.triggerRange px of a deduced
     -- unflagged mine. No cursor sweep, no reaction delay - the
     -- user moves the cursor manually, bot just pulls the trigger.
     -- Deduce cache refreshes every ~150ms to keep CPU in check;
@@ -9361,12 +9328,12 @@ F.games.bms = (function()
     end
 
     local function _startTriggerbot()
-        if _triggerThread then return end
-        _triggerThread = task.spawn(function()
+        if _st.triggerThread then return end
+        _st.triggerThread = task.spawn(function()
             local lastDeduce = 0
             local mineCache  = nil
-            while stealthTriggerbotOn do
-                if _rmbHeld then
+            while _st.triggerbotOn do
+                if _st.rmbHeld then
                     task.wait(); continue
                 end
                 local now = tick()
@@ -9386,7 +9353,7 @@ F.games.bms = (function()
                 local cam    = workspace.CurrentCamera
                 if cam and token and remote and mineCache then
                     local cmx, cmy = _cursorViewportXY()
-                    local tr2 = stealthTriggerRange * stealthTriggerRange
+                    local tr2 = _st.triggerRange * _st.triggerRange
                     for t in pairs(mineCache) do
                         if tileStateCached(t) ~= "flagged" then
                             local sp, on = cam:WorldToViewportPoint(t.Position)
@@ -9409,7 +9376,7 @@ F.games.bms = (function()
                 end
                 task.wait()
             end
-            _triggerThread = nil
+            _st.triggerThread = nil
         end)
     end
 
@@ -10843,73 +10810,73 @@ F.games.bms = (function()
         -- comment block above preFlagSequence() for details.
         stealth = {
             setCursorSim = function(v)
-                stealthCursorOn = v == true
-                if stealthCursorOn then
+                _st.cursorOn = v == true
+                if _st.cursorOn then
                     _startTracker()
                 else
                     _stopTracker()
                 end
             end,
             setReactionMean = function(n)
-                stealthReactMs = math.clamp(tonumber(n) or 350, 0, 5000)
+                _st.reactMs = math.clamp(tonumber(n) or 350, 0, 5000)
             end,
             setReactionJitter = function(n)
-                stealthReactJitter = math.clamp(tonumber(n) or 250, 0, 5000)
+                _st.reactJitter = math.clamp(tonumber(n) or 250, 0, 5000)
             end,
             setHesitate = function(n)
-                stealthHesitatePct = math.clamp(tonumber(n) or 0, 0, 100)
+                _st.hesitatePct = math.clamp(tonumber(n) or 0, 0, 100)
             end,
             -- On-screen filter: prune flag candidates to tiles whose
             -- viewport coords are inside the visible screen rect.
             -- Critical for manual-play screenshare safety so flags
             -- don't pop on parts of the map you're not looking at.
-            setOnScreenOnly = function(v) stealthOnScreenOnly = v == true end,
+            setOnScreenOnly = function(v) _st.onScreenOnly = v == true end,
             -- Min seconds between fires (hard rate cap). 0 = off.
             setMinSecBetween = function(n)
-                stealthMinSecBetween = math.clamp(tonumber(n) or 0, 0, 10)
+                _st.minSecBetween = math.clamp(tonumber(n) or 0, 0, 10)
             end,
             -- General cursor speed in px/sec for flag sweeps.
             setCursorSpeed = function(n)
-                stealthCursorSpeed = math.clamp(tonumber(n) or 600, 50, 5000)
+                _st.cursorSpeed = math.clamp(tonumber(n) or 600, 50, 5000)
             end,
             -- Bezier curve magnitude (0..200 %). Scales how far
             -- the path bows from a straight line. 0 = straight,
             -- ~30-50 = subtle arc, 100+ = exaggerated.
             setCurveAmount = function(n)
-                stealthCurveAmount = math.clamp((tonumber(n) or 35) / 100, 0, 2)
+                _st.curveAmount = math.clamp((tonumber(n) or 35) / 100, 0, 2)
             end,
             -- Per-sweep speed variance (0..100 %). Each sweep
             -- rolls a speed multiplier in [1-v, 1+v] so the cursor
             -- doesn't take the same exact time on every sweep.
             setSpeedVariance = function(n)
-                stealthSpeedVariance = math.clamp((tonumber(n) or 45) / 100, 0, 1)
+                _st.speedVariance = math.clamp((tonumber(n) or 45) / 100, 0, 1)
             end,
             -- Flag magnet: legitFlag only considers tiles within N
             -- px of the cursor as candidates, then picks the closest
             -- one to the cursor. Makes the cursor sweep short.
-            setMagnet      = function(v) stealthMagnetOn = v == true end,
+            setMagnet      = function(v) _st.magnetOn = v == true end,
             setMagnetRange = function(n)
-                stealthMagnetRange = math.clamp(tonumber(n) or 80, 5, 500)
+                _st.magnetRange = math.clamp(tonumber(n) or 80, 5, 500)
             end,
             -- Triggerbot: independent of legitFlag. Fires PlaceFlag
             -- when cursor is within N px of a deduced unflagged
             -- mine. No sweep, no reaction delay.
             setTriggerbot  = function(v)
-                stealthTriggerbotOn = v == true
-                if stealthTriggerbotOn then _startTriggerbot() else _stopTriggerbot() end
+                _st.triggerbotOn = v == true
+                if _st.triggerbotOn then _startTriggerbot() else _stopTriggerbot() end
             end,
             setTriggerRange = function(n)
-                stealthTriggerRange = math.clamp(tonumber(n) or 12, 1, 100)
+                _st.triggerRange = math.clamp(tonumber(n) or 12, 1, 100)
             end,
             -- Radial over/undershoot range (px). The initial landing
             -- offset is uniform random in [min, max] px from tile
             -- centre; a correction pulls cursor to ~30% of that
             -- before fire.
             setOffsetMin = function(n)
-                stealthOffsetMin = math.clamp(tonumber(n) or 5, 0, 100)
+                _st.offsetMin = math.clamp(tonumber(n) or 5, 0, 100)
             end,
             setOffsetMax = function(n)
-                stealthOffsetMax = math.clamp(tonumber(n) or 15, 0, 100)
+                _st.offsetMax = math.clamp(tonumber(n) or 15, 0, 100)
             end,
             hasCursorAPI = function() return _stealthMoveCursor ~= nil end,
         },
