@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.35.4"
+local SCRIPT_VERSION = "v1.35.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12276,14 +12276,35 @@ F.games.prisonLife = (function()
         ["police"]    = { "criminal", "criminals" },
     }
 
+    -- Returns true if a Prisoner/Inmate player has any of the
+    -- attributes that make them a valid guard target.
+    local function _isHostileInmate(player)
+        local char = player.Character
+        if not char then return false end
+        return char:GetAttribute("Hostile")            == true
+            or char:GetAttribute("Trespassing")        == true
+            or char:GetAttribute("EquippedHostileTool") == true
+    end
+
     local function _isEnemy(player)
         local myT    = (myTeamName() or ""):lower()
         local theirT = (player.Team and player.Team.Name or ""):lower()
         local enemies = ENEMY_TEAMS[myT]
         if not enemies then return true end  -- unknown team: shoot everyone
+
+        -- Standard team check
         for _, e in ipairs(enemies) do
             if theirT == e then return true end
         end
+
+        -- Guards can also shoot Prisoners/Inmates who are flagged
+        -- as hostile, trespassing, or carrying a hostile tool.
+        if myT == "guard" or myT == "guards" or myT == "police" then
+            if theirT == "prisoner" or theirT == "inmate" or theirT == "inmates" then
+                return _isHostileInmate(player)
+            end
+        end
+
         return false
     end
 
