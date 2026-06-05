@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.36.4"
+local SCRIPT_VERSION = "v1.37.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12194,6 +12194,56 @@ F.games.prisonLife = (function()
         if _noSpreadToolConn then _noSpreadToolConn:Disconnect(); _noSpreadToolConn = nil end
     end
 
+    -- ---- auto fire (survives death) ----
+    -- Sets AutoFire = true on the equipped gun so semi-auto guns
+    -- (pistols, revolver, sniper, shotgun) fire while the mouse is
+    -- held instead of one shot per click. Same equip-on-spawn +
+    -- suppression-window pattern as no spread.
+    local autoFireOn         = false
+    local _autoFireCharConn  = nil
+    local _autoFireToolConn  = nil
+    local _autoFireSuppress  = 0
+
+    local function _applyAutoFire(tool)
+        if not (autoFireOn and tool) then return end
+        pcall(function() tool:SetAttribute("AutoFire", true) end)
+        _autoFireSuppress = tick() + 1.5
+        _requeueTool()
+    end
+
+    local function _hookAutoFireChar(char)
+        if _autoFireToolConn then _autoFireToolConn:Disconnect(); _autoFireToolConn = nil end
+        if not char then return end
+        local t = char:FindFirstChildOfClass("Tool")
+        if t then _applyAutoFire(t) end
+        _autoFireToolConn = char.ChildAdded:Connect(function(child)
+            if not autoFireOn then return end
+            if tick() < _autoFireSuppress then return end
+            if child:IsA("Tool")
+               or (child:IsA("Model") and child:GetAttribute("AutoFire") ~= nil) then
+                task.wait(0.1)
+                _applyAutoFire(child)
+            end
+        end)
+    end
+
+    local function autoFireStart()
+        autoFireOn = true
+        _hookAutoFireChar(lplr.Character)
+        if _autoFireCharConn then _autoFireCharConn:Disconnect() end
+        _autoFireCharConn = lplr.CharacterAdded:Connect(function(char)
+            if not autoFireOn then return end
+            task.wait(0.5)
+            _hookAutoFireChar(char)
+        end)
+    end
+
+    local function autoFireStop()
+        autoFireOn = false
+        if _autoFireCharConn then _autoFireCharConn:Disconnect(); _autoFireCharConn = nil end
+        if _autoFireToolConn then _autoFireToolConn:Disconnect(); _autoFireToolConn = nil end
+    end
+
     -- ---- hit sound ----
     local plHitSoundOn  = false
     local plHitSoundId  = 135698842254153
@@ -12443,6 +12493,11 @@ F.games.prisonLife = (function()
             start    = noSpreadStart,
             stop     = noSpreadStop,
             isActive = function() return noSpreadOn end,
+        },
+        autoFire   = {
+            start    = autoFireStart,
+            stop     = autoFireStop,
+            isActive = function() return autoFireOn end,
         },
         autoReload = {
             start    = autoReloadStart,

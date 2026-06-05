@@ -2778,6 +2778,13 @@ do
                 else F.games.prisonLife.noSpread.stop() end
             end,
         })
+        PL:AddToggle("PLAutoFire", { Text = "Auto fire (hold to fire pistols)",
+            Default = false,
+            Callback = function(v)
+                if v then F.games.prisonLife.autoFire.start()
+                else F.games.prisonLife.autoFire.stop() end
+            end,
+        })
         PL:AddToggle("PLAutoReload", { Text = "Auto reload (when ammo hits 0)",
             Default = false,
             Callback = function(v)
