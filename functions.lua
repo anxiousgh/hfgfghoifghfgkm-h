@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.26.3"
+local SCRIPT_VERSION = "v1.26.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8822,6 +8822,11 @@ F.games.bms = (function()
     -- cursor moves at constant velocity until within 30px of
     -- the target, then eases out for a clean lock-on.
     local stealthCursorSpeed   = 600    -- px/sec
+    -- Max px of random off-centre landing offset, per axis. The
+    -- cursor lands within +/-stealthOffsetPx of the tile centre
+    -- on each axis - 10 = +/-10px each side, 0 = always dead-
+    -- centre. Rolled fresh per target inside _setCursorTarget.
+    local stealthOffsetPx      = 10
     -- Right-mouse-button held detection. Roblox uses RMB-hold for
     -- camera pan in third-person; if we drive mousemoveabs while
     -- the player is panning their camera, our cursor calls fight
@@ -8898,13 +8903,14 @@ F.games.bms = (function()
         -- wherever the cursor actually is (might have been moved
         -- by the user during RMB pan, etc.)
         _writeX, _writeY = nil, nil
-        -- roll a fresh off-centre landing offset. +/-10px in each
-        -- axis with uniform distribution gives a ~14px max radial
-        -- offset which is well inside a typical tile but visibly
-        -- not dead-centre. Sign is random per axis so it lands
-        -- in any of the four quadrants of the tile.
-        _targetOffX = (math.random() - 0.5) * 20
-        _targetOffY = (math.random() - 0.5) * 20
+        -- roll a fresh off-centre landing offset, scaled by the
+        -- user's stealthOffsetPx slider. (rand - 0.5) * 2*range
+        -- gives uniform +/-range on each axis. Sign is random per
+        -- axis so the cursor can land in any of the four quadrants
+        -- (or dead centre if range = 0).
+        local r = math.max(0, stealthOffsetPx)
+        _targetOffX = (math.random() - 0.5) * 2 * r
+        _targetOffY = (math.random() - 0.5) * 2 * r
     end
     local function _clearCursorTarget()
         _currentTarget = nil
@@ -10569,6 +10575,11 @@ F.games.bms = (function()
             -- General cursor speed in px/sec for flag sweeps.
             setCursorSpeed = function(n)
                 stealthCursorSpeed = math.clamp(tonumber(n) or 600, 50, 5000)
+            end,
+            -- Max px of off-centre landing offset per axis. 0 =
+            -- always dead-centre.
+            setOffsetPx = function(n)
+                stealthOffsetPx = math.clamp(tonumber(n) or 10, 0, 100)
             end,
             hasCursorAPI = function() return _stealthMoveCursor ~= nil end,
         },
