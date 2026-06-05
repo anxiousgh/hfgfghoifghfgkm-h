@@ -2829,32 +2829,6 @@ do
             Callback = function(v) F.games.prisonLife.tracer.setTrail(v) end,
         })
 
-        PL:AddDivider()
-        PL:AddLabel("Gun modifier (equipped tool)")
-        PL:AddButton({
-            Text = "God gun (max ammo, no spread, fast fire)",
-            Func = function()
-                F.games.prisonLife.godGun()
-                Library:Notify("Gun attributes modified.", 2)
-            end,
-        })
-        PL:AddButton({
-            Text = "Refill ammo",
-            Func = function()
-                F.games.prisonLife.modifyGun({
-                    CurrentAmmo = 9999,
-                    MaxAmmo     = 9999,
-                })
-                Library:Notify("Ammo refilled.", 2)
-            end,
-        })
-        PL:AddButton({
-            Text = "No spread",
-            Func = function()
-                F.games.prisonLife.modifyGun({ SpreadRadius = 0 })
-                Library:Notify("SpreadRadius set to 0.", 2)
-            end,
-        })
     end
 end
 
