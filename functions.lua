@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.26.0"
+local SCRIPT_VERSION = "v1.26.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8871,36 +8871,68 @@ F.games.bms = (function()
     local _currentTarget   = nil
     local _trackerThread   = nil
     local _lastTrackerTick = 0
+    -- We track our OWN cursor position rather than polling
+    -- UIS:GetMouseLocation() every frame. Reason: the read API
+    -- (GetMouseLocation) and the write API (mousemoveabs) don't
+    -- always agree on coord space (one accounts for GUI inset,
+    -- the other uses raw screen px on some executors). Polling
+    -- + writing creates a per-frame feedback loop where the
+    -- read returns coords ~36px off from what we wrote, the
+    -- next-frame correction overshoots, the read again disagrees,
+    -- and the cursor visibly oscillates / glitches.
+    -- Solution: own the cursor pos. Resync from GetMouseLocation
+    -- only at boundaries (target acquire, RMB release) so user
+    -- mouse movements during RMB-pan are picked up.
+    local _writeX, _writeY = nil, nil
 
-    local function _setCursorTarget(tile) _currentTarget = tile end
-    local function _clearCursorTarget()   _currentTarget = nil  end
+    local function _setCursorTarget(tile)
+        _currentTarget = tile
+        -- resync from real cursor so the approach starts from
+        -- wherever the cursor actually is (might have been moved
+        -- by the user during RMB pan, etc.)
+        _writeX, _writeY = nil, nil
+    end
+    local function _clearCursorTarget()
+        _currentTarget = nil
+        _writeX, _writeY = nil, nil
+    end
 
     local function _trackerStep(dt)
         if not _stealthMoveCursor then return end
-        if _rmbHeld then return end
+        if _rmbHeld then
+            -- forget tracked pos so we resync from the real cursor
+            -- after the user releases RMB
+            _writeX, _writeY = nil, nil
+            return
+        end
         local target = _currentTarget
         if not target then return end
         local cam = workspace.CurrentCamera
         if not cam then return end
         local sp, on = cam:WorldToViewportPoint(target.Position)
         if not on then return end
-        local UIS = game:GetService("UserInputService")
-        local m   = UIS:GetMouseLocation()
-        local dx, dy = sp.X - m.X, sp.Y - m.Y
-        local dist   = math.sqrt(dx * dx + dy * dy)
-        if dist < 1 then return end   -- already locked on, stay put
 
-        -- ease-out approach: full speed when far, slowing within
-        -- 30px of the target so the cursor doesn't overshoot. Once
-        -- the tile is being tracked (small dist each frame), the
-        -- ease factor is small and the cursor barely moves except
-        -- to follow the tile's sliding screen pos.
+        if not _writeX then
+            local UIS = game:GetService("UserInputService")
+            local m   = UIS:GetMouseLocation()
+            _writeX, _writeY = m.X, m.Y
+        end
+
+        local dx, dy = sp.X - _writeX, sp.Y - _writeY
+        local dist   = math.sqrt(dx * dx + dy * dy)
+        if dist < 1 then return end   -- locked on, nothing to do
+
+        -- ease-out approach: constant velocity at full speed when
+        -- far, slowing within 30px so the cursor doesn't overshoot
+        -- the lock-on. No jitter - the per-frame sub-pixel jitter
+        -- was producing visible oscillation around the target.
         local easeFactor = math.min(1, dist / 30)
         local frameMove  = stealthCursorSpeed * easeFactor * dt
         local alpha      = math.min(1, frameMove / dist)
-        local nx = m.X + dx * alpha + (math.random() - 0.5) * 0.6
-        local ny = m.Y + dy * alpha + (math.random() - 0.5) * 0.6
+        local nx = _writeX + dx * alpha
+        local ny = _writeY + dy * alpha
         pcall(_stealthMoveCursor, math.floor(nx), math.floor(ny))
+        _writeX, _writeY = nx, ny
     end
 
     local function _stopTracker()
@@ -8929,9 +8961,10 @@ F.games.bms = (function()
     -- by preFlagSequence after setting the target, so the FireServer
     -- call only happens once the cursor is actually on the tile -
     -- otherwise a viewer would see the flag appear before the
-    -- cursor reaches it.
+    -- cursor reaches it. Compares against _writeX/_writeY (our own
+    -- tracked cursor pos) instead of GetMouseLocation, same reason
+    -- as _trackerStep: the two APIs disagree about GUI inset.
     local function _waitForCursorOnTile(tile, timeoutSec)
-        local UIS = game:GetService("UserInputService")
         local cam = workspace.CurrentCamera
         if not cam then return end
         local deadline = tick() + (timeoutSec or 1.5)
@@ -8939,10 +8972,11 @@ F.games.bms = (function()
             if _rmbHeld then return false end
             local sp, on = cam:WorldToViewportPoint(tile.Position)
             if not on then return false end
-            local m  = UIS:GetMouseLocation()
-            local dx = sp.X - m.X
-            local dy = sp.Y - m.Y
-            if dx * dx + dy * dy < 36 then return true end  -- within 6px
+            if _writeX then
+                local dx = sp.X - _writeX
+                local dy = sp.Y - _writeY
+                if dx * dx + dy * dy < 36 then return true end  -- within 6px
+            end
             task.wait()
         end
         return false
