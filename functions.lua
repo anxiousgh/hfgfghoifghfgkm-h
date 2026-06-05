@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.33.4"
+local SCRIPT_VERSION = "v1.33.5"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12170,11 +12170,10 @@ F.games.prisonLife = (function()
     local function _hookReload(tool)
         if _reloadToolConn then _reloadToolConn:Disconnect(); _reloadToolConn = nil end
         if not tool then return end
-        -- Watch Local_CurrentAmmo - that's the client-side counter that
-        -- decrements as you fire (CurrentAmmo is server-synced and may lag).
-        _reloadToolConn = tool:GetAttributeChangedSignal("Local_CurrentAmmo"):Connect(function()
+        -- Watch CurrentAmmo - the server-synced value.
+        _reloadToolConn = tool:GetAttributeChangedSignal("CurrentAmmo"):Connect(function()
             if not autoReloadOn then return end
-            local ammo      = tool:GetAttribute("Local_CurrentAmmo") or 1
+            local ammo      = tool:GetAttribute("CurrentAmmo") or 1
             local reloading = tool:GetAttribute("IsReloading")
             if ammo <= 0 and not reloading then
                 local fr = _getFuncReload()
