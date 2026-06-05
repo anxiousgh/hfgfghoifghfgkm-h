@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.35.1"
+local SCRIPT_VERSION = "v1.35.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12192,7 +12192,9 @@ F.games.prisonLife = (function()
         if not tool then return end
         _reloadToolConn = tool:GetAttributeChangedSignal("CurrentAmmo"):Connect(function()
             if not autoReloadOn then return end
-            local ammo      = tool:GetAttribute("CurrentAmmo") or 1
+            local ammo = tool:GetAttribute("CurrentAmmo") or 1
+            -- keep Local_CurrentAmmo in sync with the server value
+            pcall(function() tool:SetAttribute("Local_CurrentAmmo", ammo) end)
             local reloading = tool:GetAttribute("IsReloading")
             if ammo <= 0 and not reloading then
                 _pressR()
