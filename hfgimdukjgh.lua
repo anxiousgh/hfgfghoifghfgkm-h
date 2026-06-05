@@ -2780,6 +2780,37 @@ do
         })
 
         PL:AddDivider()
+        PL:AddLabel("Bullet tracers")
+        PL:AddToggle("PLTracerOn", { Text = "Bullet tracers",
+            Default = false,
+            Callback = function(v) F.games.prisonLife.tracer.setEnabled(v) end,
+        })
+        PL:AddDropdown("PLTracerStyle", {
+            Values = { "Standard", "Laser", "Thin", "Lightning", "Plasma" },
+            Default = "Standard", Text = "Tracer style",
+            Callback = function(v) F.games.prisonLife.tracer.setStyle(v) end,
+        })
+        PL:AddLabel("Tracer color"):AddColorPicker("PLTracerColor", {
+            Default = Color3.fromRGB(255, 60, 60),
+            Title = "Tracer color",
+            Callback = function(c) F.games.prisonLife.tracer.setColor(c) end,
+        })
+        PL:AddSlider("PLTracerLifetime", {
+            Text = "Tracer lifetime",
+            Default = 0.20, Min = 0.05, Max = 2, Rounding = 2, Suffix = " s",
+            Callback = function(v) F.games.prisonLife.tracer.setLifetime(v) end,
+        })
+        PL:AddSlider("PLTracerThickness", {
+            Text = "Tracer thickness",
+            Default = 0.12, Min = 0.01, Max = 1, Rounding = 2,
+            Callback = function(v) F.games.prisonLife.tracer.setThickness(v) end,
+        })
+        PL:AddToggle("PLTracerTrail", { Text = "Sparkle trail",
+            Default = false,
+            Callback = function(v) F.games.prisonLife.tracer.setTrail(v) end,
+        })
+
+        PL:AddDivider()
         PL:AddLabel("Gun modifier (equipped tool)")
         PL:AddButton({
             Text = "God gun (max ammo, no spread, fast fire)",
