@@ -2461,32 +2461,6 @@ do
             Default = 45, Min = 0, Max = 100, Rounding = 0, Suffix = " %",
             Callback = function(v) F.games.bms.stealth.setSpeedVariance(v) end,
         })
-        -- Flag magnet: legitFlag only fires on tiles already close
-        -- to the user's cursor. Looks like 'the user almost clicked
-        -- it themselves and the bot finished the move'.
-        BMSStealth:AddToggle("BMSMagnet", {
-            Text    = "Flag magnet (only fires when cursor is near a mine)",
-            Default = false,
-            Callback = function(v) F.games.bms.stealth.setMagnet(v) end,
-        })
-        BMSStealth:AddSlider("BMSMagnetRange", {
-            Text    = "Magnet range",
-            Default = 80, Min = 10, Max = 300, Rounding = 0, Suffix = " px",
-            Callback = function(v) F.games.bms.stealth.setMagnetRange(v) end,
-        })
-        -- Triggerbot: fires the instant the user manually moves
-        -- their cursor over a deduced mine. Independent of the
-        -- legit auto-flag toggle.
-        BMSStealth:AddToggle("BMSTriggerbot", {
-            Text    = "Triggerbot (fire when cursor is on a mine)",
-            Default = false,
-            Callback = function(v) F.games.bms.stealth.setTriggerbot(v) end,
-        })
-        BMSStealth:AddSlider("BMSTriggerRange", {
-            Text    = "Triggerbot range",
-            Default = 12, Min = 1, Max = 50, Rounding = 0, Suffix = " px",
-            Callback = function(v) F.games.bms.stealth.setTriggerRange(v) end,
-        })
         BMSStealth:AddSlider("BMSOffsetMin", {
             Text    = "Over/undershoot min",
             Default = 5, Min = 0, Max = 50, Rounding = 0, Suffix = " px",
@@ -2524,6 +2498,42 @@ do
                 end)
                 Library:Notify("Manual-play stealth preset applied.", 3)
             end,
+        })
+
+        -- ---- Flag magnet (own section) ----
+        -- Standalone: works without BMSLegitFlag and without
+        -- BMSCursorSim. When the user's cursor moves within range
+        -- of a deduced unflagged mine, magnet runs its own quick
+        -- ease-out sweep over ~6 frames and fires PlaceFlag. If
+        -- the executor lacks mousemoveabs, falls back to firing
+        -- without moving the cursor.
+        local BMSMagnetBox = Tabs.Games:AddRightGroupbox("Flag magnet")
+        BMSMagnetBox:AddToggle("BMSMagnet", {
+            Text    = "Enable flag magnet",
+            Default = false,
+            Callback = function(v) F.games.bms.stealth.setMagnet(v) end,
+        })
+        BMSMagnetBox:AddSlider("BMSMagnetRange", {
+            Text    = "Magnet range",
+            Default = 80, Min = 10, Max = 300, Rounding = 0, Suffix = " px",
+            Callback = function(v) F.games.bms.stealth.setMagnetRange(v) end,
+        })
+
+        -- ---- Triggerbot (own section) ----
+        -- Independent of legitFlag. Fires PlaceFlag the instant the
+        -- user's cursor moves within range of a deduced unflagged
+        -- mine. No cursor sweep, no reaction delay - aim-assist for
+        -- clicking.
+        local BMSTriggerBox = Tabs.Games:AddRightGroupbox("Triggerbot")
+        BMSTriggerBox:AddToggle("BMSTriggerbot", {
+            Text    = "Enable triggerbot",
+            Default = false,
+            Callback = function(v) F.games.bms.stealth.setTriggerbot(v) end,
+        })
+        BMSTriggerBox:AddSlider("BMSTriggerRange", {
+            Text    = "Triggerbot range",
+            Default = 12, Min = 1, Max = 50, Rounding = 0, Suffix = " px",
+            Callback = function(v) F.games.bms.stealth.setTriggerRange(v) end,
         })
 
         -- ---- Auto play groupbox (right side, separate from Mine ESP /

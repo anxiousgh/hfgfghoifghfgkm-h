@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.29.2"
+local SCRIPT_VERSION = "v1.30.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8839,6 +8839,7 @@ F.games.bms = (function()
         speedVariance   = 0.45,
         magnetOn        = false,
         magnetRange     = 80,
+        magnetThread    = nil,
         triggerbotOn    = false,
         triggerRange    = 12,
         triggerThread   = nil,
@@ -9244,41 +9245,16 @@ F.games.bms = (function()
                 -- (within range + aim cone). Simple + predictable - no
                 -- last-flagged chaining.
                 local best, bestD2 = nil, math.huge
-                -- Magnet mode: filter to tiles within N px of the
-                -- USER'S cursor on screen, then pick the closest to
-                -- the cursor (smallest sweep distance). Otherwise
-                -- pick the closest tile to the player in world.
-                local magnetOn = _st.magnetOn
-                local cmx, cmy, cam
-                if magnetOn then
-                    cmx, cmy = _cursorViewportXY()
-                    cam = workspace.CurrentCamera
-                end
-                local mr2 = _st.magnetRange * _st.magnetRange
                 for t in pairs(mines) do
                     if state[t] ~= "flagged"
                        and inAimCone(t)
                        and isTileOnScreen(t) then
-                        if magnetOn then
-                            if cam then
-                                local sp, on = cam:WorldToViewportPoint(t.Position)
-                                if on then
-                                    local cdx = sp.X - cmx
-                                    local cdy = sp.Y - cmy
-                                    local cd2 = cdx*cdx + cdy*cdy
-                                    if cd2 <= mr2 and cd2 < bestD2 then
-                                        best, bestD2 = t, cd2
-                                    end
-                                end
-                            end
-                        else
-                            local dx = t.Position.X - origin.X
-                            local dy = t.Position.Y - origin.Y
-                            local dz = t.Position.Z - origin.Z
-                            local d2 = dx*dx + dy*dy + dz*dz
-                            if d2 < rangeSq and d2 < bestD2 then
-                                best, bestD2 = t, d2
-                            end
+                        local dx = t.Position.X - origin.X
+                        local dy = t.Position.Y - origin.Y
+                        local dz = t.Position.Z - origin.Z
+                        local d2 = dx*dx + dy*dy + dz*dz
+                        if d2 < rangeSq and d2 < bestD2 then
+                            best, bestD2 = t, d2
                         end
                     end
                 end
@@ -9314,6 +9290,86 @@ F.games.bms = (function()
         -- pinned to whichever tile was last targeted, even after the
         -- flag thread is gone.
         _clearCursorTarget()
+    end
+
+    -- ---- flag magnet ----
+    -- Standalone: works without legitFlag and without cursor sim.
+    -- When the user's cursor is within _st.magnetRange px of a
+    -- deduced unflagged mine, runs its OWN quick smooth-sweep
+    -- (ease-out over ~6 frames, re-targets each frame so a moving
+    -- tile is still hit) and fires PlaceFlag. If the executor
+    -- doesn't expose mousemoveabs, falls back to firing without
+    -- moving the cursor.
+    local function _stopMagnet() end
+    local function _startMagnet()
+        if _st.magnetThread then return end
+        _st.magnetThread = task.spawn(function()
+            local lastDeduce = 0
+            local mineCache  = nil
+            local lastFireAt = 0
+            while _st.magnetOn do
+                if _st.rmbHeld or tick() - lastFireAt < 0.3 then
+                    task.wait(); continue
+                end
+                local now = tick()
+                if now - lastDeduce >= 0.15 then
+                    lastDeduce = now
+                    local parts = getParts()
+                    if parts then
+                        ensureNeighbors(tileList)
+                        local all   = tileList
+                        local state = {}
+                        for _, t in ipairs(all) do state[t] = tileStateCached(t) end
+                        mineCache = deduce(all, state)
+                    end
+                end
+                local token  = getgenv()._BMS_TOKEN
+                local remote = getPlaceFlag()
+                local cam    = workspace.CurrentCamera
+                if cam and token and remote and mineCache then
+                    local cmx, cmy = _cursorViewportXY()
+                    local mr2 = _st.magnetRange * _st.magnetRange
+                    local best, bestD2 = nil, math.huge
+                    for t in pairs(mineCache) do
+                        if tileStateCached(t) ~= "flagged" then
+                            local sp, on = cam:WorldToViewportPoint(t.Position)
+                            if on then
+                                local dx = sp.X - cmx
+                                local dy = sp.Y - cmy
+                                local d2 = dx*dx + dy*dy
+                                if d2 <= mr2 and d2 < bestD2 then
+                                    best, bestD2 = t, d2
+                                end
+                            end
+                        end
+                    end
+                    if best then
+                        if _stealthMoveCursor then
+                            local sx, sy = cmx, cmy
+                            local steps = 6
+                            for i = 1, steps do
+                                if _st.rmbHeld or not _st.magnetOn then break end
+                                local sp = cam:WorldToViewportPoint(best.Position)
+                                local te = 1 - (1 - i / steps) ^ 2
+                                local nx = sx + (sp.X - sx) * te
+                                local ny = sy + (sp.Y - sy) * te
+                                pcall(_stealthMoveCursor,
+                                    math.floor(nx), math.floor(ny))
+                                task.wait()
+                            end
+                        end
+                        if not _st.rmbHeld and _st.magnetOn then
+                            pcall(function()
+                                remote:FireServer(best, token, true)
+                            end)
+                            lastFireAt = tick()
+                        end
+                    end
+                end
+                task.wait()
+            end
+            _st.magnetThread = nil
+        end)
     end
 
     -- ---- triggerbot ----
@@ -10851,10 +10907,14 @@ F.games.bms = (function()
             setSpeedVariance = function(n)
                 _st.speedVariance = math.clamp((tonumber(n) or 45) / 100, 0, 1)
             end,
-            -- Flag magnet: legitFlag only considers tiles within N
-            -- px of the cursor as candidates, then picks the closest
-            -- one to the cursor. Makes the cursor sweep short.
-            setMagnet      = function(v) _st.magnetOn = v == true end,
+            -- Flag magnet: standalone. When the user's cursor moves
+            -- within N px of a deduced mine, magnet runs its own
+            -- quick smooth-sweep to the tile + fires PlaceFlag.
+            -- Doesn't require legitFlag or cursor sim to be on.
+            setMagnet      = function(v)
+                _st.magnetOn = v == true
+                if _st.magnetOn then _startMagnet() else _stopMagnet() end
+            end,
             setMagnetRange = function(n)
                 _st.magnetRange = math.clamp(tonumber(n) or 80, 5, 500)
             end,
