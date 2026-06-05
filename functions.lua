@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.37.1"
+local SCRIPT_VERSION = "v1.38.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12316,6 +12316,110 @@ F.games.prisonLife = (function()
         if _reloadThread then pcall(task.cancel, _reloadThread); _reloadThread = nil end
     end
 
+    -- ---- hitmarker + damage numbers ----
+    local hitMarkerOn   = false
+    local hitNumberOn   = false
+    local hitNumColor   = Color3.fromRGB(255, 255, 255)
+    local HITMARK_IMG   = "rbxassetid://5544769872"
+
+    -- A briefly-shown hitmarker image centred on the hit part.
+    local function _spawnHitMarker(part)
+        if not (hitMarkerOn and part) then return end
+        local bb = Instance.new("BillboardGui")
+        bb.Name           = "_pl_hitmark"
+        bb.Adornee        = part
+        bb.Size           = UDim2.fromOffset(40, 40)
+        bb.AlwaysOnTop    = true
+        bb.LightInfluence = 0
+        bb.Parent         = part
+        local img = Instance.new("ImageLabel")
+        img.BackgroundTransparency = 1
+        img.Size  = UDim2.fromScale(1, 1)
+        img.Image = HITMARK_IMG
+        img.Parent = bb
+        task.spawn(function()
+            local STEPS = 6
+            for i = 1, STEPS do
+                if not bb.Parent then return end
+                local p = i / STEPS
+                img.ImageTransparency = p
+                bb.Size = UDim2.fromOffset(40 + p * 20, 40 + p * 20)
+                task.wait(0.04)
+            end
+            if bb.Parent then bb:Destroy() end
+        end)
+    end
+
+    -- A damage number that floats up into the sky and fades. Uses the
+    -- same bold-outlined style as the ESP text (white-ish bold font
+    -- with a black stroke).
+    local function _spawnDamageNumber(worldPos, dmg)
+        if not (hitNumberOn and worldPos) then return end
+        local anchor = Instance.new("Part")
+        anchor.Anchored=true; anchor.CanCollide=false; anchor.CanTouch=false
+        anchor.CanQuery=false; anchor.CastShadow=false
+        anchor.Transparency=1; anchor.Size=Vector3.new(0.05,0.05,0.05)
+        anchor.CFrame=CFrame.new(worldPos); anchor.Parent=workspace
+        anchor.Name="_pl_dmgnum"
+
+        local bb = Instance.new("BillboardGui")
+        bb.Adornee=anchor; bb.Size=UDim2.fromOffset(120, 40)
+        bb.AlwaysOnTop=true; bb.LightInfluence=0
+        bb.StudsOffsetWorldSpace=Vector3.new(0,0,0); bb.Parent=anchor
+
+        local lbl = Instance.new("TextLabel")
+        lbl.BackgroundTransparency=1; lbl.Size=UDim2.fromScale(1,1)
+        lbl.Font=Enum.Font.GothamBold
+        lbl.TextSize=22
+        lbl.Text="-" .. tostring(math.floor(dmg + 0.5))
+        lbl.TextColor3=hitNumColor
+        lbl.TextStrokeColor3=Color3.new(0,0,0)
+        lbl.TextStrokeTransparency=0
+        lbl.Parent=bb
+
+        task.spawn(function()
+            local DUR=0.8; local t0=tick()
+            -- small random horizontal drift so stacked hits don't overlap
+            local driftX=(math.random()-0.5)*1.5
+            while true do
+                local p=(tick()-t0)/DUR
+                if p>=1 or not anchor.Parent then break end
+                -- rise into the sky + fade
+                bb.StudsOffsetWorldSpace=Vector3.new(driftX*p, 3*p, 0)
+                lbl.TextTransparency=p
+                lbl.TextStrokeTransparency=p
+                task.wait()
+            end
+            if anchor.Parent then anchor:Destroy() end
+        end)
+    end
+
+    -- Hit detection: watch the kill-aura target's humanoid health.
+    -- Each shoot() re-points the watcher at the current target. When
+    -- the target's health drops within a short window after a fire,
+    -- we spawn the marker + damage number with the actual delta.
+    local _hmHum, _hmConn, _hmLast, _hmPart
+    local _hmLastFireAt = 0
+    local function _ensureHitWatch(targetHRP)
+        local char = targetHRP and targetHRP.Parent
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        _hmPart = targetHRP
+        if hum == _hmHum then return end
+        if _hmConn then _hmConn:Disconnect(); _hmConn = nil end
+        _hmHum = hum
+        if not hum then return end
+        _hmLast = hum.Health
+        _hmConn = hum.HealthChanged:Connect(function(newHP)
+            local old = _hmLast
+            _hmLast = newHP
+            if old and newHP < old and (tick() - _hmLastFireAt) < 0.5 then
+                local dmg = old - newHP
+                _spawnHitMarker(_hmPart)
+                if _hmPart then _spawnDamageNumber(_hmPart.Position, dmg) end
+            end
+        end)
+    end
+
     local function shoot(targetHRP)
         if not targetHRP then return end
         local event = getShootEvent()
@@ -12340,6 +12444,11 @@ F.games.prisonLife = (function()
             local toOffset = to + offset
             table.insert(pellets, { from, toOffset, targetHRP })
             task.spawn(_plSpawnTracer, from, toOffset)
+        end
+        -- arm hit detection for this target before firing
+        if hitMarkerOn or hitNumberOn then
+            _ensureHitWatch(targetHRP)
+            _hmLastFireAt = tick()
         end
         local ok = pcall(function() event:FireServer(pellets) end)
         if ok then _playHitSound() end
@@ -12497,6 +12606,11 @@ F.games.prisonLife = (function()
             setEnabled = function(v) plHitSoundOn  = v == true end,
             setId      = function(n) plHitSoundId  = tonumber(n) or plHitSoundId end,
             setVolume  = function(n) plHitSoundVol = math.clamp(tonumber(n) or 1, 0, 5) end,
+        },
+        hitMarker = {
+            setMarker    = function(v) hitMarkerOn = v == true end,
+            setNumber    = function(v) hitNumberOn = v == true end,
+            setNumColor  = function(c) if typeof(c) == "Color3" then hitNumColor = c end end,
         },
         tracer = {
             setEnabled   = function(v) plTracerOn      = v == true end,

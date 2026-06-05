@@ -2828,6 +2828,19 @@ do
             Default = 1, Min = 0, Max = 5, Rounding = 1,
             Callback = function(v) F.games.prisonLife.hitSound.setVolume(v) end,
         })
+        PL:AddToggle("PLHitMarker", { Text = "Hitmarker (image on hit)",
+            Default = false,
+            Callback = function(v) F.games.prisonLife.hitMarker.setMarker(v) end,
+        })
+        PL:AddToggle("PLHitNumber", { Text = "Damage numbers (float up + fade)",
+            Default = false,
+            Callback = function(v) F.games.prisonLife.hitMarker.setNumber(v) end,
+        })
+        PL:AddLabel("Damage number color"):AddColorPicker("PLHitNumColor", {
+            Default = Color3.fromRGB(255, 255, 255),
+            Title = "Damage number color",
+            Callback = function(c) F.games.prisonLife.hitMarker.setNumColor(c) end,
+        })
 
         PL:AddDivider()
         PL:AddLabel("Bullet tracers")
