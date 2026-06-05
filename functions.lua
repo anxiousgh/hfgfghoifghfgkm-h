@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.22.1"
+local SCRIPT_VERSION = "v1.22.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8781,6 +8781,19 @@ F.games.bms = (function()
         if flagThread then pcall(task.cancel, flagThread) end
         flagThread = task.spawn(function()
             while flagActive do
+                -- Playstyle now applies to the standalone auto-flag too,
+                -- not just auto-play:
+                --   'flagless'  -> no fires at all, just idle. Lets the
+                --                  user keep the toggle armed but stay
+                --                  visually flag-free in a round.
+                --   'logical'   -> longer 'studying the board' beat
+                --                  between fires + a wider idle pause
+                --                  so flags don't snap-chain like a bot.
+                --   'legit'     -> current behaviour (existing delay
+                --                  rolls / miss-chance only).
+                if playstyleMode == "flagless" then
+                    task.wait(0.5); continue
+                end
                 local token = getgenv()._BMS_TOKEN
                 local remote = getPlaceFlag()
                 if not token or not remote then
@@ -8816,9 +8829,18 @@ F.games.bms = (function()
                     if not flagMissRoll() then
                         pcall(function() remote:FireServer(best, token, true) end)
                     end
-                    task.wait(flagDelayRoll())
+                    if playstyleMode == "logical" then
+                        -- 0.8-1.6s 'reading the new state' beat
+                        task.wait(0.8 + math.random() * 0.8)
+                    else
+                        task.wait(flagDelayRoll())
+                    end
                 else
-                    task.wait(0.25)  -- nothing to flag right now, idle
+                    if playstyleMode == "logical" then
+                        task.wait(0.4 + math.random() * 0.5)  -- 0.4-0.9s
+                    else
+                        task.wait(0.25)  -- nothing to flag right now, idle
+                    end
                 end
             end
         end)
@@ -10150,13 +10172,9 @@ F.games.bms = (function()
                 local deg = math.clamp(tonumber(n) or 60, 0, 90)
                 _camTiltAngle = math.rad(-deg)
             end,
-            -- playstyle + post-round actions
-            setPlaystyle = function(m)
-                if m == "legit" or m == "logical" or m == "flagless" then
-                    playstyleMode = m
-                end
-            end,
-            getPlaystyle = function() return playstyleMode end,
+            -- post-round actions (playstyle moved to top-level
+            -- F.games.bms.setPlaystyle since it now applies to the
+            -- standalone auto-flag as well, not just auto-play)
             setWinAction  = function(a)
                 if a then winAction = tostring(a) end
             end,
@@ -10178,6 +10196,21 @@ F.games.bms = (function()
         setToken      = setManualToken,
         getToken      = function() return getgenv()._BMS_TOKEN end,
         autoCaptureToken = autoCaptureToken,
+        -- Playstyle applies to BOTH the standalone auto-flag thread
+        -- and the auto-play planner. Exposed at module level (not
+        -- under autoPlay) so the UI can sit in its own groupbox and
+        -- not look like it requires auto-play to be on.
+        --   'legit'    = current behaviour, no extra pacing
+        --   'logical'  = longer 'reading the board' beats after every
+        --                flag fire + between movements
+        --   'flagless' = never fire PlaceFlag (auto-play still walks
+        --                safes, auto-flag becomes a no-op idle)
+        setPlaystyle = function(m)
+            if m == "legit" or m == "logical" or m == "flagless" then
+                playstyleMode = m
+            end
+        end,
+        getPlaystyle = function() return playstyleMode end,
     }
 end)()
 

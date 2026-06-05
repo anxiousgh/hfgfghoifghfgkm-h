@@ -2404,6 +2404,24 @@ do
         })
         print("[BMS] (4/8) legit auto-flag + aim cone widgets ok")
 
+        -- ---- Playstyle (own section so it's clearly module-wide -
+        -- applies to BOTH legit auto-flag and auto-play; you don't
+        -- have to be running auto-play for it to take effect) ----
+        local BMSStyle = Tabs.Games:AddRightGroupbox("Playstyle")
+        BMSStyle:AddDropdown("BMSPlaystyle", {
+            Values   = { "legit", "logical", "flagless" },
+            Default  = "legit",
+            Text     = "Playstyle",
+            Callback = function(v) F.games.bms.setPlaystyle(v) end,
+        })
+        BMSStyle:AddLabel(
+            "legit = current behaviour\n" ..
+            "logical = longer 'reading' beats between fires + moves\n" ..
+            "flagless = never fire PlaceFlag (auto-play walks safes only,\n" ..
+            "          auto-flag becomes a no-op while toggled on)",
+            true
+        )
+
         -- ---- Auto play groupbox (right side, separate from Mine ESP /
         -- Legit auto-flag so it can't be missed) ----
         local BMSAuto = Tabs.Games:AddRightGroupbox("Blockerman's Auto play")
@@ -2476,13 +2494,7 @@ do
             true)
 
         BMSAuto:AddDivider()
-        BMSAuto:AddLabel("Playstyle actions")
-        BMSAuto:AddDropdown("BMSPlaystyle", {
-            Values   = { "legit", "logical", "flagless" },
-            Default  = "legit",
-            Text     = "Playstyle",
-            Callback = function(v) F.games.bms.autoPlay.setPlaystyle(v) end,
-        })
+        BMSAuto:AddLabel("Round-end actions")
         local _bmsActions = {
             "staying still", "walking randomly",
             "jumping in a circle", "jumping off map",
