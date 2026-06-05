@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.33.0"
+local SCRIPT_VERSION = "v1.33.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12087,17 +12087,11 @@ F.games.prisonLife = (function()
 
     local function _toolPellets(tool)
         if not tool then return 1 end
-        -- ProjectileCount is the real attribute name in Prison Life
+        -- ProjectileCount is the real Prison Life attribute for pellet count
         local n = tool:GetAttribute("ProjectileCount")
-               or tool:GetAttribute("BulletsPerShot")
-               or tool:GetAttribute("PelletsPerShot")
-               or tool:GetAttribute("Pellets")
         if n and n > 1 then return n end
-        local name = tool.Name:lower()
-        if name:find("shotgun") or name:find("pump") or name:find("spas")
-           or name:find("sawed") or name:find("870") or name:find("remington") then
-            return 5
-        end
+        -- Remington 870 is the only shotgun in Prison Life
+        if tool.Name == "Remington 870" then return 5 end
         return 1
     end
 
