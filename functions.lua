@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.32.0"
+local SCRIPT_VERSION = "v1.32.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -11827,11 +11827,34 @@ F.games.prisonLife = (function()
         return t and t.Name or nil
     end
 
-    -- Returns the equipped Tool in the character, or nil.
+    -- Returns the equipped Tool (or any gun-like Model) in the
+    -- character, or nil. Checks:
+    --   1. Standard Tool class (most games)
+    --   2. Any Model child of Character that has a "Damage"
+    --      attribute (some games use custom gun Models)
+    --   3. Also checks the Backpack as a fallback in case the game
+    --      keeps tools there while "equipped" (rare but seen)
     local function equippedTool()
         local char = lplr.Character
         if not char then return nil end
-        return char:FindFirstChildOfClass("Tool")
+        local t = char:FindFirstChildOfClass("Tool")
+        if t then return t end
+        -- broader: any child with gun-like attributes
+        for _, v in ipairs(char:GetChildren()) do
+            if (v:IsA("Model") or v:IsA("Tool"))
+               and (v:GetAttribute("Damage") or v:GetAttribute("CurrentAmmo")) then
+                return v
+            end
+        end
+        return nil
+    end
+
+    -- hasGunEquipped: true if an armed tool is present. Less strict
+    -- than equippedTool() - also returns true when a character child
+    -- with gun attributes exists even if FindFirstChildOfClass fails.
+    -- Used as the kill-aura gate so the check degrades gracefully.
+    local function hasGunEquipped()
+        return equippedTool() ~= nil
     end
 
     -- ---- escape ----
@@ -11995,8 +12018,11 @@ F.games.prisonLife = (function()
         auraActive = true
         auraThread = task.spawn(function()
             while auraActive do
-                -- Only fire when a tool is equipped (gun in hand)
-                if equippedTool() then
+                -- Gate: only shoot when a gun is in hand.
+                -- hasGunEquipped() tries Tool class first, then
+                -- falls back to any Model with gun attributes so
+                -- custom Prison Life gun systems still pass.
+                if hasGunEquipped() then
                     local target = _nearestEnemy()
                     if target then shoot(target) end
                 end
@@ -12025,19 +12051,22 @@ F.games.prisonLife = (function()
         return true
     end
 
-    -- Convenience: max ammo + minimal spread + fastest fire rate.
+    -- Convenience: infinite ammo + no spread + fast fire + 20x dmg.
     local function godGun()
         local tool = equippedTool()
         if not tool then return end
-        local maxAmmo = tool:GetAttribute("MaxAmmo") or 9999
         pcall(function()
-            tool:SetAttribute("CurrentAmmo",   maxAmmo)
-            tool:SetAttribute("MaxAmmo",        maxAmmo)
-            tool:SetAttribute("SpreadRadius",   0)
-            tool:SetAttribute("FireRate",        0.01)
-            tool:SetAttribute("ReloadTime",      0.01)
-            tool:SetAttribute("Damage",
-                (tool:GetAttribute("Damage") or 30) * 10)
+            -- math.huge for both so ReloadTime can't drain them
+            tool:SetAttribute("CurrentAmmo",  math.huge)
+            tool:SetAttribute("MaxAmmo",       math.huge)
+            tool:SetAttribute("SpreadRadius",  0)
+            tool:SetAttribute("FireRate",       0.01)
+            tool:SetAttribute("ReloadTime",     0.01)
+            local baseDmg = tool:GetAttribute("Damage") or 30
+            -- cap base at 9999 so we don't multiply already-huge values
+            if baseDmg ~= math.huge then
+                tool:SetAttribute("Damage", math.min(baseDmg, 9999) * 20)
+            end
         end)
     end
 
