@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.27.1"
+local SCRIPT_VERSION = "v1.27.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -9061,14 +9061,17 @@ F.games.bms = (function()
     local function preFlagSequence(tile, opts)
         if not tile then return false end
         opts = opts or {}
-        -- skipCursor: caller doesn't want the cursor sim block.
-        -- Auto-play passes this so its character-walk step isn't
-        -- frozen for 100-400ms waiting for the cursor sweep on
-        -- every flag fire (which was making the character move
-        -- in choppy bursts instead of walking smoothly). Manual
-        -- play (legitFlag) leaves it unset so the cursor still
-        -- lands on the tile BEFORE the flag appears.
-        local skipCursor = opts.skipCursor
+        -- bypass: caller wants the entire stealth layer skipped -
+        -- no rate cap, no reaction-time wait, no hesitation roll,
+        -- no cursor sweep. Used by auto-play, whose own walk-step
+        -- needs the autoplay tick to return promptly so the
+        -- character keeps moving. Auto-play also has its own
+        -- separate flagDelayMin/Max cooldown and miss-roll, so
+        -- it doesn't need the stealth pacing on top.
+        if opts.bypass then
+            if _rmbHeld then return true end
+            return false
+        end
         -- RMB gate: while the player is panning camera with RMB-hold,
         -- skip the fire entirely. Old behaviour was to skip just the
         -- cursor sweep but still fire, which made flags pop onto
@@ -9098,8 +9101,9 @@ F.games.bms = (function()
         --      mimics a human click sequence - rough approach, fine
         --      correction, click - instead of a single dead-on
         --      landing.
-        -- Skipped entirely when opts.skipCursor is set (autoplay).
-        if stealthCursorOn and _stealthMoveCursor and not skipCursor then
+        -- Only runs when stealth cursor sim is on; otherwise the
+        -- caller fires immediately with no cursor movement.
+        if stealthCursorOn and _stealthMoveCursor then
             _setCursorTarget(tile)
             local arrived = _waitForCursorOnTile(tile, 1.5)
             if _rmbHeld then return true end
@@ -9663,7 +9667,21 @@ F.games.bms = (function()
     -- keep their own camera settings during auto-play.
     local _followCamOn   = true
 
-    local function setFollowCam(enable)
+    -- Cleanup helper used by both _stopCamTilt and _setCamMode(false)
+    -- to recover from a Scriptable camera left over by the tilt loop.
+    local function _restoreCameraIfScriptable()
+        local cam = workspace.CurrentCamera
+        if cam and cam.CameraType == Enum.CameraType.Scriptable then
+            pcall(function() cam.CameraType = Enum.CameraType.Custom end)
+            local c   = lplr.Character
+            local hum = c and c:FindFirstChildOfClass("Humanoid")
+            if hum then pcall(function() cam.CameraSubject = hum end) end
+        end
+    end
+
+    -- Camera-MODE override only (UserGameSettings flip). Split from
+    -- the tilt logic so the user can toggle them independently.
+    local function _setCamMode(enable)
         local ok, ugs = pcall(function()
             return UserSettings():GetService("UserGameSettings")
         end)
@@ -9675,59 +9693,74 @@ F.games.bms = (function()
             pcall(function()
                 ugs.ComputerCameraMovementMode = Enum.ComputerCameraMovementMode.Follow
             end)
-            if _camTiltThread then pcall(task.cancel, _camTiltThread) end
-            _camTiltThread = task.spawn(function()
-                while autoActive do
-                    if _camTiltOn then
-                        local cam = workspace.CurrentCamera
-                        if cam then
-                            local pos   = cam.CFrame.Position
-                            local lookV = cam.CFrame.LookVector
-                            local yaw   = math.atan2(-lookV.X, -lookV.Z)
-                            pcall(function()
-                                local prev = cam.CameraType
-                                cam.CameraType = Enum.CameraType.Scriptable
-                                cam.CFrame = CFrame.new(pos)
-                                    * CFrame.fromOrientation(_camTiltAngle, yaw, 0)
-                                task.wait()
-                                cam.CameraType = prev
-                            end)
-                        end
-                    end
-                    task.wait(1)
-                end
-            end)
-
-            -- Recover from death: the brief Scriptable flip during tilt
-            -- can leave the camera detached if the character respawns
-            -- mid-flip. On CharacterAdded, force CameraType back to Custom
-            -- + re-bind CameraSubject to the new humanoid.
-            if _camCharConn then _camCharConn:Disconnect() end
-            _camCharConn = lplr.CharacterAdded:Connect(function(c)
-                if not autoActive then return end
-                task.wait(0.3)  -- let the new character settle
-                local cam = workspace.CurrentCamera
-                local hum = c:FindFirstChildOfClass("Humanoid")
-                if cam then
-                    pcall(function() cam.CameraType = Enum.CameraType.Custom end)
-                    if hum then pcall(function() cam.CameraSubject = hum end) end
-                end
-            end)
         else
-            if _camTiltThread then pcall(task.cancel, _camTiltThread); _camTiltThread = nil end
-            if _camCharConn   then _camCharConn:Disconnect(); _camCharConn = nil end
             if _camModeBefore ~= nil then
                 pcall(function() ugs.ComputerCameraMovementMode = _camModeBefore end)
                 _camModeBefore = nil
             end
-            -- safety: in case the tilt thread left the camera detached
+        end
+    end
+
+    -- Tilt thread (re-applies the downward tilt every second) +
+    -- CharacterAdded re-bind for recovery from a respawn that
+    -- happens during a Scriptable flip. Runs as long as autoActive.
+    -- The thread itself checks _camTiltOn each iteration so the
+    -- tilt toggle can flip live without re-spawning the thread.
+    local function _startCamTilt()
+        if _camTiltThread then return end
+        _camTiltThread = task.spawn(function()
+            while autoActive do
+                if _camTiltOn then
+                    local cam = workspace.CurrentCamera
+                    if cam then
+                        local pos   = cam.CFrame.Position
+                        local lookV = cam.CFrame.LookVector
+                        local yaw   = math.atan2(-lookV.X, -lookV.Z)
+                        pcall(function()
+                            local prev = cam.CameraType
+                            cam.CameraType = Enum.CameraType.Scriptable
+                            cam.CFrame = CFrame.new(pos)
+                                * CFrame.fromOrientation(_camTiltAngle, yaw, 0)
+                            task.wait()
+                            cam.CameraType = prev
+                        end)
+                    end
+                end
+                task.wait(1)
+            end
+            _camTiltThread = nil
+        end)
+
+        if _camCharConn then _camCharConn:Disconnect() end
+        _camCharConn = lplr.CharacterAdded:Connect(function(c)
+            if not autoActive then return end
+            task.wait(0.3)  -- let the new character settle
             local cam = workspace.CurrentCamera
-            if cam and cam.CameraType == Enum.CameraType.Scriptable then
+            local hum = c:FindFirstChildOfClass("Humanoid")
+            if cam then
                 pcall(function() cam.CameraType = Enum.CameraType.Custom end)
-                local c = lplr.Character
-                local hum = c and c:FindFirstChildOfClass("Humanoid")
                 if hum then pcall(function() cam.CameraSubject = hum end) end
             end
+        end)
+    end
+
+    local function _stopCamTilt()
+        if _camTiltThread then pcall(task.cancel, _camTiltThread); _camTiltThread = nil end
+        if _camCharConn   then _camCharConn:Disconnect();          _camCharConn   = nil end
+        _restoreCameraIfScriptable()
+    end
+
+    -- Backwards-compatible wrapper used by the existing autoPlayStart
+    -- / autoPlayStop flow + the camera-mode toggle setter. enable=true
+    -- engages whichever sub-features are currently toggled on;
+    -- enable=false fully tears down so nothing is left dangling.
+    local function setFollowCam(enable)
+        if enable then
+            if _followCamOn then _setCamMode(true) end
+            if _camTiltOn   then _startCamTilt() end
+        else
+            _stopCamTilt()
+            _setCamMode(false)
         end
     end
 
@@ -10065,7 +10098,7 @@ F.games.bms = (function()
             stopAction()
             detectorThread = nil
         end)
-        if _followCamOn then setFollowCam(true) end
+        setFollowCam(true)
         if autoThread then pcall(task.cancel, autoThread) end
         lastFlagAt = 0  -- reset cooldown so a fresh autoplay session starts immediately
         autoThread = task.spawn(function()
@@ -10151,15 +10184,17 @@ F.games.bms = (function()
                     end
                     if best then
                         if not flagMissRoll() then
-                            -- Auto-play skips the cursor-sim block:
-                            -- blocking for the cursor sweep every
-                            -- fire freezes the walk-step for 100-
-                            -- 400ms, which makes the character
-                            -- move in choppy bursts instead of
-                            -- walking smoothly. The reaction-time
-                            -- delay + rate cap + hesitation still
-                            -- run.
-                            local skip = preFlagSequence(best, { skipCursor = true })
+                            -- Auto-play bypasses the whole stealth
+                            -- layer (rate cap, reaction delay,
+                            -- hesitation, cursor sweep). The walk-
+                            -- step needs the autoplay tick to
+                            -- return promptly so the character
+                            -- keeps moving. Auto-play already has
+                            -- its own flagDelayMin/Max cooldown
+                            -- and flagMissRoll, so stealth pacing
+                            -- on top would just be extra dead time
+                            -- in every tick.
+                            local skip = preFlagSequence(best, { bypass = true })
                             if not skip then
                                 pcall(function() remote:FireServer(best, token, true) end)
                             end
@@ -10533,16 +10568,22 @@ F.games.bms = (function()
             setPathPreviewColor = function(c) if typeof(c) == "Color3" then pathPreviewColor = c end end,
             getPathPreviewColor = function() return pathPreviewColor end,
             -- camera tilt
-            setCamTilt        = function(v) _camTiltOn = v == true end,
-            -- Whether autoplay overrides the camera mode to Follow.
-            -- Toggled live: if autoplay is already running and the
-            -- user flips this off, the camera mode is restored
-            -- immediately (and re-engaged if they flip it back on).
+            -- Camera tilt: now INDEPENDENT of follow-cam. Spawns or
+            -- tears down its own thread + CharacterAdded re-bind
+            -- so tilt works whether or not the camera mode override
+            -- is engaged.
+            setCamTilt        = function(v)
+                _camTiltOn = v == true
+                if autoActive then
+                    if _camTiltOn then _startCamTilt() else _stopCamTilt() end
+                end
+            end,
+            -- Camera-mode override (UserGameSettings.Follow). Only
+            -- touches the camera mode now - tilt has its own setter.
             setFollowCam      = function(v)
-                local wasOn = _followCamOn
                 _followCamOn = v == true
-                if autoActive and wasOn ~= _followCamOn then
-                    setFollowCam(_followCamOn)
+                if autoActive then
+                    _setCamMode(_followCamOn)
                 end
             end,
             setCamTiltAngle   = function(n)
