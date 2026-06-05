@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.33.1"
+local SCRIPT_VERSION = "v1.33.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12100,6 +12100,77 @@ F.games.prisonLife = (function()
         return tool:GetAttribute("SpreadRadius") or 0
     end
 
+    -- ---- hit sound ----
+    local plHitSoundOn  = false
+    local plHitSoundId  = 135698842254153
+    local plHitSoundVol = 1.0
+
+    local function _playHitSound()
+        if not plHitSoundOn then return end
+        local pg = lplr:FindFirstChildOfClass("PlayerGui")
+        local s  = Instance.new("Sound")
+        s.SoundId = "rbxassetid://" .. tostring(plHitSoundId)
+        s.Volume  = math.clamp(plHitSoundVol, 0, 5)
+        s.Parent  = pg or workspace
+        s:Play()
+        task.delay(5, function() if s and s.Parent then s:Destroy() end end)
+    end
+
+    -- ---- auto-reload ----
+    -- Watches Local_CurrentAmmo on the equipped tool. When it hits 0
+    -- (and the gun isn't already reloading), invokes FuncReload.
+    -- InvokeServer() is standard client API - works fine from
+    -- executor scripts, no SUNC wrapper needed.
+    local function _getFuncReload()
+        local rs = game:GetService("ReplicatedStorage")
+        local gr = rs:FindFirstChild("GunRemotes")
+        return gr and gr:FindFirstChild("FuncReload")
+    end
+
+    local autoReloadOn      = false
+    local _reloadToolConn   = nil
+    local _reloadCharConn   = nil
+
+    local function _hookReload(tool)
+        if _reloadToolConn then _reloadToolConn:Disconnect(); _reloadToolConn = nil end
+        if not tool then return end
+        -- Watch Local_CurrentAmmo - that's the client-side counter that
+        -- decrements as you fire (CurrentAmmo is server-synced and may lag).
+        _reloadToolConn = tool:GetAttributeChangedSignal("Local_CurrentAmmo"):Connect(function()
+            if not autoReloadOn then return end
+            local ammo      = tool:GetAttribute("Local_CurrentAmmo") or 1
+            local reloading = tool:GetAttribute("IsReloading")
+            if ammo <= 0 and not reloading then
+                local fr = _getFuncReload()
+                if fr then pcall(function() fr:InvokeServer() end) end
+            end
+        end)
+    end
+
+    local function autoReloadStart()
+        if autoReloadOn then return end
+        autoReloadOn = true
+        _hookReload(equippedTool())
+        if _reloadCharConn then _reloadCharConn:Disconnect() end
+        local char = lplr.Character
+        if char then
+            _reloadCharConn = char.ChildAdded:Connect(function(child)
+                if not autoReloadOn then return end
+                if child:IsA("Tool")
+                   or (child:IsA("Model") and child:GetAttribute("CurrentAmmo")) then
+                    task.wait()  -- let attributes load
+                    _hookReload(child)
+                end
+            end)
+        end
+    end
+
+    local function autoReloadStop()
+        autoReloadOn = false
+        if _reloadToolConn then _reloadToolConn:Disconnect(); _reloadToolConn = nil end
+        if _reloadCharConn then _reloadCharConn:Disconnect(); _reloadCharConn = nil end
+    end
+
     local function shoot(targetHRP)
         if not targetHRP then return end
         local event = getShootEvent()
@@ -12123,10 +12194,10 @@ F.games.prisonLife = (function()
             end
             local toOffset = to + offset
             table.insert(pellets, { from, toOffset, targetHRP })
-            -- spawn a tracer per pellet so shotgun spread is visible
             task.spawn(_plSpawnTracer, from, toOffset)
         end
-        pcall(function() event:FireServer(pellets) end)
+        local ok = pcall(function() event:FireServer(pellets) end)
+        if ok then _playHitSound() end
     end
 
     -- ---- team-based enemy filter ----
@@ -12261,6 +12332,16 @@ F.games.prisonLife = (function()
         },
         modifyGun  = modifyGun,
         godGun     = godGun,
+        autoReload = {
+            start    = autoReloadStart,
+            stop     = autoReloadStop,
+            isActive = function() return autoReloadOn end,
+        },
+        hitSound = {
+            setEnabled = function(v) plHitSoundOn  = v == true end,
+            setId      = function(n) plHitSoundId  = tonumber(n) or plHitSoundId end,
+            setVolume  = function(n) plHitSoundVol = math.clamp(tonumber(n) or 1, 0, 5) end,
+        },
         tracer = {
             setEnabled   = function(v) plTracerOn      = v == true end,
             setColor     = function(c) if typeof(c)=="Color3" then plTracerColor=c end end,

@@ -2780,6 +2780,25 @@ do
         })
 
         PL:AddDivider()
+        PL:AddLabel("Combat extras")
+        PL:AddToggle("PLAutoReload", { Text = "Auto reload (when ammo hits 0)",
+            Default = false,
+            Callback = function(v)
+                if v then F.games.prisonLife.autoReload.start()
+                else F.games.prisonLife.autoReload.stop() end
+            end,
+        })
+        PL:AddToggle("PLHitSound", { Text = "Hit sound",
+            Default = false,
+            Callback = function(v) F.games.prisonLife.hitSound.setEnabled(v) end,
+        })
+        PL:AddSlider("PLHitSoundVol", {
+            Text = "Hit sound volume",
+            Default = 1, Min = 0, Max = 5, Rounding = 1,
+            Callback = function(v) F.games.prisonLife.hitSound.setVolume(v) end,
+        })
+
+        PL:AddDivider()
         PL:AddLabel("Bullet tracers")
         PL:AddToggle("PLTracerOn", { Text = "Bullet tracers",
             Default = false,
