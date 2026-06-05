@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.26.4"
+local SCRIPT_VERSION = "v1.27.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8822,11 +8822,15 @@ F.games.bms = (function()
     -- cursor moves at constant velocity until within 30px of
     -- the target, then eases out for a clean lock-on.
     local stealthCursorSpeed   = 600    -- px/sec
-    -- Max px of random off-centre landing offset, per axis. The
-    -- cursor lands within +/-stealthOffsetPx of the tile centre
-    -- on each axis - 10 = +/-10px each side, 0 = always dead-
-    -- centre. Rolled fresh per target inside _setCursorTarget.
-    local stealthOffsetPx      = 10
+    -- Off-centre landing offset, in px. The cursor first lands at
+    -- a RADIAL offset uniformly random in [min, max] px from tile
+    -- centre with a uniform random angle, then corrects to a
+    -- smaller offset right before firing. So the screenshare
+    -- viewer sees: cursor approaches tile, lands a few px off,
+    -- micro-correction toward centre, click. Way more human than
+    -- a single dead-centre landing.
+    local stealthOffsetMin     = 5
+    local stealthOffsetMax     = 15
     -- Right-mouse-button held detection. Roblox uses RMB-hold for
     -- camera pan in third-person; if we drive mousemoveabs while
     -- the player is panning their camera, our cursor calls fight
@@ -8903,14 +8907,17 @@ F.games.bms = (function()
         -- wherever the cursor actually is (might have been moved
         -- by the user during RMB pan, etc.)
         _writeX, _writeY = nil, nil
-        -- roll a fresh off-centre landing offset, scaled by the
-        -- user's stealthOffsetPx slider. (rand - 0.5) * 2*range
-        -- gives uniform +/-range on each axis. Sign is random per
-        -- axis so the cursor can land in any of the four quadrants
-        -- (or dead centre if range = 0).
-        local r = math.max(0, stealthOffsetPx)
-        _targetOffX = (math.random() - 0.5) * 2 * r
-        _targetOffY = (math.random() - 0.5) * 2 * r
+        -- roll a fresh radial offset. Uniform random angle 0..2pi
+        -- gives a uniform direction; uniform random distance in
+        -- [min, max] gives a controllable amount of overshoot.
+        -- This is the INITIAL landing offset - it'll be shrunk
+        -- (corrected) right before the flag fires.
+        local lo = math.max(0, stealthOffsetMin)
+        local hi = math.max(lo, stealthOffsetMax)
+        local d  = lo + math.random() * (hi - lo)
+        local a  = math.random() * math.pi * 2
+        _targetOffX = math.cos(a) * d
+        _targetOffY = math.sin(a) * d
     end
     local function _clearCursorTarget()
         _currentTarget = nil
@@ -9051,8 +9058,17 @@ F.games.bms = (function()
     --      a dead giveaway on screenshare.)
     --   4. cursor sweep to the tile (committed to firing now)
     --   5. return false; caller fires the remote.
-    local function preFlagSequence(tile)
+    local function preFlagSequence(tile, opts)
         if not tile then return false end
+        opts = opts or {}
+        -- skipCursor: caller doesn't want the cursor sim block.
+        -- Auto-play passes this so its character-walk step isn't
+        -- frozen for 100-400ms waiting for the cursor sweep on
+        -- every flag fire (which was making the character move
+        -- in choppy bursts instead of walking smoothly). Manual
+        -- play (legitFlag) leaves it unset so the cursor still
+        -- lands on the tile BEFORE the flag appears.
+        local skipCursor = opts.skipCursor
         -- RMB gate: while the player is panning camera with RMB-hold,
         -- skip the fire entirely. Old behaviour was to skip just the
         -- cursor sweep but still fire, which made flags pop onto
@@ -9074,26 +9090,31 @@ F.games.bms = (function()
             task.wait(0.20 + math.random() * 0.40)  -- 0.2-0.6s pause
             return true   -- caller: skip this fire
         end
-        -- Committed. Hand the tile to the tracker - it will sweep
-        -- the cursor over to it and hold it there until we release.
-        -- Wait until the cursor is on the tile before letting the
-        -- caller fire so the flag never appears before the cursor
-        -- reaches it.
-        if stealthCursorOn and _stealthMoveCursor then
+        -- Committed. Three-phase cursor sequence:
+        --   1. Sweep cursor to the over/under-shoot landing offset.
+        --   2. Pause 50-150ms so the overshoot is visible.
+        --   3. Correct: shrink offset to ~30% (so a small adjustment
+        --      pulls cursor closer to centre) and wait again. This
+        --      mimics a human click sequence - rough approach, fine
+        --      correction, click - instead of a single dead-on
+        --      landing.
+        -- Skipped entirely when opts.skipCursor is set (autoplay).
+        if stealthCursorOn and _stealthMoveCursor and not skipCursor then
             _setCursorTarget(tile)
             local arrived = _waitForCursorOnTile(tile, 1.5)
-            -- If RMB got pressed mid-approach, skip the fire so the
-            -- flag doesn't pop while the user is panning.
             if _rmbHeld then return true end
-            -- If we never reached the tile (off-screen, etc.) still
-            -- fall through and fire - the on-screen filter should
-            -- have prevented this case to begin with.
-            -- Release the cursor NOW. Caller fires immediately after
-            -- we return, the flag pops on the tile (cursor's last
-            -- position), and the tracker stops touching the cursor
-            -- until the NEXT preFlagSequence sets a new target. So
-            -- between fires the cursor sits wherever the flag landed
-            -- rather than tracking the tile as the player walks.
+            if arrived and (stealthOffsetMax > 0 or stealthOffsetMin > 0) then
+                -- visible-pause + correction
+                task.wait(0.05 + math.random() * 0.10)
+                if _rmbHeld then return true end
+                _targetOffX = _targetOffX * 0.3
+                _targetOffY = _targetOffY * 0.3
+                _waitForCursorOnTile(tile, 0.5)
+                if _rmbHeld then return true end
+            end
+            -- Release cursor right before the caller fires. Tracker
+            -- stops driving it; cursor stays where it landed. Next
+            -- preFlagSequence sets a new target and the cycle repeats.
             _clearCursorTarget()
         end
         _stealthLastFireAt = tick()
@@ -10125,7 +10146,15 @@ F.games.bms = (function()
                     end
                     if best then
                         if not flagMissRoll() then
-                            local skip = preFlagSequence(best)
+                            -- Auto-play skips the cursor-sim block:
+                            -- blocking for the cursor sweep every
+                            -- fire freezes the walk-step for 100-
+                            -- 400ms, which makes the character
+                            -- move in choppy bursts instead of
+                            -- walking smoothly. The reaction-time
+                            -- delay + rate cap + hesitation still
+                            -- run.
+                            local skip = preFlagSequence(best, { skipCursor = true })
                             if not skip then
                                 pcall(function() remote:FireServer(best, token, true) end)
                             end
@@ -10576,10 +10605,15 @@ F.games.bms = (function()
             setCursorSpeed = function(n)
                 stealthCursorSpeed = math.clamp(tonumber(n) or 600, 50, 5000)
             end,
-            -- Max px of off-centre landing offset per axis. 0 =
-            -- always dead-centre.
-            setOffsetPx = function(n)
-                stealthOffsetPx = math.clamp(tonumber(n) or 10, 0, 100)
+            -- Radial over/undershoot range (px). The initial landing
+            -- offset is uniform random in [min, max] px from tile
+            -- centre; a correction pulls cursor to ~30% of that
+            -- before fire.
+            setOffsetMin = function(n)
+                stealthOffsetMin = math.clamp(tonumber(n) or 5, 0, 100)
+            end,
+            setOffsetMax = function(n)
+                stealthOffsetMax = math.clamp(tonumber(n) or 15, 0, 100)
             end,
             hasCursorAPI = function() return _stealthMoveCursor ~= nil end,
         },

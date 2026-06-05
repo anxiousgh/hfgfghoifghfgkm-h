@@ -2451,10 +2451,15 @@ do
             Default = 600, Min = 100, Max = 3000, Rounding = 0, Suffix = " px/s",
             Callback = function(v) F.games.bms.stealth.setCursorSpeed(v) end,
         })
-        BMSStealth:AddSlider("BMSOffsetPx", {
-            Text    = "Over/undershoot",
-            Default = 10, Min = 0, Max = 50, Rounding = 0, Suffix = " px",
-            Callback = function(v) F.games.bms.stealth.setOffsetPx(v) end,
+        BMSStealth:AddSlider("BMSOffsetMin", {
+            Text    = "Over/undershoot min",
+            Default = 5, Min = 0, Max = 50, Rounding = 0, Suffix = " px",
+            Callback = function(v) F.games.bms.stealth.setOffsetMin(v) end,
+        })
+        BMSStealth:AddSlider("BMSOffsetMax", {
+            Text    = "Over/undershoot max",
+            Default = 15, Min = 0, Max = 50, Rounding = 0, Suffix = " px",
+            Callback = function(v) F.games.bms.stealth.setOffsetMax(v) end,
         })
         -- One-shot preset that wires the entire stealth stack to a
         -- known-good configuration for screenshare while the user
