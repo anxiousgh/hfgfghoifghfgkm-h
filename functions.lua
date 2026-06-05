@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.22.2"
+local SCRIPT_VERSION = "v1.23.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8775,25 +8775,95 @@ F.games.bms = (function()
         end
     end
 
+    -- ---- screenshare stealth ----
+    -- Visual hardening for the legit auto-flag thread and the auto-
+    -- play flag step. None of this changes the underlying deduction;
+    -- it only makes the bot's fires look like a person to anyone
+    -- watching the screenshare:
+    --   * OS-level cursor follows tiles before flags are placed
+    --   * randomised reaction-time pause before each fire
+    --   * optional 'hover, second-guess, skip' fakeouts so flag
+    --     timing isn't perfectly uniform
+    --
+    -- We use the executor-provided mousemoveabs / mouse_moveabs
+    -- syscall (which moves the actual OS cursor) so the viewer on
+    -- the other side of the screenshare actually sees the pointer
+    -- travel. VirtualInputManager:SendMouseMoveEvent would move only
+    -- the in-game mouse - invisible to a spectator - so we don't
+    -- use it. If the executor exposes no cursor API, cursor sim is
+    -- a no-op and reaction-time / hesitation still apply.
+    local _stealthMoveCursor = (function()
+        local g = (getgenv and getgenv()) or _G
+        return rawget(g, "mousemoveabs") or rawget(g, "mouse_moveabs")
+            or rawget(_G, "mousemoveabs") or rawget(_G, "mouse_moveabs")
+    end)()
+
+    local stealthCursorOn    = false
+    local stealthReactMs     = 350  -- mean reaction time
+    local stealthReactJitter = 250  -- +/- around mean
+    local stealthHesitatePct = 0    -- 0-100% chance to hover and skip
+
+    local function _tileScreenXY(tile)
+        if not tile then return nil end
+        local cam = workspace.CurrentCamera
+        if not cam then return nil end
+        local sp, on = cam:WorldToViewportPoint(tile.Position)
+        if not on then return nil end
+        return sp
+    end
+
+    local function _reactionDelay()
+        local lo = math.max(0, (stealthReactMs - stealthReactJitter) / 1000)
+        local hi = math.max(lo, (stealthReactMs + stealthReactJitter) / 1000)
+        return lo + math.random() * (hi - lo)
+    end
+
+    -- preFlagSequence: caller should call this RIGHT before firing
+    -- the PlaceFlag remote. Returns true if a hesitation rolled and
+    -- the caller should skip this fire (re-deduce next tick); returns
+    -- false if the caller should go ahead and fire normally.
+    --
+    -- Sequence:
+    --   1. reaction delay (humans don't snap-react to deductions)
+    --   2. cursor sweep toward tile + small 'hand jitter' correction
+    --      so the pointer doesn't land pixel-perfect
+    --   3. optional hesitation roll - if it hits, hover for a beat
+    --      then return true so caller skips firing
+    local function preFlagSequence(tile)
+        if not tile then return false end
+        task.wait(_reactionDelay())
+        if stealthCursorOn and _stealthMoveCursor then
+            local sp = _tileScreenXY(tile)
+            if sp then
+                pcall(_stealthMoveCursor, math.floor(sp.X), math.floor(sp.Y))
+                -- 60-140ms cursor settle, then a small overshoot-style
+                -- correction so the cursor doesn't sit perfectly still
+                task.wait(0.06 + math.random() * 0.08)
+                pcall(_stealthMoveCursor,
+                    math.floor(sp.X + (math.random() - 0.5) * 4),
+                    math.floor(sp.Y + (math.random() - 0.5) * 4))
+            end
+        end
+        if stealthHesitatePct > 0
+           and math.random(1, 100) <= stealthHesitatePct then
+            task.wait(0.25 + math.random() * 0.45)  -- 0.25-0.7s hover
+            return true   -- caller: skip this fire
+        end
+        return false
+    end
+
     local function legitFlagStart()
         if flagActive then return end
         flagActive = true
         if flagThread then pcall(task.cancel, flagThread) end
         flagThread = task.spawn(function()
             while flagActive do
-                -- Playstyle now applies to the standalone auto-flag too,
+                -- Playstyle applies to the standalone auto-flag too,
                 -- not just auto-play:
-                --   'flagless'  -> no fires at all, just idle. Lets the
-                --                  user keep the toggle armed but stay
-                --                  visually flag-free in a round.
-                --   'logical'   -> longer 'studying the board' beat
-                --                  between fires + a wider idle pause
-                --                  so flags don't snap-chain like a bot.
-                --   'legit'     -> current behaviour (existing delay
-                --                  rolls / miss-chance only).
-                if playstyleMode == "flagless" then
-                    task.wait(0.5); continue
-                end
+                --   'logical' -> longer 'studying the board' beat
+                --                between fires + a wider idle pause
+                --                so flags don't snap-chain like a bot.
+                --   'legit'   -> existing flagDelayRoll() / 0.25s idle.
                 local token = getgenv()._BMS_TOKEN
                 local remote = getPlaceFlag()
                 if not token or not remote then
@@ -8827,7 +8897,10 @@ F.games.bms = (function()
                 if best then
                     -- roll for miss chance (makes flagging look less robotic)
                     if not flagMissRoll() then
-                        pcall(function() remote:FireServer(best, token, true) end)
+                        local skip = preFlagSequence(best)
+                        if not skip then
+                            pcall(function() remote:FireServer(best, token, true) end)
+                        end
                     end
                     if playstyleMode == "logical" then
                         -- 0.8-1.6s 'reading the new state' beat
@@ -8891,10 +8964,6 @@ F.games.bms = (function()
     --   'logical'  = small random delay after each flag fire so newly
     --                exposed bombs / numbers get acted on with a
     --                human-looking pause rather than an instant snap
-    --   'flagless' = no flagging at all; the planner skips the
-    --                'flag closest deduced mine' branch entirely and
-    --                only walks to deduced-safe tiles. Mines stay
-    --                visually unflagged.
     -- winAction / failAction: what the bot does once the board ends.
     --   'staying still', 'walking randomly', 'jumping in a circle',
     --   'jumping off map'.
@@ -9766,8 +9835,7 @@ F.games.bms = (function()
                 local token  = getgenv()._BMS_TOKEN
                 local remote = getPlaceFlag()
                 local now    = tick()
-                if playstyleMode ~= "flagless"
-                   and token and remote and (now - lastFlagAt) >= flagDelayMin then
+                if token and remote and (now - lastFlagAt) >= flagDelayMin then
                     -- Auto-play flagging is UNBOUNDED across the whole
                     -- map (no rangeSq check). Aim cone still applies if
                     -- it's enabled. Standalone Legit auto-flag still
@@ -9799,7 +9867,10 @@ F.games.bms = (function()
                     end
                     if best then
                         if not flagMissRoll() then
-                            pcall(function() remote:FireServer(best, token, true) end)
+                            local skip = preFlagSequence(best)
+                            if not skip then
+                                pcall(function() remote:FireServer(best, token, true) end)
+                            end
                         end
                         lastFlagAt = now + flagDelayRoll() - flagDelayMin
                         -- logical playstyle takes a longer beat after
@@ -10203,14 +10274,29 @@ F.games.bms = (function()
         --   'legit'    = current behaviour, no extra pacing
         --   'logical'  = longer 'reading the board' beats after every
         --                flag fire + between movements
-        --   'flagless' = never fire PlaceFlag (auto-play still walks
-        --                safes, auto-flag becomes a no-op idle)
         setPlaystyle = function(m)
-            if m == "legit" or m == "logical" or m == "flagless" then
+            if m == "legit" or m == "logical" then
                 playstyleMode = m
             end
         end,
         getPlaystyle = function() return playstyleMode end,
+        -- Screenshare stealth: cursor sim + reaction-time variance +
+        -- fake hesitation. Applies to both legit auto-flag and auto-
+        -- play's flag step (whichever fires PlaceFlag). See the big
+        -- comment block above preFlagSequence() for details.
+        stealth = {
+            setCursorSim = function(v) stealthCursorOn = v == true end,
+            setReactionMean = function(n)
+                stealthReactMs = math.clamp(tonumber(n) or 350, 0, 5000)
+            end,
+            setReactionJitter = function(n)
+                stealthReactJitter = math.clamp(tonumber(n) or 250, 0, 5000)
+            end,
+            setHesitate = function(n)
+                stealthHesitatePct = math.clamp(tonumber(n) or 0, 0, 100)
+            end,
+            hasCursorAPI = function() return _stealthMoveCursor ~= nil end,
+        },
     }
 end)()
 

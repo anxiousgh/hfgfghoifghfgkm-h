@@ -2409,16 +2409,62 @@ do
         -- have to be running auto-play for it to take effect) ----
         local BMSStyle = Tabs.Games:AddRightGroupbox("Playstyle")
         BMSStyle:AddDropdown("BMSPlaystyle", {
-            Values   = { "legit", "logical", "flagless" },
+            Values   = { "legit", "logical" },
             Default  = "legit",
             Text     = "Playstyle",
             Callback = function(v) F.games.bms.setPlaystyle(v) end,
         })
         BMSStyle:AddLabel(
             "legit = current behaviour\n" ..
-            "logical = longer 'reading' beats between fires + moves\n" ..
-            "flagless = never fire PlaceFlag (auto-play walks safes only,\n" ..
-            "          auto-flag becomes a no-op while toggled on)",
+            "logical = longer 'reading' beats between fires + moves",
+            true
+        )
+
+        -- ---- Screenshare stealth ----
+        -- Visually hardens the bot for screenshare scenarios. Doesn't
+        -- change deduction or planning; just makes flag fires LOOK
+        -- like a person clicked them. Three layers:
+        --   * cursor sim: OS-level cursor sweeps to each tile before
+        --     the flag appears (executor needs mousemoveabs)
+        --   * reaction time: variable pause before every fire
+        --   * fake hesitation: % chance to hover a tile then NOT flag
+        local BMSStealth = Tabs.Games:AddRightGroupbox("Screenshare stealth")
+        local _hasCursor = false
+        pcall(function()
+            _hasCursor = F.games.bms.stealth and F.games.bms.stealth.hasCursorAPI()
+        end)
+        BMSStealth:AddToggle("BMSCursorSim", {
+            Text    = "Move OS cursor to tile before flagging",
+            Default = false,
+            Callback = function(v) F.games.bms.stealth.setCursorSim(v) end,
+        })
+        if not _hasCursor then
+            BMSStealth:AddLabel(
+                "[!] this executor doesn't expose mousemoveabs / mouse_moveabs;\n" ..
+                "    cursor sim toggle is a no-op. Reaction time +\n" ..
+                "    hesitation below still work.",
+                true
+            )
+        end
+        BMSStealth:AddSlider("BMSReactionMean", {
+            Text    = "Reaction time",
+            Default = 350, Min = 0, Max = 1500, Rounding = 0, Suffix = " ms",
+            Callback = function(v) F.games.bms.stealth.setReactionMean(v) end,
+        })
+        BMSStealth:AddSlider("BMSReactionJitter", {
+            Text    = "Reaction time +/- jitter",
+            Default = 250, Min = 0, Max = 1500, Rounding = 0, Suffix = " ms",
+            Callback = function(v) F.games.bms.stealth.setReactionJitter(v) end,
+        })
+        BMSStealth:AddSlider("BMSHesitate", {
+            Text    = "Fake hesitation chance",
+            Default = 0, Min = 0, Max = 100, Rounding = 0, Suffix = " %",
+            Callback = function(v) F.games.bms.stealth.setHesitate(v) end,
+        })
+        BMSStealth:AddLabel(
+            "Hesitation = hover a tile, wait ~0.25-0.7s, then DON'T flag it.\n" ..
+            "Re-deduced next tick. Looks like real second-guessing.\n" ..
+            "Cursor sim only works while Roblox is the focused window.",
             true
         )
 
