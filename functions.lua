@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.25.1"
+local SCRIPT_VERSION = "v1.26.0"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8888,168 +8888,109 @@ F.games.bms = (function()
         return math.clamp(dist / speed, 0.08, 1.5)
     end
 
-    local function _smoothMoveCursor(targetX, targetY, durationOverride)
+    -- Continuous cursor tracker. Replaces the old sweep-on-demand
+    -- model where preFlagSequence called _smoothMoveCursor[ToTile]
+    -- once and then left the cursor frozen until the next fire. That
+    -- produced a 'stutter' on screenshare: cursor sweeps to tile A,
+    -- sits still while the player walks (tile A is sliding on
+    -- screen), next sequence sweeps from old cursor pos to tile A's
+    -- NEW position, repeat.
+    --
+    -- New model: a single background thread owns the cursor. It
+    -- consults _currentTarget every frame:
+    --   * no target          -> do nothing, cursor sits wherever
+    --   * RMB held           -> do nothing (don't fight camera pan)
+    --   * target off-screen  -> do nothing, cursor sits wherever
+    --   * target on-screen   -> move cursor toward target's CURRENT
+    --                           viewport position with a constant-
+    --                           speed approach that eases out for
+    --                           the last 30px, then locks on. Once
+    --                           locked, dist stays ~0 each frame
+    --                           and the cursor moves only when the
+    --                           tile does (i.e. as the player walks).
+    -- preFlagSequence just calls _setCursorTarget(tile) + waits for
+    -- the cursor to be within ~5px of the target. After firing, the
+    -- target stays set so the cursor keeps tracking that tile until
+    -- the bot picks a NEW one - exactly what 'stay on the tile until
+    -- it moves away' asks for.
+    local _currentTarget   = nil
+    local _trackerThread   = nil
+    local _lastTrackerTick = 0
+
+    local function _setCursorTarget(tile) _currentTarget = tile end
+    local function _clearCursorTarget()   _currentTarget = nil  end
+
+    local function _trackerStep(dt)
         if not _stealthMoveCursor then return end
-        if _rmbHeld then return end  -- don't fight RMB camera-pan
+        if _rmbHeld then return end
+        local target = _currentTarget
+        if not target then return end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local sp, on = cam:WorldToViewportPoint(target.Position)
+        if not on then return end
         local UIS = game:GetService("UserInputService")
-        local s   = UIS:GetMouseLocation()
-        local sx, sy = s.X, s.Y
-        local ex, ey = targetX, targetY
-        local dx, dy = ex - sx, ey - sy
+        local m   = UIS:GetMouseLocation()
+        local dx, dy = sp.X - m.X, sp.Y - m.Y
         local dist   = math.sqrt(dx * dx + dy * dy)
-        if dist < 4 then
-            pcall(_stealthMoveCursor, math.floor(ex), math.floor(ey))
-            return
-        end
-        _cursorTaskToken = _cursorTaskToken + 1
-        local myToken = _cursorTaskToken
+        if dist < 1 then return end   -- already locked on, stay put
 
-        local duration = durationOverride and math.clamp(durationOverride, 0.05, 3)
-                       or _durationForDist(dist, stealthCursorSpeed)
-
-        local invDist     = 1 / dist
-        local perpX, perpY = -dy * invDist, dx * invDist
-        local m1 = (math.random() - 0.5) * dist * 0.18
-        local m2 = (math.random() - 0.5) * dist * 0.18
-        local c1x = sx + dx * 0.33 + perpX * m1
-        local c1y = sy + dy * 0.33 + perpY * m1
-        local c2x = sx + dx * 0.67 + perpX * m2
-        local c2y = sy + dy * 0.67 + perpY * m2
-
-        local startTime = tick()
-        while true do
-            if _cursorTaskToken ~= myToken then return end
-            if _rmbHeld then return end
-            local elapsed = tick() - startTime
-            if elapsed >= duration then break end
-            local rawT  = elapsed / duration
-            local te    = 1 - (1 - rawT) ^ 3
-            local omt   = 1 - te
-            local b0    = omt * omt * omt
-            local b1    = 3 * omt * omt * te
-            local b2    = 3 * omt * te * te
-            local b3    = te * te * te
-            local px = b0 * sx + b1 * c1x + b2 * c2x + b3 * ex
-            local py = b0 * sy + b1 * c1y + b2 * c2y + b3 * ey
-            px = px + (math.random() - 0.5) * 1.5
-            py = py + (math.random() - 0.5) * 1.5
-            pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
-            task.wait()
-        end
-        if _cursorTaskToken ~= myToken or _rmbHeld then return end
-        pcall(_stealthMoveCursor,
-            math.floor(ex + (math.random() - 0.5) * 6),
-            math.floor(ey + (math.random() - 0.5) * 6))
-        task.wait(0.03 + math.random() * 0.04)
-        if _cursorTaskToken ~= myToken or _rmbHeld then return end
-        pcall(_stealthMoveCursor, math.floor(ex), math.floor(ey))
+        -- ease-out approach: full speed when far, slowing within
+        -- 30px of the target so the cursor doesn't overshoot. Once
+        -- the tile is being tracked (small dist each frame), the
+        -- ease factor is small and the cursor barely moves except
+        -- to follow the tile's sliding screen pos.
+        local easeFactor = math.min(1, dist / 30)
+        local frameMove  = stealthCursorSpeed * easeFactor * dt
+        local alpha      = math.min(1, frameMove / dist)
+        local nx = m.X + dx * alpha + (math.random() - 0.5) * 0.6
+        local ny = m.Y + dy * alpha + (math.random() - 0.5) * 0.6
+        pcall(_stealthMoveCursor, math.floor(nx), math.floor(ny))
     end
 
-    -- _smoothMoveCursorToTile: like _smoothMoveCursor but the
-    -- TARGET is a tile Part - re-evaluated every frame so the
-    -- cursor tracks the tile if the player is walking. Without
-    -- this, a slow cursor sweep starts at the tile's screen pos
-    -- at frame 0, runs for ~200-400ms, and lands at the STALE
-    -- position from when the sweep started. By then the player
-    -- has walked a few feet and the tile has slid 20-60 px on
-    -- screen, so the cursor lands short.
-    --
-    -- The Bezier control magnitudes (m1, m2) are baked at sweep
-    -- start so the curve shape stays consistent, but the control
-    -- POINTS are re-derived from (start, current target, magnitudes)
-    -- each frame. Result: a smooth Bezier path that smoothly
-    -- re-aims as the tile moves on screen, and a final landing on
-    -- the tile's actual current pixel position.
-    local function _smoothMoveCursorToTile(tile, durationOverride)
-        if not (_stealthMoveCursor and tile) then return end
-        if _rmbHeld then return end  -- don't fight RMB camera-pan
+    local function _stopTracker()
+        -- Loop exits on its own when stealthCursorOn flips false.
+        _currentTarget = nil
+    end
+
+    local function _startTracker()
+        if _trackerThread then return end
+        if not (stealthCursorOn and _stealthMoveCursor) then return end
+        _lastTrackerTick = tick()
+        _trackerThread = task.spawn(function()
+            while stealthCursorOn do
+                local now = tick()
+                local dt  = math.max(0.001, math.min(0.1, now - _lastTrackerTick))
+                _lastTrackerTick = now
+                _trackerStep(dt)
+                task.wait()
+            end
+            _trackerThread = nil
+            _currentTarget = nil
+        end)
+    end
+
+    -- Wait for the cursor to arrive on tile (or near enough). Used
+    -- by preFlagSequence after setting the target, so the FireServer
+    -- call only happens once the cursor is actually on the tile -
+    -- otherwise a viewer would see the flag appear before the
+    -- cursor reaches it.
+    local function _waitForCursorOnTile(tile, timeoutSec)
         local UIS = game:GetService("UserInputService")
         local cam = workspace.CurrentCamera
         if not cam then return end
-        local s = UIS:GetMouseLocation()
-        local sx, sy = s.X, s.Y
-
-        local sp0, on0 = cam:WorldToViewportPoint(tile.Position)
-        if not on0 then return end
-        local dx0, dy0 = sp0.X - sx, sp0.Y - sy
-        local dist0    = math.sqrt(dx0 * dx0 + dy0 * dy0)
-        if dist0 < 4 then
-            pcall(_stealthMoveCursor, math.floor(sp0.X), math.floor(sp0.Y))
-            return
-        end
-
-        _cursorTaskToken = _cursorTaskToken + 1
-        local myToken = _cursorTaskToken
-
-        local duration = durationOverride and math.clamp(durationOverride, 0.05, 3)
-                       or _durationForDist(dist0, stealthCursorSpeed)
-
-        -- Curve magnitudes baked from initial distance so shape
-        -- stays sensible even as the target slides.
-        local m1 = (math.random() - 0.5) * dist0 * 0.18
-        local m2 = (math.random() - 0.5) * dist0 * 0.18
-
-        local startTime = tick()
-        local lastEx, lastEy = sp0.X, sp0.Y
-
-        while true do
-            if _cursorTaskToken ~= myToken then return end
-            if _rmbHeld then return end
-            local elapsed = tick() - startTime
-            if elapsed >= duration then break end
-
-            -- Re-target each frame: tile's current screen pos.
-            local cur, conScreen = cam:WorldToViewportPoint(tile.Position)
-            local ex, ey
-            if conScreen then
-                ex, ey = cur.X, cur.Y
-                lastEx, lastEy = ex, ey
-            else
-                ex, ey = lastEx, lastEy
-            end
-
-            local cdx, cdy = ex - sx, ey - sy
-            local cdist    = math.sqrt(cdx * cdx + cdy * cdy)
-            if cdist < 0.001 then cdist = 1 end
-            local invDist     = 1 / cdist
-            local perpX, perpY = -cdy * invDist, cdx * invDist
-            local c1x = sx + cdx * 0.33 + perpX * m1
-            local c1y = sy + cdy * 0.33 + perpY * m1
-            local c2x = sx + cdx * 0.67 + perpX * m2
-            local c2y = sy + cdy * 0.67 + perpY * m2
-
-            local rawT  = elapsed / duration
-            local te    = 1 - (1 - rawT) ^ 3
-            local omt   = 1 - te
-            local b0    = omt * omt * omt
-            local b1    = 3 * omt * omt * te
-            local b2    = 3 * omt * te * te
-            local b3    = te * te * te
-            local px = b0 * sx + b1 * c1x + b2 * c2x + b3 * ex
-            local py = b0 * sy + b1 * c1y + b2 * c2y + b3 * ey
-            px = px + (math.random() - 0.5) * 1.5
-            py = py + (math.random() - 0.5) * 1.5
-            pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
+        local deadline = tick() + (timeoutSec or 1.5)
+        while tick() < deadline do
+            if _rmbHeld then return false end
+            local sp, on = cam:WorldToViewportPoint(tile.Position)
+            if not on then return false end
+            local m  = UIS:GetMouseLocation()
+            local dx = sp.X - m.X
+            local dy = sp.Y - m.Y
+            if dx * dx + dy * dy < 36 then return true end  -- within 6px
             task.wait()
         end
-        if _cursorTaskToken ~= myToken or _rmbHeld then return end
-
-        -- Final landing on the tile's CURRENT screen position - the
-        -- fix for "cursor lands just short of the tile when I'm
-        -- walking". Re-read at every landing step.
-        local function _curPos()
-            local cur, conScreen = cam:WorldToViewportPoint(tile.Position)
-            if conScreen then return cur.X, cur.Y end
-            return lastEx, lastEy
-        end
-        local fex, fey = _curPos()
-        pcall(_stealthMoveCursor,
-            math.floor(fex + (math.random() - 0.5) * 6),
-            math.floor(fey + (math.random() - 0.5) * 6))
-        task.wait(0.03 + math.random() * 0.04)
-        if _cursorTaskToken ~= myToken or _rmbHeld then return end
-        fex, fey = _curPos()
-        pcall(_stealthMoveCursor, math.floor(fex), math.floor(fey))
+        return false
     end
 
     -- Returns true if the tile is allowed by the on-screen-only
@@ -9117,12 +9058,20 @@ F.games.bms = (function()
             task.wait(0.20 + math.random() * 0.40)  -- 0.2-0.6s pause
             return true   -- caller: skip this fire
         end
-        -- Committed. Sweep cursor to tile. Use the tile-tracking
-        -- variant so the cursor re-targets each frame as the player
-        -- walks - otherwise the cursor lands at the tile's STALE
-        -- screen position from when the sweep started.
+        -- Committed. Hand the tile to the tracker - it will sweep
+        -- the cursor over to it and then keep tracking it for as
+        -- long as it's the current target. Wait until the cursor
+        -- is on the tile before letting the caller fire so the
+        -- flag never appears before the cursor reaches it.
         if stealthCursorOn and _stealthMoveCursor then
-            _smoothMoveCursorToTile(tile)
+            _setCursorTarget(tile)
+            local arrived = _waitForCursorOnTile(tile, 1.5)
+            -- If RMB got pressed mid-approach, skip the fire so the
+            -- flag doesn't pop while the user is panning.
+            if _rmbHeld then return true end
+            -- If we never reached the tile (off-screen, etc.) still
+            -- fall through and fire - the on-screen filter should
+            -- have prevented this case to begin with.
         end
         _stealthLastFireAt = tick()
         return false
@@ -9200,6 +9149,10 @@ F.games.bms = (function()
     local function legitFlagStop()
         flagActive = false
         if flagThread then pcall(task.cancel, flagThread); flagThread = nil end
+        -- Release the cursor: tracker would otherwise keep the cursor
+        -- pinned to whichever tile was last targeted, even after the
+        -- flag thread is gone.
+        _clearCursorTarget()
     end
 
     -- ---- auto-play (walk to safes + flag mines, never step on unknowns) ----
@@ -10456,6 +10409,9 @@ F.games.bms = (function()
         gameOverState = nil
         clearPathPreview()
         setFollowCam(false)
+        -- release the cursor from tracking whatever tile was last
+        -- targeted by the flag step
+        _clearCursorTarget()
         -- keep stats GUI visible across autoplay toggles - user
         -- explicitly toggles it via setStatsGui. Stats counts also
         -- persist via the file on disk.
@@ -10567,7 +10523,14 @@ F.games.bms = (function()
         -- play's flag step (whichever fires PlaceFlag). See the big
         -- comment block above preFlagSequence() for details.
         stealth = {
-            setCursorSim = function(v) stealthCursorOn = v == true end,
+            setCursorSim = function(v)
+                stealthCursorOn = v == true
+                if stealthCursorOn then
+                    _startTracker()
+                else
+                    _stopTracker()
+                end
+            end,
             setReactionMean = function(n)
                 stealthReactMs = math.clamp(tonumber(n) or 350, 0, 5000)
             end,
