@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.35.3"
+local SCRIPT_VERSION = "v1.35.4"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12116,17 +12116,23 @@ F.games.prisonLife = (function()
     local noSpreadOn        = false
     local _noSpreadCharConn = nil
     local _noSpreadToolConn = nil
+    -- Guard: _requeueTool re-equips the gun which fires ChildAdded,
+    -- which would call _applyNoSpread again -> infinite loop.
+    -- While this flag is set, _applyNoSpread is a no-op.
+    local _noSpreadBusy     = false
 
     local function _applyNoSpread(tool)
         if not (noSpreadOn and tool) then return end
+        if _noSpreadBusy then return end
+        _noSpreadBusy = true
         pcall(function() tool:SetAttribute("SpreadRadius", 0) end)
         _requeueTool()
+        _noSpreadBusy = false
     end
 
     local function _hookNoSpreadChar(char)
         if _noSpreadToolConn then _noSpreadToolConn:Disconnect(); _noSpreadToolConn = nil end
         if not char then return end
-        -- apply to already-equipped tool
         local t = char:FindFirstChildOfClass("Tool")
         if t then _applyNoSpread(t) end
         _noSpreadToolConn = char.ChildAdded:Connect(function(child)
@@ -12303,11 +12309,11 @@ F.games.prisonLife = (function()
             if p ~= lplr and _isEnemy(p) and p.Character then
                 local eh  = p.Character:FindFirstChild("HumanoidRootPart")
                 local hum = p.Character:FindFirstChildOfClass("Humanoid")
-                if eh and hum and hum.Health > 0 then
+                local ff = p.Character:FindFirstChildOfClass("ForceField")
+                if eh and hum and hum.Health > 0 and not ff then
                     local d2 = (eh.Position - hrp.Position).Magnitude
                     d2 = d2 * d2
                     if d2 < bestD2 then
-                        -- strict wall check: ray from our Head to their HRP
                         local ignore = { lplr.Character, p.Character }
                         if isReallyVisible(origin, eh.Position, ignore) then
                             best, bestD2 = eh, d2
