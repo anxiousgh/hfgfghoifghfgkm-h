@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.23.1"
+local SCRIPT_VERSION = "v1.23.2"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -8827,6 +8827,69 @@ F.games.bms = (function()
         return sp
     end
 
+    -- Smooth cursor movement. mousemoveabs is a one-shot syscall
+    -- that teleports the OS cursor - to actually look like a real
+    -- mouse movement during screenshare we have to step the cursor
+    -- through intermediate positions over many frames ourselves.
+    --
+    -- Motion model:
+    --   * Read current cursor pos (UIS:GetMouseLocation()).
+    --   * Compute distance to target. Duration scales with distance
+    --     (Fitts's law) clamped to a believable [130, 400] ms.
+    --   * Step count ~ one per frame for smoothness. task.wait()
+    --     with no arg yields exactly one frame regardless of FPS.
+    --   * Position on each step = lerp(start, target, ease-out-cubic(t))
+    --     so the cursor decelerates as it approaches the tile.
+    --   * Add a perpendicular sin-bell offset so the path BOWS
+    --     instead of going dead-straight (real hand movements have
+    --     a slight arc). Sign random per call so successive moves
+    --     alternate curving left vs right.
+    --   * Land with a small overshoot, brief settle, then correct
+    --     to the actual target - matches the small hand-tremor
+    --     correction at the end of a real mouse landing.
+    local function _smoothMoveCursor(targetX, targetY)
+        if not _stealthMoveCursor then return end
+        local UIS = game:GetService("UserInputService")
+        local s   = UIS:GetMouseLocation()
+        local sx, sy = s.X, s.Y
+        local dx, dy = targetX - sx, targetY - sy
+        local dist   = math.sqrt(dx * dx + dy * dy)
+        if dist < 4 then
+            -- already there; nothing to interpolate
+            pcall(_stealthMoveCursor,
+                math.floor(targetX), math.floor(targetY))
+            return
+        end
+        -- step count: roughly one per frame. Short flicks get 8
+        -- steps, long screen-traverses get up to 24. Going higher
+        -- than 24 doesn't add visible smoothness, going lower than
+        -- 8 starts to look jumpy.
+        local steps = math.clamp(math.floor(dist / 25), 8, 24)
+        -- perpendicular curvature: bell-shaped offset along the
+        -- direction perpendicular to (start -> target). Max in the
+        -- middle of the path (sin(pi/2) = 1), zero at endpoints.
+        local curve   = (math.random() - 0.5) * dist * 0.08
+        local invDist = 1 / dist
+        local perpX, perpY = -dy * invDist, dx * invDist
+        for i = 1, steps do
+            local t = i / steps
+            local e = 1 - (1 - t) ^ 3            -- ease-out cubic
+            local p = math.sin(t * math.pi) * curve
+            local px = sx + dx * e + perpX * p
+            local py = sy + dy * e + perpY * p
+            pcall(_stealthMoveCursor, math.floor(px), math.floor(py))
+            task.wait()   -- one frame
+        end
+        -- overshoot + correction landing. Real cursor lands NEAR
+        -- the target, settles for ~30-70ms, then snaps to centre.
+        pcall(_stealthMoveCursor,
+            math.floor(targetX + (math.random() - 0.5) * 6),
+            math.floor(targetY + (math.random() - 0.5) * 6))
+        task.wait(0.03 + math.random() * 0.04)
+        pcall(_stealthMoveCursor,
+            math.floor(targetX), math.floor(targetY))
+    end
+
     -- Returns true if the tile is allowed by the on-screen-only
     -- filter (or the filter is off, in which case every tile is
     -- allowed). Used by both legitFlag and auto-play to prune flag
@@ -8880,13 +8943,12 @@ F.games.bms = (function()
         if stealthCursorOn and _stealthMoveCursor then
             local sp = _tileScreenXY(tile)
             if sp then
-                pcall(_stealthMoveCursor, math.floor(sp.X), math.floor(sp.Y))
-                -- 60-140ms cursor settle, then a small overshoot-style
-                -- correction so the cursor doesn't sit perfectly still
-                task.wait(0.06 + math.random() * 0.08)
-                pcall(_stealthMoveCursor,
-                    math.floor(sp.X + (math.random() - 0.5) * 4),
-                    math.floor(sp.Y + (math.random() - 0.5) * 4))
+                -- _smoothMoveCursor does the multi-frame interpolated
+                -- sweep (ease-out cubic + curved path + overshoot
+                -- correction) so the cursor LOOKS like it's moving
+                -- instead of teleporting. Don't replace this with a
+                -- single mousemoveabs - that's the original bug.
+                _smoothMoveCursor(sp.X, sp.Y)
             end
         end
         if stealthHesitatePct > 0
