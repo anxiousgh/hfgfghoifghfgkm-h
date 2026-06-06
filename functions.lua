@@ -13,7 +13,7 @@
 --           notification to compare against the latest commit
 --           on GitHub. Format: "YYYY-MM-DD HH:MM <short summary>"
 -- ============================================================
-local SCRIPT_VERSION = "v1.39.0"
+local SCRIPT_VERSION = "v1.39.1"
 
 --// services
 local HttpService         = game:GetService("HttpService")
@@ -12154,6 +12154,8 @@ F.games.prisonLife = (function()
 
     local function _applyNoSpread(tool)
         if not (noSpreadOn and tool) then return end
+        -- already 0? nothing to change, don't requeue
+        if tool:GetAttribute("SpreadRadius") == 0 then return end
         pcall(function() tool:SetAttribute("SpreadRadius", 0) end)
         -- our re-equip below will fire ChildAdded; ignore it for 1.5s
         _noSpreadSuppressUntil = tick() + 1.5
@@ -12206,6 +12208,8 @@ F.games.prisonLife = (function()
 
     local function _applyAutoFire(tool)
         if not (autoFireOn and tool) then return end
+        -- already auto? nothing to change, don't requeue
+        if tool:GetAttribute("AutoFire") == true then return end
         pcall(function() tool:SetAttribute("AutoFire", true) end)
         _autoFireSuppress = tick() + 1.5
         _requeueTool()
@@ -12257,6 +12261,8 @@ F.games.prisonLife = (function()
 
     local function _applyFastFire(tool)
         if not (fastFireOn and tool) then return end
+        -- already at the target rate? nothing to change, don't requeue
+        if tool:GetAttribute("FireRate") == fastFireRate then return end
         pcall(function() tool:SetAttribute("FireRate", fastFireRate) end)
         _fastFireSuppress = tick() + 1.5
         _requeueTool()
